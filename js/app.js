@@ -40,9 +40,11 @@ function showPage(page) {
   document.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('active', b.dataset.nav === page));
   document.getElementById('page-log').style.display = page === 'log' ? 'block' : 'none';
   document.getElementById('page-history').style.display = page === 'history' ? 'block' : 'none';
+  document.getElementById('page-holdings').style.display = page === 'holdings' ? 'block' : 'none';
 
   if (page === 'log') renderBuckets('log');
   if (page === 'history') renderBuckets('history');
+  if (page === 'holdings') renderHoldings();
 }
 
 // ─── LOG PAGE ──────────────────────────────────────────────────────────────────

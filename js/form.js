@@ -99,10 +99,13 @@ function renderAssetDropdown(assets, stream, selectedId = '') {
 async function renderTransactionForm(container, stream, category, subcategory) {
   container.innerHTML = '';
 
-  // Fetch existing assets for the dropdown
+  // Fetch existing assets for the dropdown, filtered by subcategory if set
   let assets = [];
   try {
-    assets = await fetchAssetsCached(stream);
+    const all = await fetchAssetsCached(stream);
+    assets = subcategory
+      ? all.filter(a => String(a.subcategory_id) === String(subcategory.id))
+      : all;
   } catch (e) {
     showToast('Could not load assets. Check connection.', 'error');
   }
@@ -316,6 +319,11 @@ function renderTxnRow(txn, stream, editMode = false) {
   row.dataset.dirty = 'false';
 
   if (editMode) {
+    const nameLabel = document.createElement('div');
+    nameLabel.className = 'txn-name-static';
+    nameLabel.textContent = txn._assetName || '';
+    row.appendChild(nameLabel);
+
     stream.txnFields.forEach(f => {
       if (f.readonly) return;
       const group = renderField(f, txn[f.id] || '');
@@ -338,26 +346,32 @@ function renderTxnRow(txn, stream, editMode = false) {
     delBtn.dataset.id = txn.id;
     row.appendChild(delBtn);
   } else {
-    const dateEl = document.createElement('div');
-    dateEl.className = 'txn-date';
-    dateEl.textContent = formatDate(txn.txn_date);
+    const badge = document.createElement('span');
+    badge.className = `txn-badge ${txn.txn_type === 'Buy' ? 'badge-buy' : 'badge-sell'}`;
+    badge.textContent = txn.txn_type;
+
+    const info = document.createElement('div');
+    info.className = 'txn-info';
 
     const nameEl = document.createElement('div');
     nameEl.className = 'txn-name';
     nameEl.textContent = txn._assetName || '';
 
-    const meta = document.createElement('div');
-    meta.className = 'txn-meta';
-    meta.textContent = buildTxnMeta(txn, stream);
+    const subEl = document.createElement('div');
+    subEl.className = 'txn-sub';
+    subEl.textContent = [formatDate(txn.txn_date), buildTxnMeta(txn, stream)].filter(Boolean).join('  ·  ');
 
-    const badge = document.createElement('span');
-    badge.className = `txn-badge ${txn.txn_type === 'Buy' ? 'badge-buy' : 'badge-sell'}`;
-    badge.textContent = txn.txn_type;
+    info.appendChild(nameEl);
+    info.appendChild(subEl);
 
-    row.appendChild(dateEl);
-    row.appendChild(nameEl);
-    row.appendChild(meta);
+    const amtEl = document.createElement('div');
+    amtEl.className = 'txn-amount';
+    const amt = parseFloat(txn.amount_inr || txn.amount || 0);
+    amtEl.textContent = amt ? '₹' + formatINR(amt) : '';
+
     row.appendChild(badge);
+    row.appendChild(info);
+    row.appendChild(amtEl);
   }
 
   return row;
@@ -388,8 +402,6 @@ function buildTxnMeta(txn, stream) {
   if (txn.price_per_share) parts.push(`₹${txn.price_per_share}/share`);
   if (txn.price_per_unit) parts.push(`₹${txn.price_per_unit}/unit`);
   if (txn.price_usd) parts.push(`$${txn.price_usd}`);
-  if (txn.amount) parts.push(`₹${formatINR(txn.amount)}`);
-  if (txn.amount_inr) parts.push(`₹${formatINR(txn.amount_inr)}`);
   return parts.join('  ·  ');
 }
 

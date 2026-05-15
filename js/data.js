@@ -6,6 +6,16 @@ const BUCKETS = [
   { id: 3, name: 'Hedge & Opportunities', icon: '⚡', color: '#d97706' },
 ];
 
+const SUBCAT_NAMES = {
+  1: 'Large Cap', 2: 'Mid Cap', 3: 'Small Cap', 4: 'Flexi Cap',
+  5: 'ELSS', 6: 'Index', 7: 'Sectoral',
+  8: 'Liquid', 9: 'Overnight', 10: 'Ultra Short Term', 11: 'Money Market',
+  12: 'Short Duration', 13: 'Medium Duration', 14: 'Dynamic Bond',
+  15: 'Arbitrage', 16: 'Credit Risk', 17: 'Balanced Advantage',
+  18: 'Conservative Hybrid', 19: 'Equity Savings',
+  20: 'Digital', 21: 'Physical',
+};
+
 // Categories keyed by bucket_id
 // hasSubcategories: true = show subcategory drill-down in History
 const CATEGORIES = [
@@ -23,6 +33,7 @@ const STREAMS = {
 
   equity_mf: {
     label: 'Indian EQ Mutual Fund',
+    amountCol: 'amount',
     assetTable: 'equity_funds',
     txnTable: 'equity_transactions',
     assetIdCol: 'fund_id',
@@ -45,6 +56,7 @@ const STREAMS = {
 
   debt_hybrid_mf: {
     label: 'Debt & Hybrid Mutual Fund',
+    amountCol: 'amount',
     assetTable: 'debt_hybrid_funds',
     txnTable: 'debt_hybrid_transactions',
     assetIdCol: 'fund_id',
@@ -68,6 +80,7 @@ const STREAMS = {
 
   indian_stocks: {
     label: 'Indian Equity Stocks',
+    amountCol: 'amount',
     assetTable: 'indian_equity_stocks_assets',
     txnTable: 'indian_equity_stocks_transactions',
     assetIdCol: 'asset_id',
@@ -89,6 +102,7 @@ const STREAMS = {
 
   us_stocks: {
     label: 'US Equity Stocks',
+    amountCol: 'amount_inr',
     assetTable: 'us_equity_stocks_assets',
     txnTable: 'us_equity_stocks_transactions',
     assetIdCol: 'asset_id',
@@ -112,6 +126,7 @@ const STREAMS = {
 
   precious_metals_digital: {
     label: 'Precious Metals — Digital',
+    amountCol: 'amount',
     assetTable: 'precious_metal_etf_assets',
     txnTable: 'precious_metal_etf_transactions',
     assetIdCol: 'asset_id',
@@ -132,6 +147,7 @@ const STREAMS = {
 
   precious_metals_physical: {
     label: 'Precious Metals — Physical',
+    amountCol: 'amount',
     assetTable: 'precious_metal_physical_assets',
     txnTable: 'precious_metal_physical_transactions',
     assetIdCol: 'asset_id',
@@ -155,6 +171,7 @@ const STREAMS = {
 
   crypto: {
     label: 'Cryptocurrency',
+    amountCol: 'amount_inr',
     assetTable: 'crypto_assets',
     txnTable: 'crypto_transactions',
     assetIdCol: 'asset_id',
@@ -177,6 +194,7 @@ const STREAMS = {
 
   real_estate: {
     label: 'Real Estate',
+    amountCol: null,
     assetTable: 'real_estate_assets',
     txnTable: 'real_estate_transactions',
     assetIdCol: 'asset_id',
