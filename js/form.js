@@ -1,0 +1,430 @@
+// VaultZero — Dynamic form rendering
+
+// Render a field element
+function renderField(field, value = '') {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-group';
+  wrapper.dataset.fieldId = field.id;
+
+  const label = document.createElement('label');
+  label.textContent = field.label + (field.required ? ' *' : '');
+  label.htmlFor = `field-${field.id}`;
+  wrapper.appendChild(label);
+
+  let input;
+
+  if (field.type === 'select') {
+    input = document.createElement('select');
+    input.id = `field-${field.id}`;
+    input.name = field.id;
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = `Select ${field.label}`;
+    input.appendChild(blank);
+    (field.options || []).forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt;
+      o.textContent = opt;
+      if (opt === value) o.selected = true;
+      input.appendChild(o);
+    });
+  } else {
+    input = document.createElement('input');
+    input.type = field.type === 'number' ? 'number' : (field.type === 'date' ? 'date' : 'text');
+    input.id = `field-${field.id}`;
+    input.name = field.id;
+    if (field.step) input.step = field.step;
+    if (field.placeholder) input.placeholder = field.placeholder;
+    if (field.readonly) {
+      input.readOnly = true;
+      input.classList.add('readonly');
+    }
+    if (value !== '' && value !== undefined) input.value = value;
+  }
+
+  if (field.required) input.required = true;
+  wrapper.appendChild(input);
+
+  const err = document.createElement('span');
+  err.className = 'field-error';
+  wrapper.appendChild(err);
+
+  return wrapper;
+}
+
+// Render the asset name dropdown (with existing assets + Add New option)
+function renderAssetDropdown(assets, stream, selectedId = '') {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-group';
+
+  const label = document.createElement('label');
+  label.textContent = 'Name *';
+  label.htmlFor = 'field-asset-name';
+  wrapper.appendChild(label);
+
+  const select = document.createElement('select');
+  select.id = 'field-asset-name';
+  select.name = 'asset_id';
+  select.required = true;
+
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = 'Select or add...';
+  select.appendChild(blank);
+
+  assets.forEach(a => {
+    const o = document.createElement('option');
+    o.value = a.id;
+    o.textContent = a[stream.assetNameCol];
+    o.dataset.asset = JSON.stringify(a);
+    if (String(a.id) === String(selectedId)) o.selected = true;
+    select.appendChild(o);
+  });
+
+  const addOpt = document.createElement('option');
+  addOpt.value = '__new__';
+  addOpt.textContent = '+ Add New Asset';
+  select.appendChild(addOpt);
+
+  wrapper.appendChild(select);
+
+  const err = document.createElement('span');
+  err.className = 'field-error';
+  wrapper.appendChild(err);
+
+  return { wrapper, select };
+}
+
+// Render the transaction form for a stream
+async function renderTransactionForm(container, stream, category, subcategory) {
+  container.innerHTML = '';
+
+  // Fetch existing assets for the dropdown
+  let assets = [];
+  try {
+    assets = await fetchAssetsCached(stream);
+  } catch (e) {
+    showToast('Could not load assets. Check connection.', 'error');
+  }
+
+  // Asset name dropdown
+  const { wrapper: assetWrapper, select: assetSelect } = renderAssetDropdown(assets, stream);
+  container.appendChild(assetWrapper);
+
+  // Subcategory display (auto-filled, locked)
+  if (subcategory) {
+    const subWrapper = document.createElement('div');
+    subWrapper.className = 'field-group';
+    const subLabel = document.createElement('label');
+    subLabel.textContent = 'Sub Category';
+    const subVal = document.createElement('div');
+    subVal.className = 'field-locked';
+    subVal.textContent = subcategory.name;
+    subWrapper.appendChild(subLabel);
+    subWrapper.appendChild(subVal);
+    container.appendChild(subWrapper);
+  }
+
+  // Transaction fields (hidden until asset selected)
+  const txnSection = document.createElement('div');
+  txnSection.id = 'txn-fields';
+  txnSection.style.display = 'none';
+  stream.txnFields.forEach(f => {
+    const el = renderField(f, f.type === 'date' ? todayStr() : '');
+    txnSection.appendChild(el);
+  });
+  container.appendChild(txnSection);
+
+  // Submit button
+  const btn = document.createElement('button');
+  btn.type = 'submit';
+  btn.className = 'btn-primary';
+  btn.textContent = 'Save Transaction';
+  btn.style.display = 'none';
+  btn.id = 'txn-submit-btn';
+  container.appendChild(btn);
+
+  // Wire asset selection
+  assetSelect.addEventListener('change', () => {
+    const val = assetSelect.value;
+    if (val === '__new__') {
+      assetSelect.value = '';
+      renderAssetForm(container, stream, category, subcategory);
+      return;
+    }
+    txnSection.style.display = val ? 'block' : 'none';
+    btn.style.display = val ? 'block' : 'none';
+  });
+
+  // Wire auto-compute fields
+  txnSection.addEventListener('input', e => {
+    autoCompute(stream.txnFields, txnSection);
+  });
+}
+
+// Auto-compute amount and conv_rate fields
+function autoCompute(fields, container) {
+  const values = {};
+  fields.forEach(f => {
+    const el = container.querySelector(`#field-${f.id}`);
+    if (el) values[f.id] = el.value;
+  });
+  const computed = computeFields(fields, values);
+  fields.forEach(f => {
+    if (f.computed) {
+      const el = container.querySelector(`#field-${f.id}`);
+      if (el && computed[f.id] && !isNaN(computed[f.id])) {
+        el.value = parseFloat(computed[f.id]).toFixed(2);
+      }
+    }
+  });
+}
+
+// Render the "Add New Asset" form inline
+function renderAssetForm(container, stream, category, subcategory) {
+  const overlay = document.createElement('div');
+  overlay.className = 'asset-form-overlay';
+
+  const box = document.createElement('div');
+  box.className = 'asset-form-box';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Add New Asset';
+  box.appendChild(title);
+
+  const form = document.createElement('form');
+  form.id = 'asset-form';
+
+  stream.assetFields.forEach(f => {
+    if (f.type === 'subcategory') {
+      // Show as locked display if subcategory is known
+      if (subcategory) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'field-group';
+        const lbl = document.createElement('label');
+        lbl.textContent = 'Sub Category';
+        const val = document.createElement('div');
+        val.className = 'field-locked';
+        val.textContent = subcategory.name;
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'subcategory_id';
+        hidden.value = subcategory.id;
+        wrapper.appendChild(lbl);
+        wrapper.appendChild(val);
+        wrapper.appendChild(hidden);
+        form.appendChild(wrapper);
+      }
+    } else {
+      form.appendChild(renderField(f));
+    }
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'form-actions';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn-secondary';
+  cancel.textContent = 'Cancel';
+  cancel.onclick = () => overlay.remove();
+
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'btn-primary';
+  save.textContent = 'Save Asset';
+
+  actions.appendChild(cancel);
+  actions.appendChild(save);
+  form.appendChild(actions);
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const data = collectFormData(form, stream.assetFields);
+    if (subcategory) data.subcategory_id = subcategory.id;
+
+    try {
+      save.disabled = true;
+      save.textContent = 'Saving...';
+      const result = await API.createAsset(stream, data);
+      CACHE.clear(stream.assetTable);
+      overlay.remove();
+      // Reload the transaction form with new asset pre-selected
+      const formContainer = document.getElementById('form-fields');
+      await renderTransactionForm(formContainer, stream, category, subcategory);
+      // Pre-select the newly created asset
+      const assetSel = formContainer.querySelector('#field-asset-name');
+      if (assetSel) {
+        // Re-fetch to get new asset in list
+        const assets = await fetchAssetsCached(stream);
+        const newAsset = assets.find(a => a.id === result.id);
+        if (newAsset) {
+          const opts = assetSel.querySelectorAll('option');
+          opts.forEach(o => { if (o.value == result.id) { o.selected = true; assetSel.dispatchEvent(new Event('change')); } });
+        }
+      }
+      showToast('Asset saved!');
+    } catch (err) {
+      showToast('Failed to save asset: ' + err.message, 'error');
+      save.disabled = false;
+      save.textContent = 'Save Asset';
+    }
+  });
+
+  box.appendChild(form);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
+// Collect all field values from a form/container
+function collectFormData(container, fields) {
+  const data = {};
+  fields.forEach(f => {
+    const el = container.querySelector(`[name="${f.id}"], #field-${f.id}`);
+    if (el) data[f.id] = el.value;
+  });
+  return data;
+}
+
+// Collect and validate transaction form data
+function collectAndValidateTxn(stream) {
+  const txnSection = document.getElementById('txn-fields');
+  const assetSel = document.getElementById('field-asset-name');
+  const errors = [];
+
+  if (!assetSel || !assetSel.value) {
+    errors.push('Please select an asset');
+  }
+
+  const values = {};
+  stream.txnFields.forEach(f => {
+    const el = txnSection.querySelector(`#field-${f.id}`);
+    if (el) values[f.id] = el.value;
+  });
+
+  const fieldErrors = validateTxn(stream.txnFields, values);
+  errors.push(...fieldErrors);
+
+  return { errors, values, assetId: assetSel ? assetSel.value : '' };
+}
+
+// Render a read-only transaction row for History page
+function renderTxnRow(txn, stream, editMode = false) {
+  const row = document.createElement('div');
+  row.className = 'txn-row' + (editMode ? ' edit-mode' : '');
+  row.dataset.id = txn.id;
+  row.dataset.dirty = 'false';
+
+  if (editMode) {
+    stream.txnFields.forEach(f => {
+      if (f.readonly) return;
+      const group = renderField(f, txn[f.id] || '');
+      group.classList.add('inline');
+      const input = group.querySelector('input, select');
+      if (input) {
+        input.addEventListener('input', () => {
+          row.dataset.dirty = 'true';
+          row.classList.add('dirty');
+          autoComputeRow(stream.txnFields, row);
+        });
+      }
+      row.appendChild(group);
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-danger btn-sm';
+    delBtn.textContent = 'Delete';
+    delBtn.dataset.action = 'delete';
+    delBtn.dataset.id = txn.id;
+    row.appendChild(delBtn);
+  } else {
+    const dateEl = document.createElement('div');
+    dateEl.className = 'txn-date';
+    dateEl.textContent = formatDate(txn.txn_date);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'txn-name';
+    nameEl.textContent = txn._assetName || '';
+
+    const meta = document.createElement('div');
+    meta.className = 'txn-meta';
+    meta.textContent = buildTxnMeta(txn, stream);
+
+    const badge = document.createElement('span');
+    badge.className = `txn-badge ${txn.txn_type === 'Buy' ? 'badge-buy' : 'badge-sell'}`;
+    badge.textContent = txn.txn_type;
+
+    row.appendChild(dateEl);
+    row.appendChild(nameEl);
+    row.appendChild(meta);
+    row.appendChild(badge);
+  }
+
+  return row;
+}
+
+function autoComputeRow(fields, row) {
+  const values = {};
+  fields.forEach(f => {
+    const el = row.querySelector(`#field-${f.id}`);
+    if (el) values[f.id] = el.value;
+  });
+  const computed = computeFields(fields, values);
+  fields.forEach(f => {
+    if (f.computed) {
+      const el = row.querySelector(`#field-${f.id}`);
+      if (el && computed[f.id] && !isNaN(computed[f.id])) {
+        el.value = parseFloat(computed[f.id]).toFixed(2);
+      }
+    }
+  });
+}
+
+function buildTxnMeta(txn, stream) {
+  const parts = [];
+  if (txn.units) parts.push(`Units: ${txn.units}`);
+  if (txn.quantity) parts.push(`Qty: ${txn.quantity}`);
+  if (txn.nav) parts.push(`NAV: ₹${txn.nav}`);
+  if (txn.price_per_share) parts.push(`₹${txn.price_per_share}/share`);
+  if (txn.price_per_unit) parts.push(`₹${txn.price_per_unit}/unit`);
+  if (txn.price_usd) parts.push(`$${txn.price_usd}`);
+  if (txn.amount) parts.push(`₹${formatINR(txn.amount)}`);
+  if (txn.amount_inr) parts.push(`₹${formatINR(txn.amount_inr)}`);
+  return parts.join('  ·  ');
+}
+
+// Collect edited row data for batch save
+function collectEditedRows(container, stream) {
+  const rows = container.querySelectorAll('.txn-row[data-dirty="true"]');
+  return Array.from(rows).map(row => {
+    const id = row.dataset.id;
+    const data = {};
+    stream.txnFields.forEach(f => {
+      const el = row.querySelector(`#field-${f.id}`);
+      if (el && !f.readonly) data[f.id] = el.value;
+    });
+    return { id, data };
+  });
+}
+
+// Utility helpers
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function formatDate(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatINR(n) {
+  return Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
+
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.className = `toast toast-${type} show`;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}

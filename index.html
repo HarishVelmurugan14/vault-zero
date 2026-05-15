@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>VaultZero</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="app-logo">VaultZero</div>
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-nav="log">Log</button>
+      <button class="nav-tab" data-nav="history">History</button>
+    </div>
+  </nav>
+
+  <!-- Log Page -->
+  <div id="page-log">
+    <div class="page">
+      <div class="page-header" id="log-header"></div>
+      <div id="log-content"></div>
+    </div>
+  </div>
+
+  <!-- History Page -->
+  <div id="page-history" style="display:none">
+    <div class="page">
+      <div class="page-header" id="history-header"></div>
+      <div id="history-content"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Scripts — order matters -->
+  <script src="js/config.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/form.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>
