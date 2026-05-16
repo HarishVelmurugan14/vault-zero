@@ -41,10 +41,12 @@ function showPage(page) {
   document.getElementById('page-log').style.display = page === 'log' ? 'block' : 'none';
   document.getElementById('page-history').style.display = page === 'history' ? 'block' : 'none';
   document.getElementById('page-holdings').style.display = page === 'holdings' ? 'block' : 'none';
+  document.getElementById('page-insights').style.display = page === 'insights' ? 'block' : 'none';
 
   if (page === 'log') renderBuckets('log');
-  if (page === 'history') renderBuckets('history');
+  if (page === 'history') renderHistoryPage();
   if (page === 'holdings') renderHoldings();
+  if (page === 'insights') renderInsights();
 }
 
 // ─── LOG PAGE ──────────────────────────────────────────────────────────────────
@@ -181,46 +183,114 @@ async function startLogForm() {
 
 // ─── HISTORY PAGE ──────────────────────────────────────────────────────────────
 
-async function renderHistory() {
+async function renderHistoryPage() {
+  const container = document.getElementById('history-content');
+  const header = document.getElementById('history-header');
+  if (header) header.innerHTML = '<h2>History</h2>';
+  container.innerHTML = '';
+
+  STATE.category = null;
+  STATE.subcategory = null;
+  STATE.stream = null;
+  STATE.editMode = false;
+
+  // ── Filter bar ────────────────────────────────────────────
+  const filterBar = document.createElement('div');
+  filterBar.className = 'holdings-filter-bar';
+
+  const catSelect = document.createElement('select');
+  catSelect.className = 'holdings-filter-select';
+  catSelect.innerHTML = '<option value="">Select Category…</option>';
+  CATEGORIES.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = c.name;
+    catSelect.appendChild(o);
+  });
+
+  const subcatSelect = document.createElement('select');
+  subcatSelect.className = 'holdings-filter-select';
+  subcatSelect.style.display = 'none';
+
+  const txnArea = document.createElement('div');
+  txnArea.id = 'history-txn-area';
+
+  catSelect.addEventListener('change', async () => {
+    const catId = parseInt(catSelect.value);
+    txnArea.innerHTML = '';
+    subcatSelect.style.display = 'none';
+    subcatSelect.innerHTML = '';
+    STATE.subcategory = null;
+    STATE.editMode = false;
+
+    if (!catId) { STATE.category = null; STATE.stream = null; return; }
+
+    const cat = CATEGORIES.find(c => c.id === catId);
+    STATE.category = cat;
+
+    if (cat.hasSubcategories) {
+      subcatSelect.innerHTML = '<option value="">Select Subcategory…</option>';
+      subcatSelect.style.display = 'block';
+      try {
+        const data = await API.getSubcategories(cat.id);
+        (data.rows || []).forEach(s => {
+          const o = document.createElement('option');
+          o.value = s.id;
+          o.dataset.name = s.name;
+          o.textContent = s.name;
+          subcatSelect.appendChild(o);
+        });
+      } catch (_) { showToast('Failed to load subcategories', 'error'); }
+      STATE.stream = null;
+    } else {
+      STATE.stream = resolveStream(cat, null);
+      await renderHistoryInArea(txnArea);
+    }
+  });
+
+  subcatSelect.addEventListener('change', async () => {
+    const opt = subcatSelect.options[subcatSelect.selectedIndex];
+    txnArea.innerHTML = '';
+    STATE.editMode = false;
+    if (!opt || !opt.value) { STATE.subcategory = null; STATE.stream = null; return; }
+    STATE.subcategory = { id: parseInt(opt.value), name: opt.dataset.name };
+    STATE.stream = resolveStream(STATE.category, opt.dataset.name);
+    await renderHistoryInArea(txnArea);
+  });
+
+  filterBar.appendChild(catSelect);
+  filterBar.appendChild(subcatSelect);
+  container.appendChild(filterBar);
+  container.appendChild(txnArea);
+}
+
+async function renderHistoryInArea(area) {
   STATE.historyOffset = 0;
   STATE.historyRows = [];
   STATE.editMode = false;
+  area.innerHTML = '';
 
-  const container = document.getElementById('history-content');
-  container.innerHTML = '';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'history-toolbar';
 
-  const headerLabel = STATE.subcategory ? STATE.subcategory.name : STATE.category.name;
-  const backFn = STATE.category.hasSubcategories
-    ? () => renderSubcategories('history')
-    : () => renderCategories('history');
-
-  setHeader('history-content', headerLabel, backFn);
-
-  // Edit button in header
-  const header = container.previousElementSibling || document.querySelector(`#page-history .page-header`);
   const editBtn = document.createElement('button');
   editBtn.className = 'btn-outline btn-sm';
   editBtn.textContent = 'Edit';
   editBtn.id = 'history-edit-btn';
-  editBtn.addEventListener('click', () => toggleEditMode(txnList, editBtn));
-
-  const headerEl = document.getElementById('history-header');
-  if (headerEl) {
-    headerEl.appendChild(editBtn);
-  }
+  toolbar.appendChild(editBtn);
+  area.appendChild(toolbar);
 
   const txnList = document.createElement('div');
   txnList.id = 'txn-list';
-  container.appendChild(txnList);
+  area.appendChild(txnList);
 
   const loadMoreBtn = document.createElement('button');
   loadMoreBtn.className = 'btn-outline load-more';
   loadMoreBtn.textContent = 'Load More';
   loadMoreBtn.style.display = 'none';
   loadMoreBtn.addEventListener('click', () => loadMoreTxns(txnList, loadMoreBtn));
-  container.appendChild(loadMoreBtn);
+  area.appendChild(loadMoreBtn);
 
-  // Save/Cancel bar (hidden until edit mode)
   const actionBar = document.createElement('div');
   actionBar.className = 'edit-action-bar';
   actionBar.id = 'edit-action-bar';
@@ -229,14 +299,14 @@ async function renderHistory() {
     <button class="btn-secondary" id="edit-cancel-btn">Cancel</button>
     <button class="btn-primary" id="edit-save-btn">Save All</button>
   `;
-  container.appendChild(actionBar);
+  area.appendChild(actionBar);
 
-  document.getElementById('edit-cancel-btn')?.addEventListener('click', () => {
+  editBtn.addEventListener('click', () => toggleEditMode(txnList, editBtn));
+  actionBar.querySelector('#edit-cancel-btn').addEventListener('click', () => {
     STATE.editMode = false;
-    renderHistory();
+    renderHistoryInArea(area);
   });
-
-  document.getElementById('edit-save-btn')?.addEventListener('click', () => saveEdits(txnList));
+  actionBar.querySelector('#edit-save-btn').addEventListener('click', () => saveEdits(txnList, area));
 
   await loadTxns(txnList, loadMoreBtn);
 }
@@ -245,18 +315,26 @@ async function loadTxns(list, loadMoreBtn) {
   const stream = STATE.stream || resolveStream(STATE.category, STATE.subcategory?.name);
   STATE.stream = stream;
 
-  const filters = {};
-  // Filter by subcategory via asset join — simplified: filter client-side
-  // We fetch all assets for this stream to build the asset map
   try {
     const assets = await fetchAssetsCached(stream);
     assets.forEach(a => { STATE.assetMap[a.id] = a; });
   } catch (_) {}
 
-  const data = await API.getTransactions(stream, filters, STATE.historyOffset);
+  // Build a set of asset IDs belonging to the selected subcategory (if any)
+  const subcatAssetIds = STATE.subcategory
+    ? new Set(
+        Object.values(STATE.assetMap)
+          .filter(a => String(a.subcategory_id) === String(STATE.subcategory.id))
+          .map(a => String(a.id))
+      )
+    : null;
+
+  const data = await API.getTransactions(stream, {}, STATE.historyOffset);
   STATE.historyTotal = data.total;
 
   data.rows.forEach(txn => {
+    const assetId = String(txn[stream.assetIdCol]);
+    if (subcatAssetIds && !subcatAssetIds.has(assetId)) return;
     txn._assetName = STATE.assetMap[txn[stream.assetIdCol]]?.[stream.assetNameCol] || '';
     const row = renderTxnRow(txn, stream, STATE.editMode);
     list.appendChild(row);
@@ -309,7 +387,7 @@ function toggleEditMode(txnList, editBtn) {
   });
 }
 
-async function saveEdits(txnList) {
+async function saveEdits(txnList, area) {
   const stream = STATE.stream;
   const edited = collectEditedRows(txnList, stream);
 
@@ -325,9 +403,8 @@ async function saveEdits(txnList) {
   try {
     await API.batchUpdate(stream.txnTable, edited);
     showToast(`${edited.length} transaction(s) saved.`);
-    // Refresh history view
     STATE.editMode = false;
-    renderHistory();
+    if (area) renderHistoryInArea(area);
   } catch (err) {
     showToast('Save failed: ' + err.message, 'error');
     saveBtn.disabled = false;
