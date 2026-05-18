@@ -360,6 +360,12 @@ function drawCharts(chartsArea, rawData) {
   donutRow.appendChild(makeChartCard('Portfolio by Category', 'chart-category'));
   chartsArea.appendChild(donutRow);
 
+  const subcatRow = document.createElement('div');
+  subcatRow.className = 'insights-grid-2';
+  subcatRow.appendChild(makeChartCard('Portfolio by Subcategory', 'chart-subcat'));
+  subcatRow.appendChild(makeChartCard('Allocation by Current Value', 'chart-alloc-cv'));
+  chartsArea.appendChild(subcatRow);
+
   chartsArea.appendChild(makeChartCard('Monthly Investment', 'chart-monthly', true));
   chartsArea.appendChild(makeChartCard('Yearly Summary', 'chart-yearly', true));
 
@@ -381,6 +387,8 @@ function drawCharts(chartsArea, rawData) {
   requestAnimationFrame(() => {
     drawBucketChart(agg.byBucket);
     drawCategoryChart(agg.byCategory);
+    drawSubcatChart(agg.bySubcat);
+    drawAllocCvChart(agg.byCategory);
     drawMonthlyChart(agg.byMonth);
     drawYearlyChart(agg.byYear);
     drawTopHoldingsChart(agg.topHoldings);
@@ -392,14 +400,14 @@ function drawCharts(chartsArea, rawData) {
 // ── Data Fetching ─────────────────────────────────────────────────────────────
 
 const ENTRIES = [
-  { catId: 1, catName: 'Indian EQ MF',              bucketId: 1, stream: STREAMS.equity_mf },
-  { catId: 2, catName: 'Indian Equity Stocks',      bucketId: 1, stream: STREAMS.indian_stocks },
-  { catId: 3, catName: 'US Equity Stocks',           bucketId: 1, stream: STREAMS.us_stocks },
-  { catId: 4, catName: 'Real Estate',                bucketId: 1, stream: STREAMS.real_estate },
-  { catId: 5, catName: 'Debt & Hybrid MF',           bucketId: 2, stream: STREAMS.debt_hybrid_mf },
-  { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital },
-  { catId: 6, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical },
-  { catId: 7, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto },
+  { catId: 1, catName: 'Indian EQ MF',              bucketId: 1, stream: STREAMS.equity_mf,               subcatName: null },
+  { catId: 2, catName: 'Indian Equity Stocks',      bucketId: 1, stream: STREAMS.indian_stocks,            subcatName: null },
+  { catId: 3, catName: 'US Equity Stocks',           bucketId: 1, stream: STREAMS.us_stocks,                subcatName: null },
+  { catId: 4, catName: 'Real Estate',                bucketId: 1, stream: STREAMS.real_estate,              subcatName: null },
+  { catId: 5, catName: 'Debt & Hybrid MF',           bucketId: 2, stream: STREAMS.debt_hybrid_mf,           subcatName: null },
+  { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
+  { catId: 6, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
+  { catId: 7, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto,                   subcatName: null },
 ];
 
 async function fetchAllInsightsData() {
@@ -493,13 +501,14 @@ function aggregateInsights(filteredData) {
   let totalCurrentValue = 0, totalUnrealizedPnL = 0;
   const byCategory    = {};
   const byBucket      = {};
+  const bySubcat      = {};
   const byMonth       = {};
   const byYear        = {};
   const allMonthlyNet = {};
   const topHoldings   = [];
 
   filteredData.forEach(entry => {
-    const { catName, bucketId, stream, assets, txns } = entry;
+    const { catName, bucketId, subcatName, stream, assets, txns } = entry;
     const bucket = BUCKETS.find(b => b.id === bucketId);
 
     if (!byCategory[catName]) byCategory[catName] = { netCost: 0, realizedPnL: 0, totalBought: 0, totalSold: 0 };
@@ -528,6 +537,11 @@ function aggregateInsights(filteredData) {
       }
       const curVal    = priceINR && m.currentQty > 0 ? m.currentQty * priceINR : 0;
       const unrealPnL = curVal > 0 ? curVal - m.netCost : 0;
+
+      const resolvedSubcat = subcatName || SUBCAT_NAMES[asset?.subcategory_id] || catName;
+      if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
+      bySubcat[resolvedSubcat].netCost      += m.netCost;
+      bySubcat[resolvedSubcat].currentValue += curVal;
 
       byCategory[catName].netCost        += m.netCost;
       byCategory[catName].realizedPnL    += m.realizedPnL;
@@ -571,7 +585,7 @@ function aggregateInsights(filteredData) {
   return {
     totalInvested, totalRedeemed, totalRealizedPnL, netInvested,
     totalCurrentValue, totalUnrealizedPnL,
-    byCategory, byBucket, byMonth, byYear,
+    byCategory, byBucket, bySubcat, byMonth, byYear,
     topHoldings: topHoldings.slice(0, 10),
     allMonthlyNet,
   };
@@ -660,45 +674,94 @@ function emptyCard(canvasId, msg) {
   }
 }
 
-// ── Bucket donut ──────────────────────────────────────────────────────────────
+// ── Pie chart helpers ─────────────────────────────────────────────────────────
+
+function pieOptions(legendSize = 11) {
+  return {
+    plugins: {
+      datalabels: {
+        formatter: (value, ctx) => {
+          const sum = ctx.dataset.data.reduce((a, b) => a + b, 0);
+          const pct = (value / sum * 100).toFixed(1);
+          return parseFloat(pct) >= 4 ? pct + '%' : '';
+        },
+        color: '#fff',
+        font: { size: 11, weight: '700' },
+      },
+      legend: { position: 'bottom', labels: { color: '#8b90a8', padding: 12, font: { size: legendSize }, usePointStyle: true } },
+      tooltip: {
+        callbacks: {
+          label: ctx => {
+            const sum = ctx.dataset.data.reduce((a, b) => a + b, 0);
+            const pct = (ctx.raw / sum * 100).toFixed(1);
+            return ` ${ctx.label}: ${fmtCurrency(ctx.raw)} (${pct}%)`;
+          },
+        },
+      },
+    },
+  };
+}
+
+// ── Bucket pie ────────────────────────────────────────────────────────────────
 
 function drawBucketChart(byBucket) {
   const entries = Object.entries(byBucket).filter(([, v]) => v.netCost > 0);
   if (!entries.length) return emptyCard('chart-bucket', 'No data for selected filters.');
   newChart('chart-bucket', {
-    type: 'doughnut',
+    type: 'pie',
     data: {
       labels: entries.map(([, v]) => v.name),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: BUCKET_COLORS, borderColor: '#0f1117', borderWidth: 3, hoverOffset: 10 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: BUCKET_COLORS, borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
     },
-    options: {
-      cutout: '68%',
-      plugins: {
-        legend: { position: 'bottom', labels: { color: '#8b90a8', padding: 14, usePointStyle: true } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${fmtCurrency(ctx.raw)}` } },
-      },
-    },
+    options: pieOptions(),
   });
 }
 
-// ── Category donut ────────────────────────────────────────────────────────────
+// ── Category pie ──────────────────────────────────────────────────────────────
 
 function drawCategoryChart(byCategory) {
   const entries = Object.entries(byCategory).filter(([, v]) => v.netCost > 0);
   if (!entries.length) return emptyCard('chart-category', 'No data for selected filters.');
   newChart('chart-category', {
-    type: 'doughnut',
+    type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 3, hoverOffset: 10 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
     },
-    options: {
-      cutout: '68%',
-      plugins: {
-        legend: { position: 'bottom', labels: { color: '#8b90a8', padding: 12, font: { size: 11 }, usePointStyle: true } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${fmtCurrency(ctx.raw)}` } },
-      },
+    options: pieOptions(),
+  });
+}
+
+// ── Subcategory pie ───────────────────────────────────────────────────────────
+
+function drawSubcatChart(bySubcat) {
+  const entries = Object.entries(bySubcat)
+    .filter(([, v]) => v.netCost > 0)
+    .sort((a, b) => b[1].netCost - a[1].netCost);
+  if (!entries.length) return emptyCard('chart-subcat', 'No data for selected filters.');
+  const allColors = [...CAT_COLORS, ...BUCKET_COLORS, '#6366f1', '#10b981', '#f97316'];
+  newChart('chart-subcat', {
+    type: 'pie',
+    data: {
+      labels: entries.map(([k]) => k),
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: allColors.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
     },
+    options: pieOptions(),
+  });
+}
+
+// ── Allocation by current value pie ──────────────────────────────────────────
+
+function drawAllocCvChart(byCategory) {
+  const entries = Object.entries(byCategory).filter(([, v]) => (v.currentValue || 0) > 0);
+  if (!entries.length) return emptyCard('chart-alloc-cv', 'No price data yet — add prices to see current value split.');
+  newChart('chart-alloc-cv', {
+    type: 'pie',
+    data: {
+      labels: entries.map(([k]) => k),
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.currentValue)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
+    },
+    options: pieOptions(),
   });
 }
 
@@ -719,6 +782,7 @@ function drawMonthlyChart(byMonth) {
     options: {
       responsive: true,
       plugins: {
+        datalabels: { display: false },
         legend: { position: 'top', labels: { color: '#8b90a8', padding: 12, usePointStyle: true } },
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` } },
       },
@@ -747,6 +811,7 @@ function drawYearlyChart(byYear) {
     options: {
       responsive: true,
       plugins: {
+        datalabels: { display: false },
         legend: { position: 'top', labels: { color: '#8b90a8', padding: 12, usePointStyle: true } },
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` } },
       },
@@ -773,6 +838,7 @@ function drawTopHoldingsChart(topHoldings) {
       indexAxis: 'y',
       responsive: true,
       plugins: {
+        datalabels: { display: false },
         legend: { display: false },
         tooltip: { callbacks: { title: ctx => topHoldings[ctx[0].dataIndex].name, label: ctx => ` ${fmtCurrency(ctx.raw)}` } },
       },
@@ -799,6 +865,7 @@ function drawPnLChart(byCategory) {
     options: {
       responsive: true,
       plugins: {
+        datalabels: { display: false },
         legend: { display: false },
         tooltip: { callbacks: { label: ctx => ` ${ctx.raw >= 0 ? '+' : ''}${fmtCurrency(ctx.raw)}` } },
       },
@@ -836,6 +903,7 @@ function drawCumulativeChart(allMonthlyNet) {
     options: {
       responsive: true,
       plugins: {
+        datalabels: { display: false },
         legend: { display: false },
         tooltip: { callbacks: { label: ctx => ` Net Invested: ${fmtCurrency(ctx.raw)}` } },
       },

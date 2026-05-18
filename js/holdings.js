@@ -160,13 +160,15 @@ async function buildHoldingsRows() {
         if (price > 0 && qty > 0) currentValue = qty * price;
       }
 
-      rows.push({ catId: cat.id, catName: cat.name, subcategory: resolvedSubcat, name: a[stream.assetNameCol], invested, currentValue });
+      rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol], invested, currentValue });
     });
   }
 
-  const catOrder = CATEGORIES.reduce((m, c, i) => { m[c.id] = i; return m; }, {});
+  const bucketOrder = BUCKETS.reduce((m, b, i) => { m[b.id] = i; return m; }, {});
+  const catOrder    = CATEGORIES.reduce((m, c, i) => { m[c.id] = i; return m; }, {});
   rows.sort((a, b) =>
-    catOrder[a.catId] - catOrder[b.catId] ||
+    bucketOrder[a.bucketId] - bucketOrder[b.bucketId] ||
+    catOrder[a.catId]       - catOrder[b.catId] ||
     a.subcategory.localeCompare(b.subcategory) ||
     a.name.localeCompare(b.name)
   );
@@ -177,88 +179,195 @@ async function buildHoldingsRows() {
 
 function renderHoldingsTable(wrap, rows, { singleCat = false, singleSubcat = false } = {}) {
   wrap.innerHTML = '';
-
   if (!rows.length) {
     wrap.innerHTML = '<div class="holdings-empty">No holdings match the selected filter.</div>';
     return;
   }
 
-  const tableWrap = document.createElement('div');
-  tableWrap.className = 'holdings-table-wrap';
+  const tree = document.createElement('div');
+  tree.className = 'holdings-tree';
 
-  const table = document.createElement('table');
-  table.className = 'holdings-table';
-
-  table.innerHTML = `
-    <thead>
-      <tr>
-        ${!singleCat ? '<th>Category</th>' : ''}
-        ${!singleSubcat ? '<th>Subcategory</th>' : ''}
-        <th>Name</th>
-        <th class="num">Invested (₹)</th>
-        <th class="num">Current Value (₹)</th>
-        <th class="num">Unrealized P&amp;L</th>
-      </tr>
-    </thead>
+  const hdr = document.createElement('div');
+  hdr.className = 'holdings-tree-header';
+  hdr.innerHTML = `
+    <span>${singleSubcat ? 'Asset' : singleCat ? 'Subcategory / Asset' : 'Bucket / Category / Asset'}</span>
+    <span>Invested</span>
+    <span>Current Value</span>
+    <span>Unrealized P&L</span>
   `;
+  tree.appendChild(hdr);
 
-  const tbody = document.createElement('tbody');
+  // Aggregate totals
+  const bucketMap = {};
+  const catMap    = {};
+  const subcatMap = {};
 
-  let currentCatId = null;
-  let catTotal = 0;
-  let grandTotal = 0;
+  rows.forEach(r => {
+    const bucket = BUCKETS.find(b => b.id === r.bucketId) || { name: '', color: '#4f46e5' };
+    if (!bucketMap[r.bucketId]) bucketMap[r.bucketId] = { name: bucket.name, color: bucket.color, invested: 0, currentValue: 0 };
+    bucketMap[r.bucketId].invested     += r.invested;
+    bucketMap[r.bucketId].currentValue += r.currentValue;
 
-  rows.forEach((r, idx) => {
-    if (!singleCat && r.catId !== currentCatId) {
-      if (currentCatId !== null) {
-        const totalRow = document.createElement('tr');
-        totalRow.className = 'cat-total';
-        totalRow.innerHTML = `<td colspan="${colSpan(singleCat, singleSubcat) - 1}">${rows[idx - 1].catName} Total</td><td class="num">₹${formatINR(catTotal)}</td>`;
-        tbody.appendChild(totalRow);
-      }
-      currentCatId = r.catId;
-      catTotal = 0;
+    if (!catMap[r.catId]) catMap[r.catId] = { name: r.catName, invested: 0, currentValue: 0 };
+    catMap[r.catId].invested     += r.invested;
+    catMap[r.catId].currentValue += r.currentValue;
 
-      const groupRow = document.createElement('tr');
-      groupRow.className = 'cat-group';
-      groupRow.innerHTML = `<td colspan="${colSpan(singleCat, singleSubcat)}">${r.catName}</td>`;
-      tbody.appendChild(groupRow);
-    }
-
-    catTotal += r.invested;
-    grandTotal += r.invested;
-
-    const tr = document.createElement('tr');
-    const cells = [];
-    if (!singleCat) cells.push(`<td></td>`);
-    if (!singleSubcat) cells.push(`<td class="subcat-label">${r.subcategory}</td>`);
-    cells.push(`<td class="asset-name">${r.name}</td>`);
-    cells.push(`<td class="num">₹${formatINR(r.invested)}</td>`);
-    cells.push(`<td class="num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</td>`);
-    const pnl = r.currentValue > 0 ? r.currentValue - r.invested : null;
-    const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
-    cells.push(`<td class="num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</td>`);
-    tr.innerHTML = cells.join('');
-    tbody.appendChild(tr);
+    const sk = `${r.catId}|${r.subcategory}`;
+    if (!subcatMap[sk]) subcatMap[sk] = { invested: 0, currentValue: 0 };
+    subcatMap[sk].invested     += r.invested;
+    subcatMap[sk].currentValue += r.currentValue;
   });
 
-  if (!singleCat && currentCatId !== null) {
-    const totalRow = document.createElement('tr');
-    totalRow.className = 'cat-total';
-    totalRow.innerHTML = `<td colspan="${colSpan(singleCat, singleSubcat) - 1}">${rows[rows.length - 1].catName} Total</td><td class="num">₹${formatINR(catTotal)}</td>`;
-    tbody.appendChild(totalRow);
+  if (singleSubcat) {
+    rows.forEach(r => tree.appendChild(makeAssetRow(r)));
+  } else if (singleCat) {
+    const subcats = [...new Set(rows.map(r => r.subcategory))];
+    subcats.forEach(sc => {
+      const scRows  = rows.filter(r => r.subcategory === sc);
+      const sk      = `${scRows[0].catId}|${sc}`;
+      const totals  = subcatMap[sk] || { invested: 0, currentValue: 0 };
+      const scSection = document.createElement('div');
+      scSection.className = 'ht-subcat-section';
+      scSection.dataset.collapsed = 'false';
+      if (sc) {
+        const scRow = makeSubcatRow(sc, totals);
+        scRow.addEventListener('click', () => toggleSection(scSection, scRow.querySelector('.ht-toggle')));
+        scSection.appendChild(scRow);
+      }
+      scRows.forEach(r => scSection.appendChild(makeAssetRow(r)));
+      tree.appendChild(scSection);
+    });
+  } else {
+    const bucketIds = [...new Set(rows.map(r => r.bucketId))];
+    bucketIds.forEach(bid => {
+      const bRows   = rows.filter(r => r.bucketId === bid);
+      const bTotals = bucketMap[bid] || { invested: 0, currentValue: 0 };
+      const bBucket = BUCKETS.find(b => b.id === bid) || { name: '', color: '#4f46e5' };
+
+      const bSection = document.createElement('div');
+      bSection.className = 'ht-section';
+      bSection.dataset.collapsed = 'false';
+
+      const bRow = makeBucketRow(bBucket, bTotals);
+      bRow.addEventListener('click', () => toggleSection(bSection, bRow.querySelector('.ht-toggle')));
+      bSection.appendChild(bRow);
+
+      const catIds = [...new Set(bRows.map(r => r.catId))];
+      catIds.forEach(cid => {
+        const cRows   = bRows.filter(r => r.catId === cid);
+        const cTotals = catMap[cid] || { invested: 0, currentValue: 0 };
+
+        const cSection = document.createElement('div');
+        cSection.className = 'ht-cat-section';
+        cSection.dataset.collapsed = 'false';
+
+        const cRow = makeCategoryRow(cRows[0].catName, cTotals);
+        cRow.addEventListener('click', () => toggleSection(cSection, cRow.querySelector('.ht-toggle')));
+        cSection.appendChild(cRow);
+
+        const subcats = [...new Set(cRows.map(r => r.subcategory))];
+        subcats.forEach(sc => {
+          const scRows  = cRows.filter(r => r.subcategory === sc);
+          const sk      = `${cid}|${sc}`;
+          const sTotals = subcatMap[sk] || { invested: 0, currentValue: 0 };
+
+          const scSection = document.createElement('div');
+          scSection.className = 'ht-subcat-section';
+          scSection.dataset.collapsed = 'false';
+
+          if (sc) {
+            const scRow = makeSubcatRow(sc, sTotals);
+            scRow.addEventListener('click', () => toggleSection(scSection, scRow.querySelector('.ht-toggle')));
+            scSection.appendChild(scRow);
+          }
+          scRows.forEach(r => scSection.appendChild(makeAssetRow(r)));
+          cSection.appendChild(scSection);
+        });
+
+        bSection.appendChild(cSection);
+      });
+
+      tree.appendChild(bSection);
+    });
   }
 
-  const grandRow = document.createElement('tr');
-  grandRow.className = 'grand-total';
-  grandRow.innerHTML = `<td colspan="${colSpan(singleCat, singleSubcat) - 1}">Total</td><td class="num">₹${formatINR(grandTotal)}</td>`;
-  tbody.appendChild(grandRow);
-
-  table.appendChild(tbody);
-  tableWrap.appendChild(table);
-  wrap.appendChild(tableWrap);
+  // Grand total
+  const grandInvested = rows.reduce((s, r) => s + r.invested, 0);
+  const grandCurrent  = rows.reduce((s, r) => s + r.currentValue, 0);
+  const grandPnL      = grandCurrent > 0 ? grandCurrent - grandInvested : null;
+  const gRow = document.createElement('div');
+  gRow.className = 'ht-grand';
+  gRow.innerHTML = `
+    <div class="ht-grand-label">Total</div>
+    <div class="ht-grand-num">₹${formatINR(grandInvested)}</div>
+    <div class="ht-grand-num">${grandCurrent > 0 ? '₹' + formatINR(grandCurrent) : '—'}</div>
+    <div class="ht-grand-num ${grandPnL !== null ? (grandPnL >= 0 ? 'positive' : 'negative') : ''}">${grandPnL !== null ? (grandPnL >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(grandPnL)) : '—'}</div>
+  `;
+  tree.appendChild(gRow);
+  wrap.appendChild(tree);
 }
 
-function colSpan(singleCat, singleSubcat) {
-  return 6 - (singleCat ? 1 : 0) - (singleSubcat ? 1 : 0);
+function makeBucketRow(bucket, totals) {
+  const pnl    = totals.currentValue > 0 ? totals.currentValue - totals.invested : null;
+  const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
+  const row    = document.createElement('div');
+  row.className = 'ht-bucket';
+  row.innerHTML = `
+    <div class="ht-bucket-name">
+      <span class="ht-toggle">▾</span>
+      <span>${bucket.icon || ''} ${bucket.name}</span>
+    </div>
+    <div class="ht-bucket-num">₹${formatINR(totals.invested)}</div>
+    <div class="ht-bucket-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
+    <div class="ht-bucket-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+  `;
+  return row;
+}
+
+function makeCategoryRow(catName, totals) {
+  const pnl    = totals.currentValue > 0 ? totals.currentValue - totals.invested : null;
+  const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
+  const row    = document.createElement('div');
+  row.className = 'ht-category';
+  row.innerHTML = `
+    <div class="ht-category-name"><span class="ht-toggle">▾</span>${catName}</div>
+    <div class="ht-category-num">₹${formatINR(totals.invested)}</div>
+    <div class="ht-category-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
+    <div class="ht-category-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+  `;
+  return row;
+}
+
+function makeSubcatRow(subcatName, totals) {
+  const pnl    = totals.currentValue > 0 ? totals.currentValue - totals.invested : null;
+  const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
+  const row    = document.createElement('div');
+  row.className = 'ht-subcat';
+  row.innerHTML = `
+    <div class="ht-subcat-name"><span class="ht-toggle">▾</span>${subcatName}</div>
+    <div class="ht-subcat-num">₹${formatINR(totals.invested)}</div>
+    <div class="ht-subcat-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
+    <div class="ht-subcat-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+  `;
+  return row;
+}
+
+function makeAssetRow(r) {
+  const pnl    = r.currentValue > 0 ? r.currentValue - r.invested : null;
+  const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
+  const row    = document.createElement('div');
+  row.className = 'ht-asset';
+  row.innerHTML = `
+    <div class="ht-asset-name">${r.name}</div>
+    <div class="ht-asset-num">₹${formatINR(r.invested)}</div>
+    <div class="ht-asset-num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</div>
+    <div class="ht-asset-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+  `;
+  return row;
+}
+
+function toggleSection(section, toggleEl) {
+  const collapsed = section.dataset.collapsed === 'true';
+  section.dataset.collapsed = String(!collapsed);
+  if (toggleEl) toggleEl.classList.toggle('collapsed', !collapsed);
 }
