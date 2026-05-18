@@ -26,8 +26,8 @@ const CATEGORIES = [
   { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf', hasSubcategories: true },
   { id: 6, bucket_id: 3, name: 'Precious Metals', stream: 'precious_metals', hasSubcategories: true },
   { id: 7, bucket_id: 3, name: 'Cryptocurrency', stream: 'crypto', hasSubcategories: true },
-  { id: 8, bucket_id: 1, name: 'Indian EQ MF — SIP', stream: 'equity_sip', hasSubcategories: true },
-  { id: 9, bucket_id: 2, name: 'Debt & Hybrid MF — SIP', stream: 'debt_hybrid_sip', hasSubcategories: true },
+  { id: 8, bucket_id: 1, name: 'Indian EQ MF — SIP', stream: 'equity_sip', hasSubcategories: false },
+  { id: 9, bucket_id: 2, name: 'Debt & Hybrid MF — SIP', stream: 'debt_hybrid_sip', hasSubcategories: false },
 ];
 
 // Stream configurations — defines tables, asset form fields, transaction form fields

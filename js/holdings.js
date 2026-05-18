@@ -119,7 +119,21 @@ async function buildHoldingsRows() {
   ];
 
   const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable])), 'manual_prices'];
-  const res = await API.batchGet(allSheets);
+  let res = {};
+  try {
+    res = await API.batchGet(allSheets);
+  } catch (_) {
+    // batchGet failed (e.g. new sheets not yet created) — fall back to per-stream fetches
+    const results = await Promise.allSettled(
+      [...new Set(allSheets)].map(async sheet => {
+        const data = await API.get(sheet, { limit: 5000 });
+        return [sheet, data];
+      })
+    );
+    results.forEach(r => {
+      if (r.status === 'fulfilled') res[r.value[0]] = r.value[1];
+    });
+  }
   const manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
 
   const rows = [];
