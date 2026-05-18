@@ -447,7 +447,10 @@ function populateAssetFilter(assetSel, stream) {
     });
 
   const bar = assetSel.closest('.history-asset-filter-bar');
-  if (bar) bar.style.display = uniqueAssets.size > 1 ? 'flex' : 'none';
+  if (bar) bar.style.display = uniqueAssets.size >= 1 ? 'flex' : 'none';
+  // Hide the dropdown when there's only one asset — filtering is redundant,
+  // but "Select All" still matters for pagination
+  assetSel.style.display = uniqueAssets.size > 1 ? '' : 'none';
 
   if (prev && [...uniqueAssets.keys()].includes(prev)) assetSel.value = prev;
 }
