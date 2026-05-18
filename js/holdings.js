@@ -5,14 +5,28 @@ let _holdingsAllRows = null;
 async function renderHoldings() {
   const container = document.getElementById('holdings-content');
   const header = document.getElementById('holdings-header');
-  if (header) header.innerHTML = '<h2>Holdings</h2>';
+
+  if (header) {
+    header.innerHTML = '';
+    const h2 = document.createElement('h2');
+    h2.textContent = 'Holdings';
+    const btn = document.createElement('button');
+    btn.className = 'btn-outline btn-sm';
+    btn.textContent = '↻ Refresh';
+    btn.addEventListener('click', () => {
+      _holdingsAllRows = null;
+      LSC.clear('holdings');
+      renderHoldings();
+    });
+    header.appendChild(h2);
+    header.appendChild(btn);
+  }
 
   container.innerHTML = '<div class="holdings-loading">Loading holdings…</div>';
 
   try {
-    if (!_holdingsAllRows) {
-      _holdingsAllRows = await buildHoldingsRows();
-    }
+    if (!_holdingsAllRows) _holdingsAllRows = LSC.get('holdings');
+    if (!_holdingsAllRows) _holdingsAllRows = await buildHoldingsRows();
     renderHoldingsUI(container, _holdingsAllRows);
   } catch (err) {
     container.innerHTML = `<div class="holdings-empty">Failed to load: ${err.message}</div>`;
@@ -151,6 +165,7 @@ async function buildHoldingsRows() {
     a.name.localeCompare(b.name)
   );
 
+  LSC.set('holdings', rows);
   return rows;
 }
 

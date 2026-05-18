@@ -27,6 +27,7 @@ async function renderInsights() {
     btn.textContent = '↻ Refresh';
     btn.addEventListener('click', () => {
       _insightsCache = null;
+      LSC.clear('insights');
       Object.keys(INSIGHT_FILTERS).forEach(k => INSIGHT_FILTERS[k] = '');
       renderInsights();
     });
@@ -388,25 +389,34 @@ function drawCharts(chartsArea, rawData) {
 
 // ── Data Fetching ─────────────────────────────────────────────────────────────
 
-async function fetchAllInsightsData() {
-  const ENTRIES = [
-    { catId: 1, catName: 'Indian EQ MF',               bucketId: 1, stream: STREAMS.equity_mf },
-    { catId: 2, catName: 'Indian Equity Stocks',       bucketId: 1, stream: STREAMS.indian_stocks },
-    { catId: 3, catName: 'US Equity Stocks',            bucketId: 1, stream: STREAMS.us_stocks },
-    { catId: 4, catName: 'Real Estate',                 bucketId: 1, stream: STREAMS.real_estate },
-    { catId: 5, catName: 'Debt & Hybrid MF',            bucketId: 2, stream: STREAMS.debt_hybrid_mf },
-    { catId: 6, catName: 'Precious Metals (Digital)',   bucketId: 3, stream: STREAMS.precious_metals_digital },
-    { catId: 6, catName: 'Precious Metals (Physical)',  bucketId: 3, stream: STREAMS.precious_metals_physical },
-    { catId: 7, catName: 'Cryptocurrency',               bucketId: 3, stream: STREAMS.crypto },
-  ];
+const ENTRIES = [
+  { catId: 1, catName: 'Indian EQ MF',              bucketId: 1, stream: STREAMS.equity_mf },
+  { catId: 2, catName: 'Indian Equity Stocks',      bucketId: 1, stream: STREAMS.indian_stocks },
+  { catId: 3, catName: 'US Equity Stocks',           bucketId: 1, stream: STREAMS.us_stocks },
+  { catId: 4, catName: 'Real Estate',                bucketId: 1, stream: STREAMS.real_estate },
+  { catId: 5, catName: 'Debt & Hybrid MF',           bucketId: 2, stream: STREAMS.debt_hybrid_mf },
+  { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital },
+  { catId: 6, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical },
+  { catId: 7, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto },
+];
 
-  return Promise.all(ENTRIES.map(async entry => {
-    const [assetsRes, txnsRes] = await Promise.all([
-      API.get(entry.stream.assetTable, { limit: 500 }),
-      API.get(entry.stream.txnTable,   { limit: 5000 }),
-    ]);
-    return { ...entry, assets: assetsRes.rows || [], txns: txnsRes.rows || [] };
+async function fetchAllInsightsData() {
+  // Serve from localStorage if fresh
+  const cached = LSC.get('insights');
+  if (cached) return cached;
+
+  // Single batch request — one round-trip for all 16 tables
+  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]))];
+  const res = await API.batchGet(allSheets);
+
+  const data = ENTRIES.map(entry => ({
+    ...entry,
+    assets: res[entry.stream.assetTable]?.rows || [],
+    txns:   res[entry.stream.txnTable]?.rows   || [],
   }));
+
+  LSC.set('insights', data);
+  return data;
 }
 
 // ── Amount helpers ────────────────────────────────────────────────────────────

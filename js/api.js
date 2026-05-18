@@ -77,7 +77,7 @@ const API = {
   },
 };
 
-// Simple cache so we don't re-fetch assets on every keystroke
+// Simple in-memory cache for asset dropdowns (cleared on new asset)
 const CACHE = {
   _store: {},
   key: (table, filters) => table + JSON.stringify(filters),
@@ -95,3 +95,30 @@ async function fetchAssetsCached(stream) {
   CACHE.set(stream.assetTable, { is_active: true }, data.rows);
   return data.rows;
 }
+
+// ── Batch read (single request for Insights / Holdings) ────────────────────────
+API.batchGet = async function(sheets, limit = 5000) {
+  const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), limit });
+  const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?${params}`);
+  if (!res.ok) throw new Error('batchGet failed: ' + res.status);
+  return res.json(); // { tableName: { rows, total }, ... }
+};
+
+// ── localStorage cache with 30-minute TTL ──────────────────────────────────────
+const LSC = {
+  TTL: 30 * 60 * 1000,
+  get(key) {
+    try {
+      const raw = localStorage.getItem('vz_' + key);
+      if (!raw) return null;
+      const { data, ts } = JSON.parse(raw);
+      return (Date.now() - ts) < this.TTL ? data : null;
+    } catch (_) { return null; }
+  },
+  set(key, data) {
+    try { localStorage.setItem('vz_' + key, JSON.stringify({ data, ts: Date.now() })); } catch (_) {}
+  },
+  clear(...keys) {
+    keys.forEach(k => { try { localStorage.removeItem('vz_' + k); } catch (_) {} });
+  },
+};

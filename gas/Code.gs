@@ -9,6 +9,15 @@ function getSpreadsheet() {
 
 function doGet(e) {
   try {
+    // Batch read: ?action=batchGet&sheets=table1,table2,...&limit=5000
+    if (e.parameter.action === 'batchGet') {
+      const sheets = e.parameter.sheets.split(',');
+      const limit  = parseInt(e.parameter.limit) || 5000;
+      const result = {};
+      sheets.forEach(s => { result[s] = readSheet(s, limit, 0, {}); });
+      return respond(result);
+    }
+
     const sheet = e.parameter.sheet;
     const limit = parseInt(e.parameter.limit) || 10;
     const offset = parseInt(e.parameter.offset) || 0;

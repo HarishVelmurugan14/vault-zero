@@ -18,6 +18,15 @@ const STATE = {
 document.addEventListener('DOMContentLoaded', () => {
   renderNav();
   showPage('log');
+  // Warm insights + holdings cache in the background so first tab click is instant
+  setTimeout(() => {
+    if (!LSC.get('insights')) {
+      fetchAllInsightsData().then(d => { _insightsCache = d; }).catch(() => {});
+    }
+    if (!LSC.get('holdings') && !_holdingsAllRows) {
+      buildHoldingsRows().then(r => { _holdingsAllRows = r; }).catch(() => {});
+    }
+  }, 3000);
 });
 
 // Top nav tab switching
@@ -168,6 +177,9 @@ async function startLogForm() {
     try {
       values[STATE.stream.assetIdCol] = assetId;
       await API.createTransaction(STATE.stream, values);
+      _insightsCache = null;
+      _holdingsAllRows = null;
+      LSC.clear('insights', 'holdings');
       showToast('Transaction saved!');
       // Reset form
       fieldsDiv.innerHTML = '';

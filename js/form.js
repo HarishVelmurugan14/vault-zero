@@ -251,6 +251,9 @@ function renderAssetForm(container, stream, category, subcategory) {
       save.textContent = 'Saving...';
       const result = await API.createAsset(stream, data);
       CACHE.clear(stream.assetTable);
+      _insightsCache = null;
+      _holdingsAllRows = null;
+      LSC.clear('insights', 'holdings');
       overlay.remove();
       // Reload the transaction form with new asset pre-selected
       const formContainer = document.getElementById('form-fields');
