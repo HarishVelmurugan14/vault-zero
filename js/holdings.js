@@ -26,7 +26,9 @@ async function renderHoldings() {
 
   try {
     if (!_holdingsAllRows) _holdingsAllRows = LSC.get('holdings');
-    if (!_holdingsAllRows) _holdingsAllRows = await buildHoldingsRows();
+    if (!_holdingsAllRows) {
+      _holdingsAllRows = await buildHoldingsRows();
+    }
     renderHoldingsUI(container, _holdingsAllRows);
   } catch (err) {
     container.innerHTML = `<div class="holdings-empty">Failed to load: ${err.message}</div>`;
@@ -103,35 +105,32 @@ function renderHoldingsUI(container, allRows) {
 }
 
 async function buildHoldingsRows() {
-  const rows = [];
-
   const streamEntries = [
-    { cat: CATEGORIES.find(c => c.id === 1), stream: STREAMS.equity_mf, subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 2), stream: STREAMS.indian_stocks, subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 3), stream: STREAMS.us_stocks, subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 4), stream: STREAMS.real_estate, subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 5), stream: STREAMS.debt_hybrid_mf, subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_digital, subcatName: 'Digital' },
+    { cat: CATEGORIES.find(c => c.id === 1), stream: STREAMS.equity_mf,               subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 2), stream: STREAMS.indian_stocks,            subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 3), stream: STREAMS.us_stocks,                subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 4), stream: STREAMS.real_estate,              subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 5), stream: STREAMS.debt_hybrid_mf,           subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
     { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
-    { cat: CATEGORIES.find(c => c.id === 7), stream: STREAMS.crypto, subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 7), stream: STREAMS.crypto,                   subcatName: null },
   ];
 
+  const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable])), 'manual_prices'];
+  const res = await API.batchGet(allSheets);
+  const manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
+
+  const rows = [];
   for (const entry of streamEntries) {
     const { cat, stream, subcatName } = entry;
-    if (!stream) continue;
-
-    const [assetsData, txnsData] = await Promise.all([
-      API.get(stream.assetTable, { limit: 500 }),
-      API.get(stream.txnTable, { limit: 5000 }),
-    ]);
-
-    const assets = assetsData.rows || [];
-    const txns = txnsData.rows || [];
+    const assets = res[stream.assetTable]?.rows || [];
+    const txns   = res[stream.txnTable]?.rows   || [];
     if (!assets.length) continue;
 
-    const byAsset = {};
+    const investedByAsset = {};
+    const qtyByAsset      = {};
     txns.forEach(t => {
-      const aid = String(t[stream.assetIdCol]);
+      const aid  = String(t[stream.assetIdCol]);
       const sign = t.txn_type === 'Buy' ? 1 : -1;
       let amt = 0;
       if (stream.amountCol) {
@@ -139,22 +138,29 @@ async function buildHoldingsRows() {
       } else {
         amt = parseFloat(t.quantity || 0) * parseFloat(t.price_per_unit || 0)
             + parseFloat(t.registration_cost || 0)
-            + parseFloat(t.other_expenses || 0);
+            + parseFloat(t.other_expenses    || 0);
       }
-      byAsset[aid] = (byAsset[aid] || 0) + sign * amt;
+      investedByAsset[aid] = (investedByAsset[aid] || 0) + sign * amt;
+      const qty = parseFloat(t.units || t.quantity || 0);
+      qtyByAsset[aid] = (qtyByAsset[aid] || 0) + sign * qty;
     });
 
     assets.forEach(a => {
-      const invested = byAsset[String(a.id)] || 0;
+      const invested = investedByAsset[String(a.id)] || 0;
       if (!invested) return;
       const resolvedSubcat = subcatName || SUBCAT_NAMES[a.subcategory_id] || '';
-      rows.push({
-        catId: cat.id,
-        catName: cat.name,
-        subcategory: resolvedSubcat,
-        name: a[stream.assetNameCol],
-        invested,
-      });
+
+      let currentValue = 0;
+      const qty = qtyByAsset[String(a.id)] || 0;
+      if (stream.currentPriceCol) {
+        const price = parseFloat(a[stream.currentPriceCol] || 0);
+        if (price > 0 && qty > 0) currentValue = qty * price;
+      } else if (stream.manualPriceType) {
+        const price = manualPricesMap[`${stream.manualPriceType}|${String(a.id)}`] || 0;
+        if (price > 0 && qty > 0) currentValue = qty * price;
+      }
+
+      rows.push({ catId: cat.id, catName: cat.name, subcategory: resolvedSubcat, name: a[stream.assetNameCol], invested, currentValue });
     });
   }
 
@@ -190,6 +196,8 @@ function renderHoldingsTable(wrap, rows, { singleCat = false, singleSubcat = fal
         ${!singleSubcat ? '<th>Subcategory</th>' : ''}
         <th>Name</th>
         <th class="num">Invested (₹)</th>
+        <th class="num">Current Value (₹)</th>
+        <th class="num">Unrealized P&amp;L</th>
       </tr>
     </thead>
   `;
@@ -226,6 +234,10 @@ function renderHoldingsTable(wrap, rows, { singleCat = false, singleSubcat = fal
     if (!singleSubcat) cells.push(`<td class="subcat-label">${r.subcategory}</td>`);
     cells.push(`<td class="asset-name">${r.name}</td>`);
     cells.push(`<td class="num">₹${formatINR(r.invested)}</td>`);
+    cells.push(`<td class="num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</td>`);
+    const pnl = r.currentValue > 0 ? r.currentValue - r.invested : null;
+    const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
+    cells.push(`<td class="num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</td>`);
     tr.innerHTML = cells.join('');
     tbody.appendChild(tr);
   });
@@ -248,5 +260,5 @@ function renderHoldingsTable(wrap, rows, { singleCat = false, singleSubcat = fal
 }
 
 function colSpan(singleCat, singleSubcat) {
-  return 4 - (singleCat ? 1 : 0) - (singleSubcat ? 1 : 0);
+  return 6 - (singleCat ? 1 : 0) - (singleSubcat ? 1 : 0);
 }

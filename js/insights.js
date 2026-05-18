@@ -2,6 +2,7 @@
 
 let _insightsCache = null;
 let _insightsCharts = [];
+let _manualPricesMap = {};
 
 const INSIGHT_FILTERS = {
   catName:   '',
@@ -27,6 +28,7 @@ async function renderInsights() {
     btn.textContent = '↻ Refresh';
     btn.addEventListener('click', () => {
       _insightsCache = null;
+      _manualPricesMap = {};
       LSC.clear('insights');
       Object.keys(INSIGHT_FILTERS).forEach(k => INSIGHT_FILTERS[k] = '');
       renderInsights();
@@ -401,38 +403,45 @@ const ENTRIES = [
 ];
 
 async function fetchAllInsightsData() {
-  // Serve from localStorage if fresh
   const cached = LSC.get('insights');
-  if (cached) return cached;
+  if (cached) {
+    _manualPricesMap = cached.manualPrices || {};
+    return cached.entries;
+  }
 
   let data;
+  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable])), 'manual_prices'];
 
   try {
-    // Fast path: single batch request (requires updated GAS with batchGet action)
-    const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]))];
     const res = await API.batchGet(allSheets);
+    _manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
     data = ENTRIES.map(entry => ({
       ...entry,
       assets: res[entry.stream.assetTable]?.rows || [],
       txns:   res[entry.stream.txnTable]?.rows   || [],
     }));
-  } catch (_) {
-    // Fallback: individual requests (old GAS or batchGet unavailable)
+  } catch (_) {}
+
+  if (!data) {
     const results = await Promise.allSettled(ENTRIES.map(async entry => {
-      const [assetsRes, txnsRes] = await Promise.allSettled([
+      const [a, t] = await Promise.allSettled([
         API.get(entry.stream.assetTable, { limit: 500 }),
         API.get(entry.stream.txnTable,   { limit: 5000 }),
       ]);
       return {
         ...entry,
-        assets: assetsRes.status === 'fulfilled' ? (assetsRes.value.rows || []) : [],
-        txns:   txnsRes.status   === 'fulfilled' ? (txnsRes.value.rows   || []) : [],
+        assets: a.status === 'fulfilled' ? (a.value.rows || []) : [],
+        txns:   t.status === 'fulfilled' ? (t.value.rows  || []) : [],
       };
     }));
     data = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+    try {
+      const mpRes = await API.get('manual_prices', { limit: 1000 });
+      _manualPricesMap = buildManualPricesMap(mpRes.rows || []);
+    } catch (_) {}
   }
 
-  LSC.set('insights', data);
+  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap });
   return data;
 }
 
@@ -474,13 +483,14 @@ function computeAssetMetrics(stream, txns) {
     }
   });
 
-  return { netCost: totalCost, realizedPnL, totalBought, totalSold };
+  return { netCost: totalCost, realizedPnL, totalBought, totalSold, currentQty: totalQty };
 }
 
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 function aggregateInsights(filteredData) {
   let totalInvested = 0, totalRedeemed = 0, totalRealizedPnL = 0;
+  let totalCurrentValue = 0, totalUnrealizedPnL = 0;
   const byCategory    = {};
   const byBucket      = {};
   const byMonth       = {};
@@ -509,17 +519,32 @@ function aggregateInsights(filteredData) {
       const asset = assetMap[assetId];
       const m = computeAssetMetrics(stream, assetTxns);
 
-      byCategory[catName].netCost      += m.netCost;
-      byCategory[catName].realizedPnL  += m.realizedPnL;
-      byCategory[catName].totalBought  += m.totalBought;
-      byCategory[catName].totalSold    += m.totalSold;
-      byBucket[bucketId].netCost       += m.netCost;
-      totalInvested    += m.totalBought;
-      totalRedeemed    += m.totalSold;
-      totalRealizedPnL += m.realizedPnL;
+      // Current market value — price is always INR (GAS formula handles FX for USD assets)
+      let priceINR = 0;
+      if (stream.currentPriceCol) {
+        priceINR = parseFloat(asset?.[stream.currentPriceCol] || 0);
+      } else if (stream.manualPriceType) {
+        priceINR = _manualPricesMap[`${stream.manualPriceType}|${assetId}`] || 0;
+      }
+      const curVal    = priceINR && m.currentQty > 0 ? m.currentQty * priceINR : 0;
+      const unrealPnL = curVal > 0 ? curVal - m.netCost : 0;
+
+      byCategory[catName].netCost        += m.netCost;
+      byCategory[catName].realizedPnL    += m.realizedPnL;
+      byCategory[catName].totalBought    += m.totalBought;
+      byCategory[catName].totalSold      += m.totalSold;
+      byCategory[catName].currentValue   = (byCategory[catName].currentValue  || 0) + curVal;
+      byCategory[catName].unrealizedPnL  = (byCategory[catName].unrealizedPnL || 0) + unrealPnL;
+      byBucket[bucketId].netCost         += m.netCost;
+      byBucket[bucketId].currentValue    = (byBucket[bucketId].currentValue || 0) + curVal;
+      totalInvested      += m.totalBought;
+      totalRedeemed      += m.totalSold;
+      totalRealizedPnL   += m.realizedPnL;
+      totalCurrentValue  += curVal;
+      totalUnrealizedPnL += unrealPnL;
 
       if (m.netCost > 100 && asset) {
-        topHoldings.push({ name: asset[stream.assetNameCol], catName, netCost: m.netCost });
+        topHoldings.push({ name: asset[stream.assetNameCol], catName, netCost: m.netCost, currentValue: curVal });
       }
 
       assetTxns.forEach(t => {
@@ -545,6 +570,7 @@ function aggregateInsights(filteredData) {
 
   return {
     totalInvested, totalRedeemed, totalRealizedPnL, netInvested,
+    totalCurrentValue, totalUnrealizedPnL,
     byCategory, byBucket, byMonth, byYear,
     topHoldings: topHoldings.slice(0, 10),
     allMonthlyNet,
@@ -557,15 +583,20 @@ function buildSummaryCards(agg) {
   const section  = document.createElement('div');
   section.className = 'summary-cards';
 
-  const pnlSign  = agg.totalRealizedPnL >= 0 ? '+' : '';
-  const pnlClass = agg.totalRealizedPnL >= 0 ? 'positive' : 'negative';
+  const sign  = v => v >= 0 ? '+' : '';
+  const cls   = v => v >= 0 ? 'positive' : 'negative';
+  const hasPrices = agg.totalCurrentValue > 0;
 
-  [
-    { label: 'Total Invested',  value: '₹' + formatINR(agg.totalInvested),                         sub: 'Lifetime purchases',     accent: '#4f46e5' },
-    { label: 'Net Invested',    value: '₹' + formatINR(agg.netInvested),                           sub: 'Current cost basis',     accent: '#0891b2' },
-    { label: 'Realized P&L',   value: pnlSign + '₹' + formatINR(Math.abs(agg.totalRealizedPnL)), sub: 'From sell transactions', accent: agg.totalRealizedPnL >= 0 ? '#22c55e' : '#ef4444', cls: pnlClass },
-    { label: 'Total Redeemed',  value: '₹' + formatINR(agg.totalRedeemed),                        sub: 'Lifetime sell proceeds', accent: '#d97706' },
-  ].forEach(c => {
+  const cards = [
+    { label: 'Current Value',    value: hasPrices ? '₹' + formatINR(agg.totalCurrentValue) : '—',                                                       sub: hasPrices ? 'At market price' : 'No price data yet',  accent: '#0891b2' },
+    { label: 'Net Invested',     value: '₹' + formatINR(agg.netInvested),                                                                                sub: 'Current cost basis',            accent: '#4f46e5' },
+    { label: 'Unrealized P&L',   value: hasPrices ? sign(agg.totalUnrealizedPnL) + '₹' + formatINR(Math.abs(agg.totalUnrealizedPnL)) : '—',             sub: hasPrices ? 'Current value − cost' : 'Awaiting price data', accent: agg.totalUnrealizedPnL >= 0 ? '#22c55e' : '#ef4444', cls: hasPrices ? cls(agg.totalUnrealizedPnL) : '' },
+    { label: 'Realized P&L',     value: sign(agg.totalRealizedPnL) + '₹' + formatINR(Math.abs(agg.totalRealizedPnL)),                                   sub: 'From sell transactions',        accent: agg.totalRealizedPnL >= 0 ? '#22c55e' : '#ef4444', cls: cls(agg.totalRealizedPnL) },
+    { label: 'Total Invested',   value: '₹' + formatINR(agg.totalInvested),                                                                              sub: 'Lifetime purchases',            accent: '#7c3aed' },
+    { label: 'Total Redeemed',   value: '₹' + formatINR(agg.totalRedeemed),                                                                              sub: 'Lifetime sell proceeds',        accent: '#d97706' },
+  ];
+
+  cards.forEach(c => {
     const card = document.createElement('div');
     card.className = 'summary-card';
     card.style.setProperty('--card-accent', c.accent);

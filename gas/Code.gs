@@ -116,6 +116,8 @@ function appendRow(sheetName, row) {
 
   const rowData = headers.map(h => row[h] !== undefined ? row[h] : '');
   sheet.appendRow(rowData);
+  const newRowNum = sheet.getLastRow();
+  writePriceFormula(sheet, sheetName, headers, newRowNum);
   return newId;
 }
 
@@ -175,6 +177,74 @@ function respond(data, code) {
   return output;
 }
 
+// ── Market price — write GOOGLEFINANCE formula into asset table on insert ─────
+
+const PRICE_COLUMN_CONFIG = {
+  'equity_funds':                { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
+  'debt_hybrid_funds':           { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
+  'indian_equity_stocks_assets': { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct'     },
+  'us_equity_stocks_assets':     { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
+  'precious_metal_etf_assets':   { codeCol: 'code',   priceCol: 'current_price', formulaType: 'nse'        },
+  'crypto_assets':               { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'crypto_usd' },
+};
+
+function writePriceFormula(sheet, sheetName, headers, rowNum) {
+  const config = PRICE_COLUMN_CONFIG[sheetName];
+  if (!config) return;
+  const codeIdx  = headers.indexOf(config.codeCol);
+  const priceIdx = headers.indexOf(config.priceCol);
+  if (codeIdx < 0 || priceIdx < 0) return;
+  const colLetter = String.fromCharCode(65 + codeIdx);
+  let formula;
+  switch (config.formulaType) {
+    case 'mutf_in':
+      formula = `=IFERROR(GOOGLEFINANCE("MUTF_IN:"&${colLetter}${rowNum},"closeyest"),0)`;
+      break;
+    case 'direct':
+      formula = `=IFERROR(GOOGLEFINANCE(${colLetter}${rowNum},"closeyest"),0)`;
+      break;
+    case 'direct_usd':
+      formula = `=IFERROR(GOOGLEFINANCE(${colLetter}${rowNum},"closeyest")*IFERROR(GOOGLEFINANCE("CURRENCY:USDINR"),83),0)`;
+      break;
+    case 'nse':
+      formula = `=IFERROR(GOOGLEFINANCE("NSE:"&${colLetter}${rowNum},"closeyest"),0)`;
+      break;
+    case 'crypto_usd':
+      formula = `=IFERROR(GOOGLEFINANCE("CURRENCY:"&${colLetter}${rowNum})*IFERROR(GOOGLEFINANCE("CURRENCY:USDINR"),83),0)`;
+      break;
+  }
+  if (formula) sheet.getRange(rowNum, priceIdx + 1).setFormula(formula);
+}
+
+// Run once in GAS editor to add price column + formulas to existing asset rows
+function migrateAddPriceColumns() {
+  const ss = getSpreadsheet();
+  Object.entries(PRICE_COLUMN_CONFIG).forEach(([tableName, config]) => {
+    const sheet = ss.getSheetByName(tableName);
+    if (!sheet || sheet.getLastRow() === 0) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    if (headers.includes(config.priceCol)) {
+      Logger.log(tableName + ': ' + config.priceCol + ' already exists — writing formulas for empty rows');
+      const priceIdx = headers.indexOf(config.priceCol);
+      for (let r = 2; r <= sheet.getLastRow(); r++) {
+        const existing = sheet.getRange(r, priceIdx + 1).getValue();
+        if (!existing) writePriceFormula(sheet, tableName, headers, r);
+      }
+      return;
+    }
+    // Insert column before created_at (last column)
+    const lastCol = headers.length;
+    sheet.insertColumnBefore(lastCol);
+    sheet.getRange(1, lastCol).setValue(config.priceCol);
+    Logger.log(tableName + ': added ' + config.priceCol + ' at col ' + lastCol);
+    const updatedHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    for (let r = 2; r <= sheet.getLastRow(); r++) {
+      writePriceFormula(sheet, tableName, updatedHeaders, r);
+    }
+  });
+  Logger.log('Migration complete.');
+}
+
 // Run this once to create all sheet tabs with correct headers
 function setupAllSheets() {
   const sheets = {
@@ -182,29 +252,29 @@ function setupAllSheets() {
     categories: ['id', 'bucket_id', 'name', 'description', 'created_at'],
     subcategories: ['id', 'category_id', 'name', 'created_at'],
 
-    equity_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'is_active', 'created_at'],
+    equity_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'is_active', 'current_nav', 'created_at'],
     equity_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
     equity_sip_mandates: ['id', 'fund_id', 'platform', 'mandate_ref', 'created_at'],
     equity_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 
-    debt_hybrid_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'created_at'],
+    debt_hybrid_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'current_nav', 'created_at'],
     debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
     debt_hybrid_sip_mandates: ['id', 'fund_id', 'platform', 'mandate_ref', 'created_at'],
     debt_hybrid_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 
-    indian_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'created_at'],
+    indian_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     indian_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share', 'amount', 'notes', 'created_at'],
 
-    us_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'created_at'],
+    us_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     us_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
-    precious_metal_etf_assets: ['id', 'subcategory_id', 'name', 'code', 'is_active', 'created_at'],
+    precious_metal_etf_assets: ['id', 'subcategory_id', 'name', 'code', 'is_active', 'current_price', 'created_at'],
     precious_metal_etf_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_unit', 'amount', 'notes', 'created_at'],
 
     precious_metal_physical_assets: ['id', 'subcategory_id', 'name', 'metal_type', 'form', 'is_active', 'created_at'],
     precious_metal_physical_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_unit', 'amount', 'notes', 'created_at'],
 
-    crypto_assets: ['id', 'subcategory_id', 'name', 'ticker', 'is_active', 'created_at'],
+    crypto_assets: ['id', 'subcategory_id', 'name', 'ticker', 'is_active', 'current_price', 'created_at'],
     crypto_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
     real_estate_assets: ['id', 'subcategory_id', 'name', 'location', 'unit_of_measure', 'is_active', 'created_at'],

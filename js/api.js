@@ -107,6 +107,21 @@ API.batchGet = async function(sheets, limit = 5000) {
 };
 
 // ── localStorage cache with 30-minute TTL ──────────────────────────────────────
+// Build a map of "asset_type|asset_id" → latest price from manual_prices rows
+function buildManualPricesMap(rows) {
+  const latest = {};
+  rows.forEach(r => {
+    const key = `${r.asset_type}|${String(r.asset_id)}`;
+    const d = new Date(r.price_date);
+    if (!latest[key] || d > new Date(latest[key].date)) {
+      latest[key] = { price: parseFloat(r.price_per_unit), date: r.price_date };
+    }
+  });
+  const result = {};
+  Object.entries(latest).forEach(([k, { price }]) => { result[k] = price; });
+  return result;
+}
+
 const LSC = {
   TTL: 30 * 60 * 1000,
   get(key) {

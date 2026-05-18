@@ -817,12 +817,13 @@ body {
 }
 
 @media (min-width: 640px) {
-  .summary-cards { grid-template-columns: repeat(4, 1fr); }
+  .summary-cards { grid-template-columns: repeat(3, 1fr); }
   .insights-grid-2 { grid-template-columns: 1fr 1fr; }
   .summary-card-value { font-size: 22px; }
   .insights-filter-group { flex: 1 1 160px; }
 }
 
 @media (min-width: 900px) {
+  .summary-cards { grid-template-columns: repeat(6, 1fr); }
   .summary-card-value { font-size: 24px; }
 }

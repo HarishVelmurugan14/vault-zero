@@ -33,6 +33,7 @@ const STREAMS = {
 
   equity_mf: {
     label: 'Indian EQ Mutual Fund',
+    currentPriceCol: 'current_nav',
     amountCol: 'amount',
     assetTable: 'equity_funds',
     txnTable: 'equity_transactions',
@@ -56,6 +57,7 @@ const STREAMS = {
 
   debt_hybrid_mf: {
     label: 'Debt & Hybrid Mutual Fund',
+    currentPriceCol: 'current_nav',
     amountCol: 'amount',
     assetTable: 'debt_hybrid_funds',
     txnTable: 'debt_hybrid_transactions',
@@ -80,6 +82,7 @@ const STREAMS = {
 
   indian_stocks: {
     label: 'Indian Equity Stocks',
+    currentPriceCol: 'current_price',
     amountCol: 'amount',
     assetTable: 'indian_equity_stocks_assets',
     txnTable: 'indian_equity_stocks_transactions',
@@ -103,6 +106,7 @@ const STREAMS = {
 
   us_stocks: {
     label: 'US Equity Stocks',
+    currentPriceCol: 'current_price',
     amountCol: 'amount_inr',
     assetTable: 'us_equity_stocks_assets',
     txnTable: 'us_equity_stocks_transactions',
@@ -128,6 +132,7 @@ const STREAMS = {
 
   precious_metals_digital: {
     label: 'Precious Metals — Digital',
+    currentPriceCol: 'current_price',
     amountCol: 'amount',
     assetTable: 'precious_metal_etf_assets',
     txnTable: 'precious_metal_etf_transactions',
@@ -149,6 +154,8 @@ const STREAMS = {
 
   precious_metals_physical: {
     label: 'Precious Metals — Physical',
+    currentPriceCol: null,
+    manualPriceType: 'physical_precious_metal',
     amountCol: 'amount',
     assetTable: 'precious_metal_physical_assets',
     txnTable: 'precious_metal_physical_transactions',
@@ -173,6 +180,7 @@ const STREAMS = {
 
   crypto: {
     label: 'Cryptocurrency',
+    currentPriceCol: 'current_price',
     amountCol: 'amount_inr',
     assetTable: 'crypto_assets',
     txnTable: 'crypto_transactions',
@@ -197,6 +205,8 @@ const STREAMS = {
 
   real_estate: {
     label: 'Real Estate',
+    currentPriceCol: null,
+    manualPriceType: 'real_estate',
     amountCol: null,
     assetTable: 'real_estate_assets',
     txnTable: 'real_estate_transactions',
