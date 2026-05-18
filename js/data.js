@@ -20,12 +20,12 @@ const SUBCAT_NAMES = {
 // hasSubcategories: true = show subcategory drill-down in History
 const CATEGORIES = [
   { id: 1, bucket_id: 1, name: 'Indian EQ Mutual Fund', stream: 'equity_mf', hasSubcategories: true },
-  { id: 2, bucket_id: 1, name: 'Indian Equity Stocks', stream: 'indian_stocks', hasSubcategories: false },
-  { id: 3, bucket_id: 1, name: 'US Equity Stocks', stream: 'us_stocks', hasSubcategories: false },
-  { id: 4, bucket_id: 1, name: 'Real Estate', stream: 'real_estate', hasSubcategories: false },
+  { id: 2, bucket_id: 1, name: 'Indian Equity Stocks', stream: 'indian_stocks', hasSubcategories: true },
+  { id: 3, bucket_id: 1, name: 'US Equity Stocks', stream: 'us_stocks', hasSubcategories: true },
+  { id: 4, bucket_id: 1, name: 'Real Estate', stream: 'real_estate', hasSubcategories: true },
   { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf', hasSubcategories: true },
   { id: 6, bucket_id: 3, name: 'Precious Metals', stream: 'precious_metals', hasSubcategories: true },
-  { id: 7, bucket_id: 3, name: 'Cryptocurrency', stream: 'crypto', hasSubcategories: false },
+  { id: 7, bucket_id: 3, name: 'Cryptocurrency', stream: 'crypto', hasSubcategories: true },
 ];
 
 // Stream configurations — defines tables, asset form fields, transaction form fields
@@ -86,6 +86,7 @@ const STREAMS = {
     assetIdCol: 'asset_id',
     assetNameCol: 'company_name',
     assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
       { id: 'company_name', label: 'Company Name', type: 'text', required: true, placeholder: 'e.g. Reliance Industries Ltd' },
       { id: 'ticker', label: 'Ticker / Code', type: 'text', required: true, placeholder: 'e.g. RELIANCE' },
       { id: 'strategy', label: 'Strategy', type: 'select', options: ['Long Term', 'Dividend', 'Short Term'], required: true },
@@ -108,6 +109,7 @@ const STREAMS = {
     assetIdCol: 'asset_id',
     assetNameCol: 'company_name',
     assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
       { id: 'company_name', label: 'Company Name', type: 'text', required: true, placeholder: 'e.g. Alphabet Inc Class A' },
       { id: 'ticker', label: 'Ticker / Code', type: 'text', required: true, placeholder: 'e.g. GOOGL' },
       { id: 'strategy', label: 'Strategy', type: 'select', options: ['Long Term', 'Dividend', 'Short Term'], required: true },
@@ -177,6 +179,7 @@ const STREAMS = {
     assetIdCol: 'asset_id',
     assetNameCol: 'name',
     assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
       { id: 'name', label: 'Coin Name', type: 'text', required: true, placeholder: 'e.g. Ethereum' },
       { id: 'ticker', label: 'Ticker / Pair', type: 'text', required: true, placeholder: 'e.g. ETHUSD' },
     ],
@@ -200,6 +203,7 @@ const STREAMS = {
     assetIdCol: 'asset_id',
     assetNameCol: 'name',
     assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
       { id: 'name', label: 'Property Name', type: 'text', required: true, placeholder: 'e.g. Thiyagadurugam | 10 Cent Land' },
       { id: 'location', label: 'Location', type: 'text', placeholder: 'City / Area' },
       { id: 'unit_of_measure', label: 'Unit', type: 'select', options: ['Cents', 'Sq.ft', 'Acres', 'Sq.m'], required: true },

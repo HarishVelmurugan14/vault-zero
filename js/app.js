@@ -14,8 +14,17 @@ const STATE = {
   editMode: false,
 };
 
+// Load all subcategory names from the sheet into SUBCAT_NAMES (extends the static map)
+async function loadSubcatNames() {
+  try {
+    const data = await API.get('subcategories', { limit: 500 });
+    (data.rows || []).forEach(s => { SUBCAT_NAMES[s.id] = s.name; });
+  } catch (_) {}
+}
+
 // Boot
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadSubcatNames();
   renderNav();
   showPage('log');
   // Warm insights + holdings cache in the background so first tab click is instant
