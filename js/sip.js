@@ -52,22 +52,17 @@ function getActiveAllocations(events, today) {
   return active;
 }
 
-// Sum allocated per reason from active allocations.
-// Only the investment/outflow side that represents a commitment counts:
-//   Monthly SIP   → Regular budget   (bank debit)
-//   Rebalance SIP → Rebalance budget  (destination allocation)
-//   Redeem SWP    → Redeem budget     (redemption amount)
-// Rebalance SWP is the *source* of funds for Rebalance SIP — not counted separately.
+// Tally allocated amount per reason.
+// Reason is the primary grouping key.
+// Rebalance SWP is excluded — it is the outflow source paired with a
+// Rebalance SIP on a different fund; counting both would double the tally.
+// All other event types count against their reason's budget.
 function getAllocatedByReason(activeAllocations) {
   const result = { Regular: 0, Rebalance: 0, Redeem: 0 };
   activeAllocations.forEach(ev => {
-    const amount = parseFloat(ev.amount) || 0;
-    switch (ev.event_type) {
-      case 'Monthly SIP':   result.Regular   += amount; break;
-      case 'Rebalance SIP': result.Rebalance += amount; break;
-      case 'Redeem SWP':    result.Redeem    += amount; break;
-      // Rebalance SWP: visible in table but does not count against budget
-    }
+    if (ev.event_type === 'Rebalance SWP') return; // source side — skip
+    const r = ev.reason;
+    if (r in result) result[r] += parseFloat(ev.amount) || 0;
   });
   return result;
 }
@@ -334,8 +329,8 @@ function buildAllocSection(activeAllocations, activeBudgets, fundMap, stream, da
       const amount = parseFloat(ev.amount) || 0;
       const reason = ev.reason || '';
       const budget = activeBudgets[reason] || 0;
-      const countsAgainstBudget = ev.event_type !== 'Rebalance SWP';
-      const pct = (budget > 0 && countsAgainstBudget) ? ((amount / budget) * 100).toFixed(1) + '%' : '—';
+      const tallied = ev.event_type !== 'Rebalance SWP'; // source side excluded from tally
+      const pct = (budget > 0 && tallied) ? ((amount / budget) * 100).toFixed(1) + '%' : '—';
       const typeKey = ev.event_type.replace(/\s+/g, '-');
       const color = REASON_COLOR[reason] || 'var(--text-muted)';
 
