@@ -153,7 +153,9 @@ async function buildHoldingsRows() {
       const qty = parseFloat(t.units || t.quantity || 0);
       let amt = 0;
       if (stream.amountCol) {
-        amt = parseFloat(t[stream.amountCol] || 0);
+        const u = parseFloat(t.units || t.quantity || 0);
+        const n = parseFloat(t.nav || t.price_per_unit || 0);
+        amt = (u > 0 && n > 0) ? u * n : parseFloat(t[stream.amountCol] || 0);
       } else {
         amt = parseFloat(t.quantity || 0) * parseFloat(t.price_per_unit || 0)
             + parseFloat(t.registration_cost || 0)
