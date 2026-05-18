@@ -156,7 +156,8 @@ async function renderTransactionForm(container, stream, category, subcategory) {
       return;
     }
     txnSection.style.display = val ? 'block' : 'none';
-    btn.style.display = val ? 'block' : 'none';
+    btn.style.display         = val ? 'block' : 'none';
+    renderManualPricePanel(container, stream, val);
   });
 
   // Wire auto-compute fields
@@ -419,6 +420,89 @@ function collectEditedRows(container, stream) {
       if (el && !f.readonly) data[f.id] = el.value;
     });
     return { id, data };
+  });
+}
+
+// Show/update the manual price panel for streams with manualPrice: true
+async function renderManualPricePanel(container, stream, assetId) {
+  const old = container.querySelector('.manual-price-panel');
+  if (old) old.remove();
+  if (!stream.manualPrice || !assetId) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'manual-price-panel';
+  panel.innerHTML = `<div class="manual-price-header"><span class="manual-price-title">Current Price</span><span class="manual-price-current">Loading…</span></div>`;
+
+  const assetWrapper = container.querySelector('#field-asset-name')?.closest('.field-group');
+  if (assetWrapper) assetWrapper.after(panel);
+  else container.prepend(panel);
+
+  let latestPrice = '', latestDate = '';
+  try {
+    const data = await API.get('manual_prices', {
+      limit: 100,
+      filters: { asset_type: stream.manualPriceType, asset_id: assetId },
+    });
+    if (data.rows?.length) {
+      const sorted = [...data.rows].sort((a, b) => new Date(b.price_date) - new Date(a.price_date));
+      latestPrice = sorted[0].price_per_unit;
+      latestDate  = sorted[0].price_date?.substring(0, 10) || '';
+    }
+  } catch (_) {}
+
+  const lastText = latestPrice
+    ? `Last: ₹${formatINR(latestPrice)} on ${formatDate(latestDate)}`
+    : 'No price recorded yet';
+
+  panel.innerHTML = `
+    <div class="manual-price-header">
+      <span class="manual-price-title">Current Price</span>
+      <span class="manual-price-current">${lastText}</span>
+    </div>
+    <div class="manual-price-fields">
+      <div class="field-group">
+        <label for="manual-price-val">${stream.manualPriceLabel} (₹) *</label>
+        <input type="number" id="manual-price-val" step="0.01" placeholder="Enter current price" />
+        <span class="field-error"></span>
+      </div>
+      <div class="field-group">
+        <label for="manual-price-date">As of Date *</label>
+        <input type="date" id="manual-price-date" value="${todayStr()}" />
+        <span class="field-error"></span>
+      </div>
+    </div>
+    <button type="button" class="btn-secondary btn-sm manual-price-save">Update Price</button>
+    <span class="manual-price-status"></span>
+  `;
+
+  panel.querySelector('.manual-price-save').addEventListener('click', async () => {
+    const priceInput = panel.querySelector('#manual-price-val');
+    const dateInput  = panel.querySelector('#manual-price-date');
+    const status     = panel.querySelector('.manual-price-status');
+    const saveBtn    = panel.querySelector('.manual-price-save');
+
+    const price = parseFloat(priceInput.value);
+    const date  = dateInput.value;
+
+    if (!price || price <= 0) { showToast('Enter a valid price', 'error'); return; }
+    if (!date)                 { showToast('Enter a date', 'error'); return; }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    try {
+      await API.updateManualPrice(stream.manualPriceType, assetId, price, date);
+      _insightsCache   = null;
+      _holdingsAllRows = null;
+      LSC.clear('insights', 'holdings');
+      status.textContent = `✓ Saved ₹${formatINR(price)}`;
+      status.className = 'manual-price-status saved';
+      showToast('Price updated!');
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Update Price';
+    }
   });
 }
 
