@@ -244,6 +244,7 @@ const STREAMS = {
     assetNameCol: 'fund_name',
     sipBudgetTable: 'equity_sip_budget',
     sipEventsTable: 'equity_sip_events',
+    sipReasonsTable: 'equity_sip_reasons',
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['SIP', 'SWP'], required: true },
       { id: 'txn_date', label: 'Date', type: 'date', required: true },
@@ -275,6 +276,7 @@ const STREAMS = {
     assetNameCol: 'fund_name',
     sipBudgetTable: 'debt_sip_budget',
     sipEventsTable: 'debt_sip_events',
+    sipReasonsTable: 'debt_sip_reasons',
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['SIP', 'SWP'], required: true },
       { id: 'txn_date', label: 'Date', type: 'date', required: true },
