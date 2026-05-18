@@ -23,8 +23,8 @@ async function loadSubcatNames() {
 }
 
 // Boot
-document.addEventListener('DOMContentLoaded', async () => {
-  await loadSubcatNames();
+document.addEventListener('DOMContentLoaded', () => {
+  loadSubcatNames(); // fire-and-forget — populates SUBCAT_NAMES before user reaches Holdings/Insights
   renderNav();
   showPage('log');
   // Warm insights + holdings cache in the background so first tab click is instant
