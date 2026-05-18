@@ -52,12 +52,22 @@ function getActiveAllocations(events, today) {
   return active;
 }
 
-// Sum allocated per reason from active allocations
+// Sum allocated per reason from active allocations.
+// Only the investment/outflow side that represents a commitment counts:
+//   Monthly SIP   → Regular budget   (bank debit)
+//   Rebalance SIP → Rebalance budget  (destination allocation)
+//   Redeem SWP    → Redeem budget     (redemption amount)
+// Rebalance SWP is the *source* of funds for Rebalance SIP — not counted separately.
 function getAllocatedByReason(activeAllocations) {
   const result = { Regular: 0, Rebalance: 0, Redeem: 0 };
   activeAllocations.forEach(ev => {
-    const r = ev.reason;
-    if (r in result) result[r] += parseFloat(ev.amount) || 0;
+    const amount = parseFloat(ev.amount) || 0;
+    switch (ev.event_type) {
+      case 'Monthly SIP':   result.Regular   += amount; break;
+      case 'Rebalance SIP': result.Rebalance += amount; break;
+      case 'Redeem SWP':    result.Redeem    += amount; break;
+      // Rebalance SWP: visible in table but does not count against budget
+    }
   });
   return result;
 }
@@ -324,12 +334,14 @@ function buildAllocSection(activeAllocations, activeBudgets, fundMap, stream, da
       const amount = parseFloat(ev.amount) || 0;
       const reason = ev.reason || '';
       const budget = activeBudgets[reason] || 0;
-      const pct = budget > 0 ? ((amount / budget) * 100).toFixed(1) + '%' : '—';
+      const countsAgainstBudget = ev.event_type !== 'Rebalance SWP';
+      const pct = (budget > 0 && countsAgainstBudget) ? ((amount / budget) * 100).toFixed(1) + '%' : '—';
       const typeKey = ev.event_type.replace(/\s+/g, '-');
       const color = REASON_COLOR[reason] || 'var(--text-muted)';
 
-      if (!reasonTotals[reason]) reasonTotals[reason] = 0;
-      reasonTotals[reason] += amount;
+        if (!reasonTotals[reason]) reasonTotals[reason] = 0;
+      // Mirror getAllocatedByReason: only count the budget-facing side
+      if (ev.event_type !== 'Rebalance SWP') reasonTotals[reason] += amount;
 
       // Reason group separator row
       if (reason !== lastReason) {
