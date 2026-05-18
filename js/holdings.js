@@ -114,6 +114,8 @@ async function buildHoldingsRows() {
     { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
     { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
     { cat: CATEGORIES.find(c => c.id === 7), stream: STREAMS.crypto,                   subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 8), stream: STREAMS.equity_sip,               subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 9), stream: STREAMS.debt_hybrid_sip,          subcatName: null },
   ];
 
   const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable])), 'manual_prices'];

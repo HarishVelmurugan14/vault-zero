@@ -157,6 +157,19 @@ async function renderTransactionForm(container, stream, category, subcategory) {
     }
     txnSection.style.display = val ? 'block' : 'none';
     btn.style.display         = val ? 'block' : 'none';
+
+    // Pre-fill monthly SIP amount when a SIP plan is selected
+    if (val && stream.sipAmountCol) {
+      try {
+        const opt   = assetSelect.options[assetSelect.selectedIndex];
+        const asset = JSON.parse(opt.dataset.asset || '{}');
+        const amountEl = txnSection.querySelector('#field-amount');
+        if (amountEl && asset[stream.sipAmountCol]) {
+          amountEl.value = parseFloat(asset[stream.sipAmountCol]).toFixed(2);
+        }
+      } catch (_) {}
+    }
+
     renderManualPricePanel(container, stream, val);
   });
 

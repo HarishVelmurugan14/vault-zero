@@ -26,6 +26,8 @@ const CATEGORIES = [
   { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf', hasSubcategories: true },
   { id: 6, bucket_id: 3, name: 'Precious Metals', stream: 'precious_metals', hasSubcategories: true },
   { id: 7, bucket_id: 3, name: 'Cryptocurrency', stream: 'crypto', hasSubcategories: true },
+  { id: 8, bucket_id: 1, name: 'Indian EQ MF — SIP', stream: 'equity_sip', hasSubcategories: true },
+  { id: 9, bucket_id: 2, name: 'Debt & Hybrid MF — SIP', stream: 'debt_hybrid_sip', hasSubcategories: true },
 ];
 
 // Stream configurations — defines tables, asset form fields, transaction form fields
@@ -230,6 +232,68 @@ const STREAMS = {
     manualPrice: true,
     manualPriceLabel: 'Price per unit',
   },
+
+  equity_sip: {
+    label: 'Indian EQ MF SIP',
+    currentPriceCol: 'current_nav',
+    amountCol: 'amount',
+    assetTable: 'equity_sip_schedules',
+    txnTable: 'equity_sip_transactions',
+    assetIdCol: 'sip_id',
+    assetNameCol: 'fund_name',
+    sipAmountCol: 'monthly_amount',
+    assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
+      { id: 'fund_name', label: 'Fund Name', type: 'text', required: true, placeholder: 'e.g. PPFAS Flexi Cap' },
+      { id: 'fund_house', label: 'Fund House', type: 'text', required: true, placeholder: 'e.g. Parag Parikh' },
+      { id: 'code', label: 'Price Fetch Code', type: 'text', required: true, placeholder: 'e.g. QUAN_ELSS_TAX_KBGFAS' },
+      { id: 'monthly_amount', label: 'Monthly SIP Amount (₹)', type: 'number', step: '0.01', required: true, placeholder: '5000' },
+      { id: 'sip_day', label: 'SIP Day of Month (1–28)', type: 'number', step: '1', required: true, placeholder: '5' },
+      { id: 'start_date', label: 'Start Date', type: 'date', required: true },
+      { id: 'status', label: 'Status', type: 'select', options: ['Active', 'Paused', 'Cancelled'], required: true },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+    txnFields: [
+      { id: 'txn_type', label: 'Type', type: 'select', options: ['SIP', 'Sell'], required: true },
+      { id: 'txn_date', label: 'Date', type: 'date', required: true },
+      { id: 'amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true },
+      { id: 'nav', label: 'NAV (₹)', type: 'number', step: '0.0001', required: true, triggers: 'units' },
+      { id: 'units', label: 'Units', type: 'number', step: '0.000001', required: true, computed: 'amount/nav' },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+  },
+
+  debt_hybrid_sip: {
+    label: 'Debt & Hybrid MF SIP',
+    currentPriceCol: 'current_nav',
+    amountCol: 'amount',
+    assetTable: 'debt_hybrid_sip_schedules',
+    txnTable: 'debt_hybrid_sip_transactions',
+    assetIdCol: 'sip_id',
+    assetNameCol: 'fund_name',
+    sipAmountCol: 'monthly_amount',
+    assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
+      { id: 'fund_name', label: 'Fund Name', type: 'text', required: true, placeholder: 'e.g. ICICI Pru Ultra Short Term' },
+      { id: 'fund_house', label: 'Fund House', type: 'text', required: true },
+      { id: 'code', label: 'Price Fetch Code', type: 'text', required: true },
+      { id: 'monthly_amount', label: 'Monthly SIP Amount (₹)', type: 'number', step: '0.01', required: true, placeholder: '5000' },
+      { id: 'sip_day', label: 'SIP Day of Month (1–28)', type: 'number', step: '1', required: true, placeholder: '5' },
+      { id: 'start_date', label: 'Start Date', type: 'date', required: true },
+      { id: 'status', label: 'Status', type: 'select', options: ['Active', 'Paused', 'Cancelled'], required: true },
+      { id: 'purpose', label: 'Purpose', type: 'text', placeholder: 'e.g. Emergency Fund, Yearly Bills' },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+    txnFields: [
+      { id: 'txn_type', label: 'Type', type: 'select', options: ['SIP', 'Sell'], required: true },
+      { id: 'txn_date', label: 'Date', type: 'date', required: true },
+      { id: 'amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true },
+      { id: 'nav', label: 'NAV (₹)', type: 'number', step: '0.0001', required: true, triggers: 'units' },
+      { id: 'units', label: 'Units', type: 'number', step: '0.000001', required: true, computed: 'amount/nav' },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+  },
+
 };
 
 // Resolve stream for a category + subcategory

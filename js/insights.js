@@ -486,6 +486,8 @@ const ENTRIES = [
   { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
   { catId: 6, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
   { catId: 7, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto,                   subcatName: null },
+  { catId: 8, catName: 'Indian EQ MF SIP',           bucketId: 1, stream: STREAMS.equity_sip,               subcatName: null },
+  { catId: 9, catName: 'Debt & Hybrid MF SIP',       bucketId: 2, stream: STREAMS.debt_hybrid_sip,          subcatName: null },
 ];
 
 async function fetchAllInsightsData() {
@@ -765,6 +767,8 @@ const CAT_ICONS = {
   'Precious Metals (Digital)': '✨',
   'Precious Metals (Physical)':'🥇',
   'Cryptocurrency':            '₿',
+  'Indian EQ MF SIP':          '🔄',
+  'Debt & Hybrid MF SIP':      '🔄',
 };
 
 const LIQUIDITY_TIERS = [
@@ -784,6 +788,8 @@ const CURRENCY_MAP = {
   'Real Estate':               'INR',
   'US Equity Stocks':          'USD',
   'Cryptocurrency':            'Crypto',
+  'Indian EQ MF SIP':          'INR',
+  'Debt & Hybrid MF SIP':      'INR',
 };
 
 const TAX_CONFIG = {
@@ -795,6 +801,8 @@ const TAX_CONFIG = {
   'Precious Metals (Physical)':{ ltcgMonths: 36, ltcgRate: 0.20, stcgRate: 0.30 },
   'Real Estate':               { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
   'Cryptocurrency':            { ltcgMonths: null, rate: 0.30, note: 'Flat 30%' },
+  'Indian EQ MF SIP':          { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
+  'Debt & Hybrid MF SIP':      { ltcgMonths: null, rate: 'income', note: 'Taxed as income' },
 };
 
 // ── Stream-wise P&L table ─────────────────────────────────────────────────────
