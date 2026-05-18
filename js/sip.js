@@ -27,11 +27,16 @@ async function fetchSIPData(stream) {
     .sort((a, b) => b.effective_date.localeCompare(a.effective_date));
   const events = (eventsRes.status === 'fulfilled' ? eventsRes.value.rows || [] : [])
     .sort((a, b) => b.effective_date.localeCompare(a.effective_date));
-  const funds   = fundsRes.status === 'fulfilled'   ? fundsRes.value.rows   || [] : [];
-  const reasons = (reasonsRes.status === 'fulfilled' ? reasonsRes.value.rows || [] : [])
-    .map(r => r.name).filter(Boolean);
+  const funds = fundsRes.status === 'fulfilled' ? fundsRes.value.rows || [] : [];
 
-  return { budgets, events, funds, reasons, today };
+  // reasonObjs: full rows [{id, name}]; reasons: name strings for UI; reasonMap: id→name
+  const reasonObjs = (reasonsRes.status === 'fulfilled' ? reasonsRes.value.rows || [] : [])
+    .filter(r => r.name);
+  const reasons   = reasonObjs.map(r => r.name);
+  const reasonMap = {};
+  reasonObjs.forEach(r => { reasonMap[String(r.id)] = r.name; });
+
+  return { budgets, events, funds, reasons, reasonObjs, reasonMap, today };
 }
 
 // Latest budget per reason where effective_date ≤ today
@@ -45,15 +50,15 @@ function getActiveBudgets(budgets, today, reasons) {
   return result;
 }
 
-// One active event per (fund_id, reason) pair — latest effective_date ≤ today.
-// A fund can run multiple simultaneous events under different reasons
-// (e.g. Monthly SIP under Regular AND Rebalance SIP under Rebalance).
+// One active event per (fund_id, reason_id) pair — latest effective_date ≤ today.
+// A fund can run simultaneous events under different reasons
+// (e.g. Monthly SIP/Regular AND Rebalance SIP/Rebalance on the same fund).
 // STOP events clear the slot for that fund+reason but aren't shown themselves.
 function getActiveAllocations(events, today) {
-  const seen = new Map(); // key: "fund_id|reason"
+  const seen = new Map(); // key: "fund_id|reason_id"
   for (const ev of events) {
     if (ev.effective_date > today) continue;
-    const key = `${ev.fund_id}|${ev.reason}`;
+    const key = `${ev.fund_id}|${ev.reason_id}`;
     if (!seen.has(key)) seen.set(key, ev);
   }
   const active = [];
@@ -61,13 +66,13 @@ function getActiveAllocations(events, today) {
   return active;
 }
 
-// Tally purely by reason — event_type is irrelevant to the count.
-function getAllocatedByReason(activeAllocations, reasons) {
+// Tally by reason name (resolved from reason_id via reasonMap).
+function getAllocatedByReason(activeAllocations, reasons, reasonMap) {
   const result = {};
   reasons.forEach(r => { result[r] = 0; });
   activeAllocations.forEach(ev => {
-    const r = ev.reason;
-    if (r in result) result[r] += parseFloat(ev.amount) || 0;
+    const rName = reasonMap[String(ev.reason_id)];
+    if (rName && rName in result) result[rName] += parseFloat(ev.amount) || 0;
   });
   return result;
 }
@@ -92,17 +97,17 @@ async function renderSIPPage(container, stream) {
 // ─── Dashboard builder ─────────────────────────────────────────────────────────
 
 function buildSIPDashboard(container, data, stream) {
-  const { budgets, events, funds, reasons, today } = data;
+  const { budgets, events, funds, reasons, reasonMap, today } = data;
   const activeBudgets     = getActiveBudgets(budgets, today, reasons);
   const activeAllocations = getActiveAllocations(events, today);
-  const allocatedByReason = getAllocatedByReason(activeAllocations, reasons);
+  const allocatedByReason = getAllocatedByReason(activeAllocations, reasons, reasonMap);
 
   const fundMap = {};
   funds.forEach(f => { fundMap[String(f.id)] = f[stream.assetNameCol] || f.fund_name || String(f.id); });
 
   container.appendChild(buildBudgetCard(activeBudgets, allocatedByReason, reasons, stream, data));
-  container.appendChild(buildAllocSection(activeAllocations, activeBudgets, reasons, fundMap, stream, data));
-  container.appendChild(buildHistorySection(events, fundMap, reasons));
+  container.appendChild(buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data));
+  container.appendChild(buildHistorySection(events, fundMap, reasons, reasonMap));
 }
 
 // ─── Budget card ───────────────────────────────────────────────────────────────
@@ -286,7 +291,7 @@ function renderBudgetForm(container, stream, reasons) {
 
 // ─── Current allocations section ───────────────────────────────────────────────
 
-function buildAllocSection(activeAllocations, activeBudgets, reasons, fundMap, stream, data) {
+function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data) {
   const section = document.createElement('div');
   section.className = 'sip-section';
 
@@ -322,7 +327,9 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, fundMap, s
     const tbody = document.createElement('tbody');
 
     const sorted = [...activeAllocations].sort((a, b) => {
-      const rCmp = (a.reason || '').localeCompare(b.reason || '');
+      const rA = reasonMap[String(a.reason_id)] || '';
+      const rB = reasonMap[String(b.reason_id)] || '';
+      const rCmp = rA.localeCompare(rB);
       return rCmp !== 0 ? rCmp : (fundMap[String(a.fund_id)] || '').localeCompare(fundMap[String(b.fund_id)] || '');
     });
 
@@ -331,7 +338,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, fundMap, s
 
     sorted.forEach(ev => {
       const amount  = parseFloat(ev.amount) || 0;
-      const reason  = ev.reason || '';
+      const reason  = reasonMap[String(ev.reason_id)] || '';
       const budget  = activeBudgets[reason] || 0;
       const pct     = budget > 0 ? ((amount / budget) * 100).toFixed(1) + '%' : '—';
       const typeKey = ev.event_type.replace(/\s+/g, '-');
@@ -396,7 +403,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, fundMap, s
 
 // ─── History section ───────────────────────────────────────────────────────────
 
-function buildHistorySection(events, fundMap, reasons) {
+function buildHistorySection(events, fundMap, reasons, reasonMap) {
   const section = document.createElement('div');
   section.className = 'sip-section';
 
@@ -419,7 +426,7 @@ function buildHistorySection(events, fundMap, reasons) {
 
   function renderHistoryTable(filterReason) {
     tableWrap.innerHTML = '';
-    const filtered = filterReason ? events.filter(ev => ev.reason === filterReason) : events;
+    const filtered = filterReason ? events.filter(ev => reasonMap[String(ev.reason_id)] === filterReason) : events;
 
     if (!filtered.length) {
       tableWrap.innerHTML = '<div class="sip-empty">No history found.</div>';
@@ -444,13 +451,14 @@ function buildHistorySection(events, fundMap, reasons) {
     [...filtered]
       .sort((a, b) => b.effective_date.localeCompare(a.effective_date))
       .forEach(ev => {
-        const typeKey = ev.event_type.replace(/\s+/g, '-');
-        const color   = reasonColor(ev.reason, reasons);
+        const typeKey   = ev.event_type.replace(/\s+/g, '-');
+        const rName     = reasonMap[String(ev.reason_id)] || '';
+        const color     = reasonColor(rName, reasons);
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td style="text-align:left">${fundMap[String(ev.fund_id)] || ev.fund_id}</td>
           <td style="text-align:left"><span class="sip-type-badge sip-type-${typeKey}">${ev.event_type}</span></td>
-          <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${ev.reason || '—'}</span></td>
+          <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${rName || '—'}</span></td>
           <td>${ev.amount ? '₹' + fmt(parseFloat(ev.amount) || 0) : '—'}</td>
           <td>${ev.sip_date || '—'}</td>
           <td style="text-align:left">${ev.effective_date || '—'}</td>
@@ -513,12 +521,12 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
   typeGroup.appendChild(typeSel);
   form.appendChild(typeGroup);
 
-  // Reason select — populated from sheet
+  // Reason select — populated from sheet, value = reason id (FK)
   const reasonGroup = mkGroup('Reason', true);
   const reasonSel = document.createElement('select');
-  reasonSel.className = 'form-input'; reasonSel.name = 'reason'; reasonSel.required = true;
+  reasonSel.className = 'form-input'; reasonSel.name = 'reason_id'; reasonSel.required = true;
   reasonSel.innerHTML = '<option value="">Select reason…</option>' +
-    reasons.map(r => `<option value="${r}">${r}</option>`).join('');
+    (data.reasonObjs || []).map(r => `<option value="${r.id}">${r.name}</option>`).join('');
   reasonGroup.appendChild(reasonSel);
   form.appendChild(reasonGroup);
 
@@ -580,12 +588,12 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
     const row = {
       fund_id:        fd.get('fund_id'),
       event_type:     fd.get('event_type'),
-      reason:         fd.get('reason'),
+      reason_id:      parseInt(fd.get('reason_id')),
       amount:         parseFloat(fd.get('amount')) || 0,
       sip_date:       fd.get('sip_date') ? parseInt(fd.get('sip_date')) : null,
       effective_date: fd.get('effective_date'),
     };
-    if (!row.fund_id || !row.event_type || !row.reason || !row.effective_date) {
+    if (!row.fund_id || !row.event_type || !row.reason_id || !row.effective_date) {
       errDiv.textContent = 'Please fill all required fields.';
       errDiv.style.display = 'block';
       return;
