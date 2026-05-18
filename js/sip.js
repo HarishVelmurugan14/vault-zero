@@ -39,12 +39,12 @@ async function fetchSIPData(stream) {
   return { budgets, events, funds, reasons, reasonObjs, reasonMap, today };
 }
 
-// Latest budget per reason where effective_date ≤ today
-function getActiveBudgets(budgets, today, reasons) {
+// Latest budget per reason where effective_date ≤ today (matches on reason_id FK)
+function getActiveBudgets(budgets, today, reasons, reasonMap) {
   const result = {};
   reasons.forEach(r => { result[r] = 0; });
   reasons.forEach(r => {
-    const match = budgets.find(b => b.reason === r && b.effective_date <= today);
+    const match = budgets.find(b => reasonMap[String(b.reason_id)] === r && b.effective_date <= today);
     if (match) result[r] = parseFloat(match.monthly_budget) || 0;
   });
   return result;
@@ -98,7 +98,7 @@ async function renderSIPPage(container, stream) {
 
 function buildSIPDashboard(container, data, stream) {
   const { budgets, events, funds, reasons, reasonMap, today } = data;
-  const activeBudgets     = getActiveBudgets(budgets, today, reasons);
+  const activeBudgets     = getActiveBudgets(budgets, today, reasons, reasonMap);
   const activeAllocations = getActiveAllocations(events, today);
   const allocatedByReason = getAllocatedByReason(activeAllocations, reasons, reasonMap);
 
@@ -173,20 +173,20 @@ function buildBudgetCard(activeBudgets, allocatedByReason, reasons, stream, data
 
   card.querySelector('#sip-update-budget-btn').addEventListener('click', () => {
     if (formArea.innerHTML) { formArea.innerHTML = ''; return; }
-    renderBudgetForm(formArea, stream, reasons);
+    renderBudgetForm(formArea, stream, data.reasonObjs);
   });
 
   histToggle.addEventListener('click', () => {
     const open = histDiv.style.display !== 'none';
     histDiv.style.display = open ? 'none' : 'block';
     histToggle.textContent = (open ? '▾' : '▸') + ' Budget History';
-    if (!open && !histDiv.innerHTML) buildBudgetHistory(histDiv, data.budgets, reasons);
+    if (!open && !histDiv.innerHTML) buildBudgetHistory(histDiv, data.budgets, reasons, data.reasonMap);
   });
 
   return card;
 }
 
-function buildBudgetHistory(container, budgets, reasons) {
+function buildBudgetHistory(container, budgets, reasons, reasonMap) {
   if (!budgets.length) {
     container.innerHTML = '<div class="sip-empty">No budget records yet.</div>';
     return;
@@ -207,10 +207,11 @@ function buildBudgetHistory(container, budgets, reasons) {
   [...budgets]
     .sort((a, b) => b.effective_date.localeCompare(a.effective_date))
     .forEach(b => {
-      const color = reasonColor(b.reason, reasons);
+      const rName = reasonMap[String(b.reason_id)] || '';
+      const color = reasonColor(rName, reasons);
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${b.reason || '—'}</span></td>
+        <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${rName || '—'}</span></td>
         <td style="text-align:left">${b.effective_date}</td>
         <td>₹${fmt(parseFloat(b.monthly_budget) || 0)}</td>
         <td style="text-align:left">${b.notes || '—'}</td>
@@ -222,18 +223,18 @@ function buildBudgetHistory(container, budgets, reasons) {
   container.appendChild(wrap);
 }
 
-function renderBudgetForm(container, stream, reasons) {
+function renderBudgetForm(container, stream, reasonObjs) {
   const today = new Date().toISOString().slice(0, 10);
   const form = document.createElement('form');
   form.className = 'sip-inline-form';
 
-  const reasonOptions = reasons.map(r => `<option value="${r}">${r}</option>`).join('');
+  const reasonOptions = reasonObjs.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
 
   form.innerHTML = `
     <div class="sip-inline-form-fields">
       <div class="form-group">
         <label>Reason <span class="required">*</span></label>
-        <select name="reason" required class="form-input">
+        <select name="reason_id" required class="form-input">
           <option value="">Select reason…</option>
           ${reasonOptions}
         </select>
@@ -262,13 +263,13 @@ function renderBudgetForm(container, stream, reasons) {
     const btn    = form.querySelector('[type=submit]');
     const errDiv = form.querySelector('.form-error');
     const fd     = new FormData(form);
-    if (!fd.get('reason')) {
+    if (!fd.get('reason_id')) {
       errDiv.textContent = 'Please select a reason.';
       errDiv.style.display = 'block';
       return;
     }
     const row = {
-      reason:         fd.get('reason'),
+      reason_id:      parseInt(fd.get('reason_id')),
       monthly_budget: parseFloat(fd.get('monthly_budget')),
       effective_date: fd.get('effective_date'),
       notes:          fd.get('notes') || '',
