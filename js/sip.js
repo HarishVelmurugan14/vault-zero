@@ -45,13 +45,16 @@ function getActiveBudgets(budgets, today, reasons) {
   return result;
 }
 
-// One active event per fund_id (latest effective_date ≤ today, STOP excluded)
+// One active event per (fund_id, reason) pair — latest effective_date ≤ today.
+// A fund can run multiple simultaneous events under different reasons
+// (e.g. Monthly SIP under Regular AND Rebalance SIP under Rebalance).
+// STOP events clear the slot for that fund+reason but aren't shown themselves.
 function getActiveAllocations(events, today) {
-  const seen = new Map();
+  const seen = new Map(); // key: "fund_id|reason"
   for (const ev of events) {
     if (ev.effective_date > today) continue;
-    const fid = String(ev.fund_id);
-    if (!seen.has(fid)) seen.set(fid, ev);
+    const key = `${ev.fund_id}|${ev.reason}`;
+    if (!seen.has(key)) seen.set(key, ev);
   }
   const active = [];
   seen.forEach(ev => { if (ev.event_type !== 'STOP') active.push(ev); });
