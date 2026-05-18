@@ -1248,40 +1248,64 @@ body {
   text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;
 }
 
-.sip-budget-total {
-  font-size: 32px; font-weight: 800; letter-spacing: -1.5px;
-  line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--text);
+.sip-no-budget { font-size: 14px; color: var(--text-muted); }
+
+/* Per-reason sub-cards inside the budget card */
+.sip-reason-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
   margin-bottom: 16px;
 }
 
-.sip-budget-total span {
-  font-size: 16px; font-weight: 500; color: var(--text-muted); letter-spacing: 0;
+@media (max-width: 560px) {
+  .sip-reason-grid { grid-template-columns: 1fr; }
 }
 
-.sip-no-budget {
-  font-size: 16px; color: var(--text-muted);
+.sip-reason-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--rc, var(--accent));
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
 }
 
-.sip-budget-row {
-  display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 16px;
+.sip-reason-name {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; margin-bottom: 4px;
 }
 
-.sip-budget-item {
-  display: flex; flex-direction: column; gap: 2px;
+.sip-reason-budget {
+  font-size: 22px; font-weight: 800; letter-spacing: -1px;
+  font-variant-numeric: tabular-nums; color: var(--text);
+  margin-bottom: 8px; line-height: 1.1;
 }
 
-.sip-budget-item-label {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--text-muted);
+.sip-reason-per {
+  font-size: 13px; font-weight: 400; color: var(--text-muted); letter-spacing: 0;
 }
 
-.sip-budget-item-value {
-  font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+.sip-reason-row {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 4px;
+}
+
+.sip-reason-stat-label {
+  font-size: 11px; color: var(--text-muted);
+}
+
+.sip-reason-stat-value {
+  font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
-.sip-overallocated .sip-budget-item-value { color: var(--negative); }
-.sip-unallocated .sip-budget-item-value { color: var(--positive); }
+.sip-overallocated .sip-reason-stat-value { color: var(--negative); }
+.sip-unallocated .sip-reason-stat-value { color: var(--positive); }
+
+.sip-reason-sep-row td {
+  background: var(--surface2) !important;
+  border-bottom: none !important;
+}
 
 .sip-budget-actions { margin-bottom: 12px; }
 

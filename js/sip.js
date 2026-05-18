@@ -1,5 +1,13 @@
 // VaultZero — SIP Budget & Allocation Dashboard
 
+const SIP_REASONS = ['Regular', 'Rebalance', 'Redeem'];
+
+const REASON_COLOR = {
+  Regular:   '#22c55e',
+  Rebalance: '#818cf8',
+  Redeem:    '#f59e0b',
+};
+
 // ─── Data helpers ──────────────────────────────────────────────────────────────
 
 async function fetchSIPData(stream) {
@@ -20,21 +28,38 @@ async function fetchSIPData(stream) {
   return { budgets, events, funds, today };
 }
 
-function getActiveBudget(budgets, today) {
-  return budgets.find(b => b.effective_date <= today) || null;
+// Latest budget per reason where effective_date ≤ today
+// Returns { Regular: 0, Rebalance: 0, Redeem: 0 }
+function getActiveBudgets(budgets, today) {
+  const result = { Regular: 0, Rebalance: 0, Redeem: 0 };
+  SIP_REASONS.forEach(reason => {
+    const match = budgets.find(b => b.reason === reason && b.effective_date <= today);
+    if (match) result[reason] = parseFloat(match.monthly_budget) || 0;
+  });
+  return result;
 }
 
+// One active event per fund_id (latest effective_date ≤ today, STOP excluded)
 function getActiveAllocations(events, today) {
-  const seen = new Map(); // fund_id → latest event
+  const seen = new Map();
   for (const ev of events) {
     if (ev.effective_date > today) continue;
     const fid = String(ev.fund_id);
     if (!seen.has(fid)) seen.set(fid, ev);
   }
-  // Exclude STOP events from the active set
   const active = [];
   seen.forEach(ev => { if (ev.event_type !== 'STOP') active.push(ev); });
   return active;
+}
+
+// Sum allocated per reason from active allocations
+function getAllocatedByReason(activeAllocations) {
+  const result = { Regular: 0, Rebalance: 0, Redeem: 0 };
+  activeAllocations.forEach(ev => {
+    const r = ev.reason;
+    if (r in result) result[r] += parseFloat(ev.amount) || 0;
+  });
+  return result;
 }
 
 // ─── Entry point ───────────────────────────────────────────────────────────────
@@ -54,92 +79,91 @@ async function renderSIPPage(container, stream) {
 
 function buildSIPDashboard(container, data, stream) {
   const { budgets, events, funds, today } = data;
-  const activeBudget = getActiveBudget(budgets, today);
+  const activeBudgets = getActiveBudgets(budgets, today);
   const activeAllocations = getActiveAllocations(events, today);
+  const allocatedByReason = getAllocatedByReason(activeAllocations);
 
   const fundMap = {};
   funds.forEach(f => { fundMap[String(f.id)] = f[stream.assetNameCol] || f.fund_name || String(f.id); });
 
-  // ── Budget card ──────────────────────────────────────────────
-  const budgetCard = buildBudgetCard(activeBudget, activeAllocations, stream, data);
-  container.appendChild(budgetCard);
-
-  // ── Current allocations section ──────────────────────────────
-  const allocSection = buildAllocSection(activeAllocations, activeBudget, fundMap, stream, data);
-  container.appendChild(allocSection);
-
-  // ── History section ──────────────────────────────────────────
-  const histSection = buildHistorySection(events, fundMap);
-  container.appendChild(histSection);
+  container.appendChild(buildBudgetCard(activeBudgets, allocatedByReason, stream, data));
+  container.appendChild(buildAllocSection(activeAllocations, activeBudgets, fundMap, stream, data));
+  container.appendChild(buildHistorySection(events, fundMap));
 }
 
 // ─── Budget card ───────────────────────────────────────────────────────────────
 
-function buildBudgetCard(activeBudget, activeAllocations, stream, data) {
-  const monthlyBudget = activeBudget ? parseFloat(activeBudget.monthly_budget) || 0 : 0;
-
-  const monthlySIPTotal = activeAllocations
-    .filter(ev => ev.event_type === 'Monthly SIP')
-    .reduce((s, ev) => s + (parseFloat(ev.amount) || 0), 0);
-
-  const rebalanceSIPTotal = activeAllocations
-    .filter(ev => ev.event_type === 'Rebalance SIP')
-    .reduce((s, ev) => s + (parseFloat(ev.amount) || 0), 0);
-
-  const swpTotal = activeAllocations
-    .filter(ev => ev.event_type === 'Rebalance SWP' || ev.event_type === 'Redeem SWP')
-    .reduce((s, ev) => s + (parseFloat(ev.amount) || 0), 0);
-
-  const unallocated = monthlyBudget - monthlySIPTotal;
-  const overallocated = unallocated < 0;
-
+function buildBudgetCard(activeBudgets, allocatedByReason, stream, data) {
   const card = document.createElement('div');
   card.className = 'sip-budget-card';
 
-  card.innerHTML = `
-    <div class="sip-budget-label">Monthly SIP Budget</div>
-    <div class="sip-budget-total">${activeBudget ? '₹' + fmt(monthlyBudget) + '<span>/month</span>' : '<span class="sip-no-budget">No budget set</span>'}</div>
-    <div class="sip-budget-row">
-      <div class="sip-budget-item">
-        <span class="sip-budget-item-label">Monthly SIP</span>
-        <span class="sip-budget-item-value">₹${fmt(monthlySIPTotal)}</span>
-      </div>
-      <div class="sip-budget-item">
-        <span class="sip-budget-item-label">Rebalance SIP</span>
-        <span class="sip-budget-item-value">₹${fmt(rebalanceSIPTotal)}</span>
-      </div>
-      <div class="sip-budget-item">
-        <span class="sip-budget-item-label">SWP</span>
-        <span class="sip-budget-item-value">₹${fmt(swpTotal)}</span>
-      </div>
-      <div class="sip-budget-item ${overallocated ? 'sip-overallocated' : 'sip-unallocated'}">
-        <span class="sip-budget-item-label">${overallocated ? 'Overallocated' : 'Unallocated'}</span>
-        <span class="sip-budget-item-value">${overallocated ? '-' : ''}₹${fmt(Math.abs(unallocated))}</span>
-      </div>
-    </div>
-    <div class="sip-budget-actions">
-      <button class="btn-outline btn-sm" id="sip-update-budget-btn">Update Budget</button>
-    </div>
-    <div id="sip-budget-form-area"></div>
-    <div class="sip-budget-history-toggle" id="sip-budget-history-toggle">▾ Budget History</div>
-    <div id="sip-budget-history" style="display:none;"></div>
-  `;
+  const label = document.createElement('div');
+  label.className = 'sip-budget-label';
+  label.textContent = 'Monthly SIP Budgets';
+  card.appendChild(label);
 
-  card.querySelector('#sip-update-budget-btn').addEventListener('click', () => {
-    const formArea = card.querySelector('#sip-budget-form-area');
-    if (formArea.innerHTML) { formArea.innerHTML = ''; return; }
-    renderBudgetForm(formArea, stream, activeBudget);
+  // Per-reason sub-cards
+  const reasonGrid = document.createElement('div');
+  reasonGrid.className = 'sip-reason-grid';
+
+  SIP_REASONS.forEach(reason => {
+    const budget = activeBudgets[reason];
+    const allocated = allocatedByReason[reason];
+    const unallocated = budget - allocated;
+    const over = unallocated < 0;
+    const color = REASON_COLOR[reason];
+
+    const sub = document.createElement('div');
+    sub.className = 'sip-reason-card';
+    sub.style.setProperty('--rc', color);
+
+    sub.innerHTML = `
+      <div class="sip-reason-name" style="color:${color}">${reason}</div>
+      <div class="sip-reason-budget">${budget > 0 ? '₹' + fmt(budget) : '<span class="sip-no-budget">Not set</span>'}<span class="sip-reason-per">/month</span></div>
+      <div class="sip-reason-row">
+        <span class="sip-reason-stat-label">Allocated</span>
+        <span class="sip-reason-stat-value">₹${fmt(allocated)}</span>
+      </div>
+      <div class="sip-reason-row ${over ? 'sip-overallocated' : (budget > 0 ? 'sip-unallocated' : '')}">
+        <span class="sip-reason-stat-label">${over ? 'Over by' : 'Free'}</span>
+        <span class="sip-reason-stat-value">${over ? '-' : ''}₹${fmt(Math.abs(unallocated))}</span>
+      </div>
+    `;
+    reasonGrid.appendChild(sub);
   });
 
-  const histToggle = card.querySelector('#sip-budget-history-toggle');
-  const histDiv = card.querySelector('#sip-budget-history');
+  card.appendChild(reasonGrid);
+
+  // Actions + collapsible history
+  const actions = document.createElement('div');
+  actions.className = 'sip-budget-actions';
+  actions.innerHTML = `<button class="btn-outline btn-sm" id="sip-update-budget-btn">Update Budget</button>`;
+  card.appendChild(actions);
+
+  const formArea = document.createElement('div');
+  formArea.id = 'sip-budget-form-area';
+  card.appendChild(formArea);
+
+  const histToggle = document.createElement('div');
+  histToggle.className = 'sip-budget-history-toggle';
+  histToggle.textContent = '▾ Budget History';
+  card.appendChild(histToggle);
+
+  const histDiv = document.createElement('div');
+  histDiv.id = 'sip-budget-history';
+  histDiv.style.display = 'none';
+  card.appendChild(histDiv);
+
+  card.querySelector('#sip-update-budget-btn').addEventListener('click', () => {
+    if (formArea.innerHTML) { formArea.innerHTML = ''; return; }
+    renderBudgetForm(formArea, stream);
+  });
+
   histToggle.addEventListener('click', () => {
     const open = histDiv.style.display !== 'none';
     histDiv.style.display = open ? 'none' : 'block';
     histToggle.textContent = (open ? '▾' : '▸') + ' Budget History';
-    if (!open && !histDiv.innerHTML) {
-      buildBudgetHistory(histDiv, data.budgets);
-    }
+    if (!open && !histDiv.innerHTML) buildBudgetHistory(histDiv, data.budgets);
   });
 
   return card;
@@ -156,21 +180,26 @@ function buildBudgetHistory(container, budgets) {
   tbl.className = 'report-table';
   tbl.innerHTML = `
     <thead><tr>
+      <th style="text-align:left">Reason</th>
       <th style="text-align:left">Effective Date</th>
       <th>Budget (₹/month)</th>
       <th style="text-align:left">Notes</th>
     </tr></thead>
   `;
   const tbody = document.createElement('tbody');
-  budgets.forEach(b => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td style="text-align:left">${b.effective_date}</td>
-      <td>₹${fmt(parseFloat(b.monthly_budget) || 0)}</td>
-      <td style="text-align:left">${b.notes || '—'}</td>
-    `;
-    tbody.appendChild(tr);
-  });
+  [...budgets]
+    .sort((a, b) => b.effective_date.localeCompare(a.effective_date))
+    .forEach(b => {
+      const color = REASON_COLOR[b.reason] || 'var(--text-muted)';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${b.reason || '—'}</span></td>
+        <td style="text-align:left">${b.effective_date}</td>
+        <td>₹${fmt(parseFloat(b.monthly_budget) || 0)}</td>
+        <td style="text-align:left">${b.notes || '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
   tbl.appendChild(tbody);
   wrap.appendChild(tbl);
   container.appendChild(wrap);
@@ -183,11 +212,20 @@ function renderBudgetForm(container, stream) {
   form.innerHTML = `
     <div class="sip-inline-form-fields">
       <div class="form-group">
-        <label>New Monthly Budget (₹)</label>
+        <label>Reason <span class="required">*</span></label>
+        <select name="reason" required class="form-input">
+          <option value="">Select reason…</option>
+          <option value="Regular">Regular</option>
+          <option value="Rebalance">Rebalance</option>
+          <option value="Redeem">Redeem</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Monthly Budget (₹) <span class="required">*</span></label>
         <input type="number" step="0.01" name="monthly_budget" required placeholder="32000" class="form-input">
       </div>
       <div class="form-group">
-        <label>Effective Date</label>
+        <label>Effective Date <span class="required">*</span></label>
         <input type="date" name="effective_date" required value="${today}" class="form-input">
       </div>
       <div class="form-group">
@@ -198,15 +236,21 @@ function renderBudgetForm(container, stream) {
     <div class="sip-form-actions">
       <button type="submit" class="btn-primary">Save Budget</button>
     </div>
-    <div id="sip-budget-form-err" class="form-error" style="display:none"></div>
+    <div class="form-error" style="display:none"></div>
   `;
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const btn = form.querySelector('[type=submit]');
-    const errDiv = form.querySelector('#sip-budget-form-err');
+    const errDiv = form.querySelector('.form-error');
     const fd = new FormData(form);
+    if (!fd.get('reason')) {
+      errDiv.textContent = 'Please select a reason.';
+      errDiv.style.display = 'block';
+      return;
+    }
     const row = {
+      reason: fd.get('reason'),
       monthly_budget: parseFloat(fd.get('monthly_budget')),
       effective_date: fd.get('effective_date'),
       notes: fd.get('notes') || '',
@@ -231,8 +275,7 @@ function renderBudgetForm(container, stream) {
 
 // ─── Current allocations section ───────────────────────────────────────────────
 
-function buildAllocSection(activeAllocations, activeBudget, fundMap, stream, data) {
-  const monthlyBudget = activeBudget ? parseFloat(activeBudget.monthly_budget) || 0 : 0;
+function buildAllocSection(activeAllocations, activeBudgets, fundMap, stream, data) {
   const section = document.createElement('div');
   section.className = 'sip-section';
 
@@ -258,54 +301,78 @@ function buildAllocSection(activeAllocations, activeBudget, fundMap, stream, dat
       <thead><tr>
         <th style="text-align:left">Fund</th>
         <th style="text-align:left">Type</th>
+        <th style="text-align:left">Reason</th>
         <th>₹/month</th>
         <th>% of Budget</th>
         <th>SIP Day</th>
-        <th style="text-align:left">Reason</th>
         <th style="text-align:left">Since</th>
       </tr></thead>
     `;
     const tbody = document.createElement('tbody');
 
-    let totalSIP = 0, totalSWP = 0;
+    // Group and sort by reason, then fund name
+    const sorted = [...activeAllocations].sort((a, b) => {
+      const rCmp = (a.reason || '').localeCompare(b.reason || '');
+      if (rCmp !== 0) return rCmp;
+      return (fundMap[String(a.fund_id)] || '').localeCompare(fundMap[String(b.fund_id)] || '');
+    });
 
-    activeAllocations
-      .sort((a, b) => (fundMap[String(a.fund_id)] || '').localeCompare(fundMap[String(b.fund_id)] || ''))
-      .forEach(ev => {
-        const amount = parseFloat(ev.amount) || 0;
-        const isSIP = ev.event_type === 'Monthly SIP' || ev.event_type === 'Rebalance SIP';
-        const isSWP = ev.event_type === 'Rebalance SWP' || ev.event_type === 'Redeem SWP';
-        if (isSIP) totalSIP += amount;
-        if (isSWP) totalSWP += amount;
+    let lastReason = null;
+    const reasonTotals = {};
 
-        const pct = monthlyBudget > 0 && isSIP ? ((amount / monthlyBudget) * 100).toFixed(1) + '%' : '—';
-        const typeKey = ev.event_type.replace(/\s+/g, '-');
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td style="text-align:left">${fundMap[String(ev.fund_id)] || ev.fund_id}</td>
-          <td style="text-align:left"><span class="sip-type-badge sip-type-${typeKey}">${ev.event_type}</span></td>
-          <td>₹${fmt(amount)}</td>
-          <td>${pct}</td>
-          <td>${ev.sip_date || '—'}</td>
-          <td style="text-align:left">${ev.reason || '—'}</td>
-          <td style="text-align:left">${ev.effective_date || '—'}</td>
-        `;
-        tbody.appendChild(tr);
-      });
+    sorted.forEach(ev => {
+      const amount = parseFloat(ev.amount) || 0;
+      const reason = ev.reason || '';
+      const budget = activeBudgets[reason] || 0;
+      const pct = budget > 0 ? ((amount / budget) * 100).toFixed(1) + '%' : '—';
+      const typeKey = ev.event_type.replace(/\s+/g, '-');
+      const color = REASON_COLOR[reason] || 'var(--text-muted)';
 
-    // Footer totals row
-    const totalTr = document.createElement('tr');
-    totalTr.className = 'total-row';
-    totalTr.innerHTML = `
-      <td style="text-align:left">Total</td>
-      <td></td>
-      <td>₹${fmt(totalSIP + totalSWP)}</td>
-      <td>${monthlyBudget > 0 ? ((totalSIP / monthlyBudget) * 100).toFixed(1) + '%' : '—'}</td>
-      <td></td>
-      <td></td>
-      <td></td>
-    `;
-    tbody.appendChild(totalTr);
+      if (!reasonTotals[reason]) reasonTotals[reason] = 0;
+      reasonTotals[reason] += amount;
+
+      // Reason group separator row
+      if (reason !== lastReason) {
+        lastReason = reason;
+        const sepTr = document.createElement('tr');
+        sepTr.className = 'sip-reason-sep-row';
+        sepTr.innerHTML = `<td colspan="7" style="text-align:left;padding:10px 14px 4px"><span class="sip-type-badge" style="background:${color}22;color:${color}">${reason}</span></td>`;
+        tbody.appendChild(sepTr);
+      }
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="text-align:left">${fundMap[String(ev.fund_id)] || ev.fund_id}</td>
+        <td style="text-align:left"><span class="sip-type-badge sip-type-${typeKey}">${ev.event_type}</span></td>
+        <td style="text-align:left"></td>
+        <td>₹${fmt(amount)}</td>
+        <td>${pct}</td>
+        <td>${ev.sip_date || '—'}</td>
+        <td style="text-align:left">${ev.effective_date || '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    // Per-reason subtotal rows
+    SIP_REASONS.forEach(reason => {
+      const total = reasonTotals[reason];
+      if (!total) return;
+      const budget = activeBudgets[reason] || 0;
+      const unalloc = budget - total;
+      const over = unalloc < 0;
+      const color = REASON_COLOR[reason];
+      const subTr = document.createElement('tr');
+      subTr.className = 'total-row';
+      subTr.innerHTML = `
+        <td style="text-align:left" colspan="3"><span style="color:${color};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px">${reason} subtotal</span></td>
+        <td>₹${fmt(total)}</td>
+        <td>${budget > 0 ? ((total / budget) * 100).toFixed(1) + '%' : '—'}</td>
+        <td colspan="2" style="text-align:left;color:${over ? 'var(--negative)' : 'var(--positive)'}">
+          ${budget > 0 ? (over ? 'Over by ₹' + fmt(Math.abs(unalloc)) : 'Free ₹' + fmt(unalloc)) : ''}
+        </td>
+      `;
+      tbody.appendChild(subTr);
+    });
 
     tbl.appendChild(tbody);
     wrap.appendChild(tbl);
@@ -327,12 +394,9 @@ function buildHistorySection(events, fundMap) {
 
   const header = document.createElement('div');
   header.className = 'sip-section-header';
-  header.innerHTML = `
-    <span class="sip-section-title">History</span>
-  `;
+  header.innerHTML = '<span class="sip-section-title">History</span>';
   section.appendChild(header);
 
-  // Reason filter
   const filterBar = document.createElement('div');
   filterBar.className = 'sip-filter-bar';
   const reasonFilter = document.createElement('select');
@@ -366,9 +430,9 @@ function buildHistorySection(events, fundMap) {
       <thead><tr>
         <th style="text-align:left">Fund</th>
         <th style="text-align:left">Type</th>
+        <th style="text-align:left">Reason</th>
         <th>Amount (₹)</th>
         <th>SIP Day</th>
-        <th style="text-align:left">Reason</th>
         <th style="text-align:left">Effective Date</th>
       </tr></thead>
     `;
@@ -377,13 +441,14 @@ function buildHistorySection(events, fundMap) {
       .sort((a, b) => b.effective_date.localeCompare(a.effective_date))
       .forEach(ev => {
         const typeKey = ev.event_type.replace(/\s+/g, '-');
+        const color = REASON_COLOR[ev.reason] || 'var(--text-muted)';
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td style="text-align:left">${fundMap[String(ev.fund_id)] || ev.fund_id}</td>
           <td style="text-align:left"><span class="sip-type-badge sip-type-${typeKey}">${ev.event_type}</span></td>
+          <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${ev.reason || '—'}</span></td>
           <td>${ev.amount ? '₹' + fmt(parseFloat(ev.amount) || 0) : '—'}</td>
           <td>${ev.sip_date || '—'}</td>
-          <td style="text-align:left">${ev.reason || '—'}</td>
           <td style="text-align:left">${ev.effective_date || '—'}</td>
         `;
         tbody.appendChild(tr);
@@ -402,7 +467,6 @@ function buildHistorySection(events, fundMap) {
 // ─── SIP Event form overlay ────────────────────────────────────────────────────
 
 function renderSIPEventForm(parentSection, data, stream, fundMap) {
-  // Remove any existing overlay
   document.querySelector('.asset-form-overlay')?.remove();
 
   const overlay = document.createElement('div');
@@ -420,9 +484,7 @@ function renderSIPEventForm(parentSection, data, stream, fundMap) {
   form.id = 'sip-event-form';
 
   // Fund select
-  const fundGroup = document.createElement('div');
-  fundGroup.className = 'form-group';
-  fundGroup.innerHTML = '<label>Fund <span class="required">*</span></label>';
+  const fundGroup = mkGroup('Fund', true);
   const fundSel = document.createElement('select');
   fundSel.className = 'form-input';
   fundSel.name = 'fund_id';
@@ -440,9 +502,7 @@ function renderSIPEventForm(parentSection, data, stream, fundMap) {
   form.appendChild(fundGroup);
 
   // Event type select
-  const typeGroup = document.createElement('div');
-  typeGroup.className = 'form-group';
-  typeGroup.innerHTML = '<label>Type <span class="required">*</span></label>';
+  const typeGroup = mkGroup('Type', true);
   const typeSel = document.createElement('select');
   typeSel.className = 'form-input';
   typeSel.name = 'event_type';
@@ -450,65 +510,60 @@ function renderSIPEventForm(parentSection, data, stream, fundMap) {
   typeSel.innerHTML = '<option value="">Select type…</option>';
   ['Monthly SIP', 'Rebalance SIP', 'Rebalance SWP', 'Redeem SWP', 'STOP'].forEach(opt => {
     const o = document.createElement('option');
-    o.value = opt;
-    o.textContent = opt;
+    o.value = opt; o.textContent = opt;
     typeSel.appendChild(o);
   });
   typeGroup.appendChild(typeSel);
   form.appendChild(typeGroup);
 
-  // Amount field (hidden for STOP)
-  const amountGroup = document.createElement('div');
-  amountGroup.className = 'form-group';
-  amountGroup.innerHTML = `
-    <label>Amount (₹/month) <span class="required">*</span></label>
-    <input type="number" step="0.01" name="amount" class="form-input" placeholder="5000">
-  `;
+  // Reason select
+  const reasonGroup = mkGroup('Reason', true);
+  const reasonSel = document.createElement('select');
+  reasonSel.className = 'form-input';
+  reasonSel.name = 'reason';
+  reasonSel.required = true;
+  reasonSel.innerHTML = '<option value="">Select reason…</option>';
+  SIP_REASONS.forEach(r => {
+    const o = document.createElement('option');
+    o.value = r; o.textContent = r;
+    reasonSel.appendChild(o);
+  });
+  reasonGroup.appendChild(reasonSel);
+  form.appendChild(reasonGroup);
+
+  // Amount field
+  const amountGroup = mkGroup('Amount (₹/month)', true);
+  const amountInput = document.createElement('input');
+  amountInput.type = 'number'; amountInput.step = '0.01';
+  amountInput.name = 'amount'; amountInput.className = 'form-input';
+  amountInput.placeholder = '5000'; amountInput.required = true;
+  amountGroup.appendChild(amountInput);
   form.appendChild(amountGroup);
 
   // SIP Day field
-  const sipDayGroup = document.createElement('div');
-  sipDayGroup.className = 'form-group';
-  sipDayGroup.innerHTML = `
-    <label>SIP Day of Month (1–28)</label>
-    <input type="number" step="1" min="1" max="28" name="sip_date" class="form-input" placeholder="5">
-  `;
+  const sipDayGroup = mkGroup('SIP Day of Month (1–28)', false);
+  sipDayGroup.innerHTML += `<input type="number" step="1" min="1" max="28" name="sip_date" class="form-input" placeholder="5">`;
   form.appendChild(sipDayGroup);
 
   // Effective date
   const today = new Date().toISOString().slice(0, 10);
-  const effGroup = document.createElement('div');
-  effGroup.className = 'form-group';
-  effGroup.innerHTML = `
-    <label>Effective Date <span class="required">*</span></label>
-    <input type="date" name="effective_date" required value="${today}" class="form-input">
-  `;
+  const effGroup = mkGroup('Effective Date', true);
+  effGroup.innerHTML += `<input type="date" name="effective_date" required value="${today}" class="form-input">`;
   form.appendChild(effGroup);
 
-  // Reason select
-  const reasonGroup = document.createElement('div');
-  reasonGroup.className = 'form-group';
-  reasonGroup.innerHTML = `
-    <label>Reason <span class="required">*</span></label>
-    <select name="reason" required class="form-input">
-      <option value="">Select reason…</option>
-      <option value="Regular">Regular</option>
-      <option value="Rebalance">Rebalance</option>
-      <option value="Redeem">Redeem</option>
-    </select>
-  `;
-  form.appendChild(reasonGroup);
-
-  // Dynamic visibility: hide amount when STOP selected
-  const amountInput = amountGroup.querySelector('input');
+  // Dynamic visibility on type change
   typeSel.addEventListener('change', () => {
     const val = typeSel.value;
-    const hideAmount = val === 'STOP';
-    amountGroup.style.display = hideAmount ? 'none' : 'block';
-    amountInput.required = !hideAmount;
-    if (hideAmount) amountInput.value = '0';
-    // Hide SIP day for SWP types
-    sipDayGroup.style.display = (val === 'Rebalance SWP' || val === 'Redeem SWP' || val === 'STOP') ? 'none' : 'block';
+    const isStop = val === 'STOP';
+    const isSWP = val === 'Rebalance SWP' || val === 'Redeem SWP';
+    amountGroup.style.display = isStop ? 'none' : 'block';
+    amountInput.required = !isStop;
+    if (isStop) amountInput.value = '0';
+    sipDayGroup.style.display = (isSWP || isStop) ? 'none' : 'block';
+    // Auto-set reason from type
+    if (val === 'Monthly SIP') reasonSel.value = 'Regular';
+    else if (val === 'Rebalance SIP' || val === 'Rebalance SWP') reasonSel.value = 'Rebalance';
+    else if (val === 'Redeem SWP') reasonSel.value = 'Redeem';
   });
 
   const errDiv = document.createElement('div');
@@ -530,21 +585,20 @@ function renderSIPEventForm(parentSection, data, stream, fundMap) {
     const row = {
       fund_id: fd.get('fund_id'),
       event_type: fd.get('event_type'),
+      reason: fd.get('reason'),
       amount: parseFloat(fd.get('amount')) || 0,
       sip_date: fd.get('sip_date') ? parseInt(fd.get('sip_date')) : null,
       effective_date: fd.get('effective_date'),
-      reason: fd.get('reason'),
     };
 
-    if (!row.fund_id || !row.event_type || !row.effective_date || !row.reason) {
+    if (!row.fund_id || !row.event_type || !row.reason || !row.effective_date) {
       errDiv.textContent = 'Please fill all required fields.';
       errDiv.style.display = 'block';
       return;
     }
 
     const btn = form.querySelector('[type=submit]');
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
+    btn.disabled = true; btn.textContent = 'Saving...';
     errDiv.style.display = 'none';
 
     try {
@@ -555,13 +609,11 @@ function renderSIPEventForm(parentSection, data, stream, fundMap) {
     } catch (err) {
       errDiv.textContent = 'Save failed: ' + err.message;
       errDiv.style.display = 'block';
-      btn.disabled = false;
-      btn.textContent = 'Save';
+      btn.disabled = false; btn.textContent = 'Save';
     }
   });
 
   box.appendChild(form);
-
   box.querySelector('#sip-event-cancel').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
@@ -569,7 +621,22 @@ function renderSIPEventForm(parentSection, data, stream, fundMap) {
   document.body.appendChild(overlay);
 }
 
-// ─── Number formatter ──────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function mkGroup(labelText, required) {
+  const g = document.createElement('div');
+  g.className = 'form-group';
+  const lbl = document.createElement('label');
+  lbl.textContent = labelText;
+  if (required) {
+    const star = document.createElement('span');
+    star.className = 'required';
+    star.textContent = ' *';
+    lbl.appendChild(star);
+  }
+  g.appendChild(lbl);
+  return g;
+}
 
 function fmt(n) {
   return typeof formatINR === 'function' ? formatINR(n) : n.toLocaleString('en-IN');
