@@ -153,6 +153,15 @@ function renderSubcategories(page) {
 
 async function startLogForm() {
   STATE.stream = STATE.stream || resolveStream(STATE.category, STATE.subcategory?.name);
+
+  if (STATE.stream?.isSIPStream) {
+    const container = document.getElementById('log-content');
+    container.innerHTML = '';
+    setHeader('log-content', STATE.category.name, () => renderCategories('log'));
+    await renderSIPPage(container, STATE.stream);
+    return;
+  }
+
   const container = document.getElementById('log-content');
   container.innerHTML = '';
 
