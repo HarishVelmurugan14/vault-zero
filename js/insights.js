@@ -405,15 +405,32 @@ async function fetchAllInsightsData() {
   const cached = LSC.get('insights');
   if (cached) return cached;
 
-  // Single batch request — one round-trip for all 16 tables
-  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]))];
-  const res = await API.batchGet(allSheets);
+  let data;
 
-  const data = ENTRIES.map(entry => ({
-    ...entry,
-    assets: res[entry.stream.assetTable]?.rows || [],
-    txns:   res[entry.stream.txnTable]?.rows   || [],
-  }));
+  try {
+    // Fast path: single batch request (requires updated GAS with batchGet action)
+    const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]))];
+    const res = await API.batchGet(allSheets);
+    data = ENTRIES.map(entry => ({
+      ...entry,
+      assets: res[entry.stream.assetTable]?.rows || [],
+      txns:   res[entry.stream.txnTable]?.rows   || [],
+    }));
+  } catch (_) {
+    // Fallback: individual requests (old GAS or batchGet unavailable)
+    const results = await Promise.allSettled(ENTRIES.map(async entry => {
+      const [assetsRes, txnsRes] = await Promise.allSettled([
+        API.get(entry.stream.assetTable, { limit: 500 }),
+        API.get(entry.stream.txnTable,   { limit: 5000 }),
+      ]);
+      return {
+        ...entry,
+        assets: assetsRes.status === 'fulfilled' ? (assetsRes.value.rows || []) : [],
+        txns:   txnsRes.status   === 'fulfilled' ? (txnsRes.value.rows   || []) : [],
+      };
+    }));
+    data = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+  }
 
   LSC.set('insights', data);
   return data;

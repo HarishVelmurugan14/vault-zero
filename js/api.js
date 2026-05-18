@@ -101,7 +101,9 @@ API.batchGet = async function(sheets, limit = 5000) {
   const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), limit });
   const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?${params}`);
   if (!res.ok) throw new Error('batchGet failed: ' + res.status);
-  return res.json(); // { tableName: { rows, total }, ... }
+  const data = await res.json();
+  if (data.error) throw new Error(data.error); // old GAS returns error JSON with HTTP 200
+  return data; // { tableName: { rows, total }, ... }
 };
 
 // ── localStorage cache with 30-minute TTL ──────────────────────────────────────
