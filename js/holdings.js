@@ -143,11 +143,14 @@ async function buildHoldingsRows() {
     const txns   = res[stream.txnTable]?.rows   || [];
     if (!assets.length) continue;
 
-    const investedByAsset = {};
-    const qtyByAsset      = {};
+    // Per-asset: track buy units + buy amount separately for avg cost method
+    const buyUnitsByAsset = {};
+    const buyAmtByAsset   = {};
+    const netQtyByAsset   = {};
+
     txns.forEach(t => {
-      const aid  = String(t[stream.assetIdCol]);
-      const sign = t.txn_type === 'Buy' ? 1 : -1;
+      const aid = String(t[stream.assetIdCol]);
+      const qty = parseFloat(t.units || t.quantity || 0);
       let amt = 0;
       if (stream.amountCol) {
         amt = parseFloat(t[stream.amountCol] || 0);
@@ -156,28 +159,43 @@ async function buildHoldingsRows() {
             + parseFloat(t.registration_cost || 0)
             + parseFloat(t.other_expenses    || 0);
       }
-      investedByAsset[aid] = (investedByAsset[aid] || 0) + sign * amt;
-      const qty = parseFloat(t.units || t.quantity || 0);
-      qtyByAsset[aid] = (qtyByAsset[aid] || 0) + sign * qty;
-    });
-
-    assets.forEach(a => {
-      const invested = investedByAsset[String(a.id)] || 0;
-      if (!invested) return;
-      const resolvedSubcat = subcatName || SUBCAT_NAMES[a.subcategory_id] || '';
-
-      let currentValue = 0;
-      const qty = qtyByAsset[String(a.id)] || 0;
-      if (stream.currentPriceCol) {
-        const price = parseFloat(a[stream.currentPriceCol] || 0);
-        if (price > 0 && qty > 0) currentValue = qty * price;
-      } else if (stream.manualPriceType) {
-        const price = manualPricesMap[`${stream.manualPriceType}|${String(a.id)}`] || 0;
-        if (price > 0 && qty > 0) currentValue = qty * price;
+      if (t.txn_type === 'Buy') {
+        buyUnitsByAsset[aid] = (buyUnitsByAsset[aid] || 0) + qty;
+        buyAmtByAsset[aid]   = (buyAmtByAsset[aid]   || 0) + amt;
+        netQtyByAsset[aid]   = (netQtyByAsset[aid]   || 0) + qty;
+      } else {
+        netQtyByAsset[aid] = (netQtyByAsset[aid] || 0) - qty;
       }
-
-      rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol], invested, currentValue });
     });
+
+    // Only active assets; skip fully-exited (netQty ≤ 0)
+    assets
+      .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
+      .forEach(a => {
+        const aid           = String(a.id);
+        const totalBuyUnits = buyUnitsByAsset[aid] || 0;
+        const totalBuyAmt   = buyAmtByAsset[aid]   || 0;
+        const netQty        = netQtyByAsset[aid]    || 0;
+
+        if (totalBuyUnits <= 0 || netQty <= 0) return;
+
+        // Invested = remaining units × average buy cost
+        const avgCost = totalBuyAmt / totalBuyUnits;
+        const invested = netQty * avgCost;
+
+        const resolvedSubcat = subcatName || SUBCAT_NAMES[a.subcategory_id] || '';
+
+        let currentValue = 0;
+        if (stream.currentPriceCol) {
+          const price = parseFloat(a[stream.currentPriceCol] || 0);
+          if (price > 0) currentValue = netQty * price;
+        } else if (stream.manualPriceType) {
+          const price = manualPricesMap[`${stream.manualPriceType}|${aid}`] || 0;
+          if (price > 0) currentValue = netQty * price;
+        }
+
+        rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol], invested, currentValue });
+      });
   }
 
   const bucketOrder = BUCKETS.reduce((m, b, i) => { m[b.id] = i; return m; }, {});
