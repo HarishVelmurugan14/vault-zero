@@ -12,6 +12,7 @@ const STATE = {
   historyRows: [],
   assetMap: {},          // asset id → asset object (for name display in history)
   editMode: false,
+  assetFilter: null,     // asset id string or null = all
 };
 
 // Load all subcategory names from the sheet into SUBCAT_NAMES (extends the static map)
@@ -296,13 +297,14 @@ async function renderHistoryPage() {
 
 async function renderHistoryInArea(area) {
   STATE.historyOffset = 0;
-  STATE.historyRows = [];
-  STATE.editMode = false;
+  STATE.historyRows   = [];
+  STATE.editMode      = false;
+  STATE.assetFilter   = null;
   area.innerHTML = '';
 
+  // ── Toolbar (edit button) ──────────────────────────────────
   const toolbar = document.createElement('div');
   toolbar.className = 'history-toolbar';
-
   const editBtn = document.createElement('button');
   editBtn.className = 'btn-outline btn-sm';
   editBtn.textContent = 'Edit';
@@ -310,6 +312,28 @@ async function renderHistoryInArea(area) {
   toolbar.appendChild(editBtn);
   area.appendChild(toolbar);
 
+  // ── Asset filter bar (shown after load if >1 unique asset) ─
+  const assetFilterBar = document.createElement('div');
+  assetFilterBar.className = 'history-asset-filter-bar';
+  assetFilterBar.style.display = 'none';
+
+  const assetSel = document.createElement('select');
+  assetSel.className = 'holdings-filter-select';
+
+  const selectAllBtn = document.createElement('button');
+  selectAllBtn.className = 'btn-outline btn-sm';
+  selectAllBtn.textContent = 'Select All';
+
+  assetFilterBar.appendChild(assetSel);
+  assetFilterBar.appendChild(selectAllBtn);
+  area.appendChild(assetFilterBar);
+
+  // ── Summary card area ─────────────────────────────────────
+  const summaryEl = document.createElement('div');
+  summaryEl.id = 'history-summary';
+  area.appendChild(summaryEl);
+
+  // ── Transaction list ──────────────────────────────────────
   const txnList = document.createElement('div');
   txnList.id = 'txn-list';
   area.appendChild(txnList);
@@ -318,9 +342,10 @@ async function renderHistoryInArea(area) {
   loadMoreBtn.className = 'btn-outline load-more';
   loadMoreBtn.textContent = 'Load More';
   loadMoreBtn.style.display = 'none';
-  loadMoreBtn.addEventListener('click', () => loadMoreTxns(txnList, loadMoreBtn));
+  loadMoreBtn.addEventListener('click', () => loadMoreTxns(txnList, loadMoreBtn, assetSel, summaryEl));
   area.appendChild(loadMoreBtn);
 
+  // ── Edit action bar ───────────────────────────────────────
   const actionBar = document.createElement('div');
   actionBar.className = 'edit-action-bar';
   actionBar.id = 'edit-action-bar';
@@ -331,17 +356,36 @@ async function renderHistoryInArea(area) {
   `;
   area.appendChild(actionBar);
 
-  editBtn.addEventListener('click', () => toggleEditMode(txnList, editBtn));
+  // ── Wire up events ────────────────────────────────────────
+  editBtn.addEventListener('click', () => toggleEditMode(txnList, editBtn, summaryEl));
+
   actionBar.querySelector('#edit-cancel-btn').addEventListener('click', () => {
     STATE.editMode = false;
     renderHistoryInArea(area);
   });
   actionBar.querySelector('#edit-save-btn').addEventListener('click', () => saveEdits(txnList, area));
 
-  await loadTxns(txnList, loadMoreBtn);
+  assetSel.addEventListener('change', () => {
+    STATE.assetFilter = assetSel.value || null;
+    renderFilteredList(txnList, summaryEl);
+  });
+
+  selectAllBtn.addEventListener('click', async () => {
+    selectAllBtn.disabled = true;
+    selectAllBtn.textContent = 'Loading…';
+    while (STATE.historyOffset < STATE.historyTotal) {
+      await loadTxns(txnList, loadMoreBtn, assetSel, summaryEl);
+    }
+    loadMoreBtn.style.display = 'none';
+    selectAllBtn.style.display = 'none';
+    selectAllBtn.disabled = false;
+    selectAllBtn.textContent = 'Select All';
+  });
+
+  await loadTxns(txnList, loadMoreBtn, assetSel, summaryEl);
 }
 
-async function loadTxns(list, loadMoreBtn) {
+async function loadTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
   const stream = STATE.stream || resolveStream(STATE.category, STATE.subcategory?.name);
   STATE.stream = stream;
 
@@ -350,7 +394,6 @@ async function loadTxns(list, loadMoreBtn) {
     assets.forEach(a => { STATE.assetMap[a.id] = a; });
   } catch (_) {}
 
-  // Build a set of asset IDs belonging to the selected subcategory (if any)
   const subcatAssetIds = STATE.subcategory
     ? new Set(
         Object.values(STATE.assetMap)
@@ -366,42 +409,63 @@ async function loadTxns(list, loadMoreBtn) {
     const assetId = String(txn[stream.assetIdCol]);
     if (subcatAssetIds && !subcatAssetIds.has(assetId)) return;
     txn._assetName = STATE.assetMap[txn[stream.assetIdCol]]?.[stream.assetNameCol] || '';
-    const row = renderTxnRow(txn, stream, STATE.editMode);
-    list.appendChild(row);
     STATE.historyRows.push(txn);
   });
 
   STATE.historyOffset += data.rows.length;
+  loadMoreBtn.style.display = STATE.historyOffset < STATE.historyTotal ? 'block' : 'none';
 
-  loadMoreBtn.style.display =
-    STATE.historyOffset < STATE.historyTotal ? 'block' : 'none';
+  populateAssetFilter(assetSel, stream);
+  renderFilteredList(txnList, summaryEl);
 }
 
-async function loadMoreTxns(list, loadMoreBtn) {
+async function loadMoreTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
   loadMoreBtn.disabled = true;
-  loadMoreBtn.textContent = 'Loading...';
-  await loadTxns(list, loadMoreBtn);
+  loadMoreBtn.textContent = 'Loading…';
+  await loadTxns(txnList, loadMoreBtn, assetSel, summaryEl);
   loadMoreBtn.disabled = false;
   loadMoreBtn.textContent = 'Load More';
 }
 
-function toggleEditMode(txnList, editBtn) {
-  STATE.editMode = !STATE.editMode;
-  editBtn.textContent = STATE.editMode ? 'Cancel' : 'Edit';
-  editBtn.classList.toggle('active', STATE.editMode);
+// ─── Asset filter helpers ───────────────────────────────────────────────────
 
-  const actionBar = document.getElementById('edit-action-bar');
-  if (actionBar) actionBar.style.display = STATE.editMode ? 'flex' : 'none';
-
-  // Re-render all rows in edit or read mode
-  const stream = STATE.stream;
-  txnList.innerHTML = '';
+function populateAssetFilter(assetSel, stream) {
+  const prev = assetSel.value;
+  const uniqueAssets = new Map();
   STATE.historyRows.forEach(txn => {
-    const row = renderTxnRow(txn, stream, STATE.editMode);
-    txnList.appendChild(row);
+    const id = String(txn[stream.assetIdCol]);
+    if (!uniqueAssets.has(id)) uniqueAssets.set(id, txn._assetName || id);
   });
 
-  // Wire delete buttons
+  assetSel.innerHTML = '<option value="">All Assets</option>';
+  [...uniqueAssets.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .forEach(([id, name]) => {
+      const o = document.createElement('option');
+      o.value = id; o.textContent = name;
+      assetSel.appendChild(o);
+    });
+
+  const bar = assetSel.closest('.history-asset-filter-bar');
+  if (bar) bar.style.display = uniqueAssets.size > 1 ? 'flex' : 'none';
+
+  if (prev && [...uniqueAssets.keys()].includes(prev)) assetSel.value = prev;
+}
+
+function renderFilteredList(txnList, summaryEl) {
+  const stream = STATE.stream;
+  const rows = STATE.assetFilter
+    ? STATE.historyRows.filter(t => String(t[stream.assetIdCol]) === STATE.assetFilter)
+    : STATE.historyRows;
+
+  txnList.innerHTML = '';
+  rows.forEach(txn => txnList.appendChild(renderTxnRow(txn, stream, STATE.editMode)));
+
+  if (STATE.editMode) wireDeleteButtons(txnList, stream, summaryEl);
+  renderHistorySummary(summaryEl, rows, stream);
+}
+
+function wireDeleteButtons(txnList, stream, summaryEl) {
   txnList.querySelectorAll('[data-action="delete"]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this transaction? This cannot be undone.')) return;
@@ -409,12 +473,99 @@ function toggleEditMode(txnList, editBtn) {
         await API.delete(stream.txnTable, btn.dataset.id);
         btn.closest('.txn-row').remove();
         STATE.historyRows = STATE.historyRows.filter(r => String(r.id) !== String(btn.dataset.id));
+        const filtered = STATE.assetFilter
+          ? STATE.historyRows.filter(t => String(t[stream.assetIdCol]) === STATE.assetFilter)
+          : STATE.historyRows;
+        renderHistorySummary(summaryEl, filtered, stream);
         showToast('Transaction deleted.');
       } catch (err) {
         showToast('Delete failed: ' + err.message, 'error');
       }
     });
   });
+}
+
+function toggleEditMode(txnList, editBtn, summaryEl) {
+  STATE.editMode = !STATE.editMode;
+  editBtn.textContent = STATE.editMode ? 'Cancel' : 'Edit';
+  editBtn.classList.toggle('active', STATE.editMode);
+
+  const actionBar = document.getElementById('edit-action-bar');
+  if (actionBar) actionBar.style.display = STATE.editMode ? 'flex' : 'none';
+
+  renderFilteredList(txnList, summaryEl);
+}
+
+// ─── History summary ────────────────────────────────────────────────────────
+
+function renderHistorySummary(el, rows, stream) {
+  el.innerHTML = '';
+  if (!rows.length) return;
+
+  const qtyField = stream.txnFields?.find(f => ['units', 'quantity'].includes(f.id));
+  const qtyCol   = qtyField?.id || null;
+  const amtCol   = stream.amountCol || 'amount';
+  const BUY      = ['Buy', 'SIP'];
+  const SELL     = ['Sell', 'SWP'];
+
+  // Per-asset aggregation so current value is computed correctly across assets
+  const byAsset = {};
+  rows.forEach(txn => {
+    const aid = String(txn[stream.assetIdCol]);
+    if (!byAsset[aid]) byAsset[aid] = { buyQty: 0, sellQty: 0, buyAmt: 0 };
+    const qty = qtyCol ? (parseFloat(txn[qtyCol]) || 0) : 0;
+    const amt = parseFloat(txn[amtCol]) || 0;
+    if (BUY.includes(txn.txn_type))  { byAsset[aid].buyQty  += qty; byAsset[aid].buyAmt  += amt; }
+    if (SELL.includes(txn.txn_type)) { byAsset[aid].sellQty += qty; }
+  });
+
+  let totalNetQty = 0, totalBuyQty = 0, totalBuyAmt = 0, totalCurVal = 0, hasPrice = false;
+  Object.entries(byAsset).forEach(([aid, d]) => {
+    const netQty = d.buyQty - d.sellQty;
+    const price  = stream.currentPriceCol
+      ? parseFloat(STATE.assetMap[aid]?.[stream.currentPriceCol]) || 0 : 0;
+    totalNetQty += netQty;
+    totalBuyQty += d.buyQty;
+    totalBuyAmt += d.buyAmt;
+    if (price > 0) { totalCurVal += netQty * price; hasPrice = true; }
+  });
+
+  const avgPrice = totalBuyQty > 0 ? totalBuyAmt / totalBuyQty : 0;
+  // Remaining invested = net qty × avg buy price
+  const invested = totalBuyQty > 0 ? totalNetQty * avgPrice : totalBuyAmt;
+  const pnl      = hasPrice ? totalCurVal - invested : null;
+  const pnlPct   = pnl !== null && invested > 0 ? (pnl / invested) * 100 : null;
+  const qtyLabel = qtyField?.label || 'Quantity';
+
+  const items = [
+    { label: qtyLabel, value: totalNetQty.toLocaleString('en-IN', { maximumFractionDigits: 6 }) },
+    { label: 'Avg Price', value: avgPrice > 0 ? '₹' + formatINR(avgPrice) : '—' },
+    { label: 'Invested', value: '₹' + formatINR(invested) },
+  ];
+
+  if (hasPrice) {
+    items.push({ label: 'Current Value', value: '₹' + formatINR(totalCurVal) });
+    if (pnl !== null) items.push({
+      label: 'Unrealized P&L',
+      value: (pnl >= 0 ? '+₹' : '-₹') + formatINR(Math.abs(pnl)),
+      sub:   pnlPct !== null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : '',
+      cls:   pnl >= 0 ? 'positive' : 'negative',
+    });
+  }
+
+  const card = document.createElement('div');
+  card.className = 'history-summary-card';
+  card.innerHTML = `<div class="history-summary-grid">${
+    items.map(it => `
+      <div class="history-summary-item">
+        <span class="history-summary-label">${it.label}</span>
+        <span class="history-summary-value ${it.cls || ''}">${it.value}${
+          it.sub ? `<span class="history-summary-pct"> ${it.sub}</span>` : ''
+        }</span>
+      </div>
+    `).join('')
+  }</div>`;
+  el.appendChild(card);
 }
 
 async function saveEdits(txnList, area) {

@@ -1511,6 +1511,80 @@ body::before {
   display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end;
 }
 
+/* ── History asset filter bar ────────────────────────────────────────────────── */
+
+.history-asset-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 6px;
+  flex-wrap: wrap;
+}
+
+.history-asset-filter-bar .holdings-filter-select {
+  flex: 1;
+  min-width: 180px;
+}
+
+/* ── History summary card ────────────────────────────────────────────────────── */
+
+.history-summary-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin: 10px 0 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.history-summary-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--violet));
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px 20px;
+}
+
+@media (min-width: 480px)  { .history-summary-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 700px)  { .history-summary-grid { grid-template-columns: repeat(5, 1fr); } }
+
+.history-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-summary-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+
+.history-summary-value {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+
+.history-summary-pct {
+  font-size: 11px;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.8;
+}
+
 /* ── Responsive breakpoints ──────────────────────────────────────────────────── */
 
 @media (min-width: 480px) {
