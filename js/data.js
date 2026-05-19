@@ -156,7 +156,7 @@ const STREAMS = {
 
   precious_metals_physical: {
     label: 'Precious Metals — Physical',
-    currentPriceCol: null,
+    currentPriceCol: 'current_price',
     manualPriceType: 'physical_precious_metal',
     amountCol: 'amount',
     assetTable: 'precious_metal_physical_assets',
