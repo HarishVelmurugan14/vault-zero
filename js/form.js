@@ -365,7 +365,8 @@ function renderTxnRow(txn, stream, editMode = false) {
   } else {
     const badge = document.createElement('span');
     badge.className = `txn-badge ${txn.txn_type === 'Buy' ? 'badge-buy' : 'badge-sell'}`;
-    badge.textContent = txn.txn_type;
+    badge.textContent = txn.txn_type === 'Buy' ? '↑' : '↓';
+    badge.title = txn.txn_type;
 
     const info = document.createElement('div');
     info.className = 'txn-info';

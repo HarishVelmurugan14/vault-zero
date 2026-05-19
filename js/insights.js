@@ -402,10 +402,10 @@ function drawCharts(chartsArea, rawData) {
   chartsArea.innerHTML = '';
 
   if (typeof Chart !== 'undefined') {
-    Chart.defaults.color = '#8b90a8';
-    Chart.defaults.borderColor = 'rgba(46,50,72,0.6)';
-    Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    Chart.defaults.font.size = 12;
+    Chart.defaults.color = '#525252';
+    Chart.defaults.borderColor = 'rgba(255,255,255,0.05)';
+    Chart.defaults.font.family = "Inter, -apple-system, BlinkMacSystemFont, sans-serif";
+    Chart.defaults.font.size = 11;
   }
 
   // Hero + Metric Strip
@@ -413,7 +413,7 @@ function drawCharts(chartsArea, rawData) {
   chartsArea.appendChild(buildMetricStrip(agg));
 
   // ── ALLOCATION ────────────────────────────────────────────
-  const allocSection = makeSectionHeader('Allocation', '#4f46e5');
+  const allocSection = makeSectionHeader('Allocation', '#f59e0b');
   const allocRow1 = document.createElement('div');
   allocRow1.className = 'insights-grid-2';
   allocRow1.appendChild(makeChartCard('Portfolio by Bucket', 'chart-bucket'));
@@ -453,7 +453,7 @@ function drawCharts(chartsArea, rawData) {
   chartsArea.appendChild(riskSection);
 
   // ── TAX INTELLIGENCE ──────────────────────────────────────
-  const taxSection = makeSectionHeader('Tax Intelligence', '#7c3aed');
+  const taxSection = makeSectionHeader('Tax Intelligence', '#a855f7');
   taxSection.appendChild(makeReportCard('Estimated Tax Liability', 'report-tax-table', true));
   chartsArea.appendChild(taxSection);
 
@@ -734,7 +734,7 @@ function buildMetricStrip(agg) {
   const pnlCls    = hasPrices ? (pnl >= 0 ? 'positive' : 'negative') : '';
 
   const metrics = [
-    { icon: '💰', label: 'Net Invested',    value: fmtCurrency(agg.netInvested),                                                                                   color: '#4f46e5' },
+    { icon: '💰', label: 'Net Invested',    value: fmtCurrency(agg.netInvested),                                                                                   color: '#f59e0b' },
     { icon: '📈', label: 'Current Value',   value: hasPrices ? fmtCurrency(agg.totalCurrentValue) : '—',                                                          color: '#0891b2' },
     { icon: '🎯', label: 'Overall XIRR',    value: fmtXIRR(agg.overallXIRR),  cls: agg.overallXIRR !== null ? (agg.overallXIRR >= 0 ? 'positive' : 'negative') : '', color: '#7c3aed' },
     { icon: '⚡', label: 'Unrealized P&L',  value: hasPrices ? `${pnlSign}${fmtCurrency(pnl)}` : '—',  cls: pnlCls,                                               color: pnl >= 0 ? '#22c55e' : '#ef4444' },
@@ -951,12 +951,12 @@ function drawCurrencyChart(canvasId, byCategory) {
   const entries = Object.entries(grouped).filter(([, v]) => v > 0);
   if (!entries.length) return emptyCard(canvasId, 'No allocation data.');
 
-  const colors = { INR: '#4f46e5', USD: '#22c55e', Crypto: '#f59e0b' };
+  const colors = { INR: '#f59e0b', USD: '#22c55e', Crypto: '#a855f7' };
   newChart(canvasId, {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v)), backgroundColor: entries.map(([k]) => colors[k] || '#7c3aed'), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v)), backgroundColor: entries.map(([k]) => colors[k] || '#7c3aed'), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -971,7 +971,7 @@ function drawCapSplitChart(canvasId, bySubcat) {
 
   const actual  = capCats.map(c => equityTotal > 0 ? (bySubcat[c]?.netCost || 0) / equityTotal * 100 : 0);
   const targets = [47, 35, 17];
-  const colors  = ['#4f46e5', '#7c3aed', '#0891b2'];
+  const colors  = ['#f59e0b', '#a855f7', '#0ea5e9'];
 
   newChart(canvasId, {
     type: 'bar',
@@ -990,8 +990,8 @@ function drawCapSplitChart(canvasId, bySubcat) {
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%` } },
       },
       scales: {
-        x: { ticks: { color: '#8b90a8' }, grid: { color: 'rgba(46,50,72,0.5)' } },
-        y: { ticks: { color: '#8b90a8', callback: v => v + '%' }, grid: { color: 'rgba(46,50,72,0.5)' }, beginAtZero: true, max: 70 },
+        x: { ticks: { color: '#525252', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
+        y: { ticks: { color: '#525252', callback: v => v + '%', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, beginAtZero: true, max: 70 },
       },
     },
   });
@@ -1071,8 +1071,8 @@ function makeChartCard(title, canvasId, fullWidth = false) {
 
 // ── Chart utilities ───────────────────────────────────────────────────────────
 
-const CAT_COLORS    = ['#4f46e5','#7c3aed','#2563eb','#0891b2','#059669','#d97706','#dc2626','#db2777'];
-const BUCKET_COLORS = ['#4f46e5','#0891b2','#d97706'];
+const CAT_COLORS    = ['#f59e0b','#a855f7','#22c55e','#0ea5e9','#fb923c','#ec4899','#ef4444','#14b8a6'];
+const BUCKET_COLORS = ['#a855f7','#0ea5e9','#f59e0b'];
 
 function fmtAxis(v) {
   const abs = Math.abs(v);
@@ -1146,7 +1146,7 @@ function drawBucketChart(byBucket) {
     type: 'pie',
     data: {
       labels: entries.map(([, v]) => v.name),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: BUCKET_COLORS, borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: BUCKET_COLORS, borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1161,7 +1161,7 @@ function drawCategoryChart(byCategory) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1179,7 +1179,7 @@ function drawSubcatChart(bySubcat) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: allColors.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: allColors.slice(0, entries.length), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1194,7 +1194,7 @@ function drawAllocCvChart(byCategory) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.currentValue)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#0f1117', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.currentValue)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1205,25 +1205,29 @@ function drawAllocCvChart(byCategory) {
 function drawMonthlyChart(byMonth) {
   const months = Object.keys(byMonth).sort().slice(-24);
   if (!months.length) return emptyCard('chart-monthly', 'No transactions in selected period.');
+  const GRID = 'rgba(255,255,255,0.05)';
+  const TICK = '#525252';
   newChart('chart-monthly', {
     type: 'bar',
     data: {
       labels: months.map(monthLabel),
       datasets: [
-        { label: 'Invested', data: months.map(m => Math.round(byMonth[m]?.invested || 0)), backgroundColor: 'rgba(79,70,229,0.85)', borderRadius: 4 },
-        { label: 'Redeemed', data: months.map(m => Math.round(byMonth[m]?.redeemed || 0)), backgroundColor: 'rgba(239,68,68,0.75)', borderRadius: 4 },
+        { label: 'Invested', data: months.map(m => Math.round(byMonth[m]?.invested || 0)),
+          backgroundColor: 'rgba(245,158,11,0.82)', borderRadius: { topLeft: 6, topRight: 6 }, borderSkipped: 'bottom', categoryPercentage: 0.65, barPercentage: 0.85 },
+        { label: 'Redeemed', data: months.map(m => Math.round(byMonth[m]?.redeemed || 0)),
+          backgroundColor: 'rgba(239,68,68,0.72)', borderRadius: { topLeft: 6, topRight: 6 }, borderSkipped: 'bottom', categoryPercentage: 0.65, barPercentage: 0.85 },
       ],
     },
     options: {
       responsive: true,
       plugins: {
         datalabels: { display: false },
-        legend: { position: 'top', labels: { color: '#8b90a8', padding: 12, usePointStyle: true } },
+        legend: { position: 'top', labels: { color: TICK, padding: 14, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` } },
       },
       scales: {
-        x: { ticks: { color: '#8b90a8', maxRotation: 45 }, grid: { color: 'rgba(46,50,72,0.5)' } },
-        y: { ticks: { color: '#8b90a8', callback: fmtAxis }, grid: { color: 'rgba(46,50,72,0.5)' }, beginAtZero: true },
+        x: { ticks: { color: TICK, maxRotation: 45, font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
+        y: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
       },
     },
   });
@@ -1234,25 +1238,29 @@ function drawMonthlyChart(byMonth) {
 function drawYearlyChart(byYear) {
   const years = Object.keys(byYear).sort();
   if (!years.length) return emptyCard('chart-yearly', 'No transactions in selected period.');
+  const GRID = 'rgba(255,255,255,0.05)';
+  const TICK = '#525252';
   newChart('chart-yearly', {
     type: 'bar',
     data: {
       labels: years,
       datasets: [
-        { label: 'Invested', data: years.map(y => Math.round(byYear[y]?.invested || 0)), backgroundColor: 'rgba(79,70,229,0.85)', borderRadius: 6 },
-        { label: 'Redeemed', data: years.map(y => Math.round(byYear[y]?.redeemed || 0)), backgroundColor: 'rgba(239,68,68,0.75)', borderRadius: 6 },
+        { label: 'Invested', data: years.map(y => Math.round(byYear[y]?.invested || 0)),
+          backgroundColor: 'rgba(245,158,11,0.82)', borderRadius: { topLeft: 8, topRight: 8 }, borderSkipped: 'bottom', categoryPercentage: 0.55, barPercentage: 0.85 },
+        { label: 'Redeemed', data: years.map(y => Math.round(byYear[y]?.redeemed || 0)),
+          backgroundColor: 'rgba(239,68,68,0.72)', borderRadius: { topLeft: 8, topRight: 8 }, borderSkipped: 'bottom', categoryPercentage: 0.55, barPercentage: 0.85 },
       ],
     },
     options: {
       responsive: true,
       plugins: {
         datalabels: { display: false },
-        legend: { position: 'top', labels: { color: '#8b90a8', padding: 12, usePointStyle: true } },
+        legend: { position: 'top', labels: { color: TICK, padding: 14, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` } },
       },
       scales: {
-        x: { ticks: { color: '#8b90a8' }, grid: { color: 'rgba(46,50,72,0.5)' } },
-        y: { ticks: { color: '#8b90a8', callback: fmtAxis }, grid: { color: 'rgba(46,50,72,0.5)' }, beginAtZero: true },
+        x: { ticks: { color: TICK, font: { size: 11 } }, grid: { color: GRID, drawBorder: false } },
+        y: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
       },
     },
   });
@@ -1263,11 +1271,17 @@ function drawYearlyChart(byYear) {
 function drawTopHoldingsChart(topHoldings) {
   if (!topHoldings.length) return emptyCard('chart-top-holdings', 'No holdings for selected filters.');
   const labels = topHoldings.map(h => h.name.length > 22 ? h.name.substring(0, 20) + '…' : h.name);
+  const GRID = 'rgba(255,255,255,0.05)';
+  const TICK = '#525252';
+  const barColors = topHoldings.map((_, i) => CAT_COLORS[i % CAT_COLORS.length] + 'cc');
   newChart('chart-top-holdings', {
     type: 'bar',
     data: {
       labels,
-      datasets: [{ label: 'Net Invested', data: topHoldings.map(h => Math.round(h.netCost)), backgroundColor: CAT_COLORS[0], borderRadius: 4 }],
+      datasets: [{ label: 'Net Invested', data: topHoldings.map(h => Math.round(h.netCost)),
+        backgroundColor: barColors,
+        borderRadius: { topRight: 6, bottomRight: 6 }, borderSkipped: 'left',
+        barPercentage: 0.75, categoryPercentage: 0.85 }],
     },
     options: {
       indexAxis: 'y',
@@ -1278,8 +1292,8 @@ function drawTopHoldingsChart(topHoldings) {
         tooltip: { callbacks: { title: ctx => topHoldings[ctx[0].dataIndex].name, label: ctx => ` ${fmtCurrency(ctx.raw)}` } },
       },
       scales: {
-        x: { ticks: { color: '#8b90a8', callback: fmtAxis }, grid: { color: 'rgba(46,50,72,0.5)' }, beginAtZero: true },
-        y: { ticks: { color: '#8b90a8' }, grid: { display: false } },
+        x: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
+        y: { ticks: { color: '#a3a3a3', font: { size: 11 } }, grid: { display: false } },
       },
     },
   });
@@ -1291,11 +1305,16 @@ function drawPnLChart(byCategory) {
   const entries = Object.entries(byCategory).filter(([, v]) => Math.abs(v.realizedPnL) > 1);
   if (!entries.length) return emptyCard('chart-pnl', 'No realized P&L yet — sell transactions will appear here.');
   const values = entries.map(([, v]) => Math.round(v.realizedPnL));
+  const GRID = 'rgba(255,255,255,0.05)';
+  const TICK = '#525252';
   newChart('chart-pnl', {
     type: 'bar',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ label: 'Realized P&L', data: values, backgroundColor: values.map(v => v >= 0 ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.8)'), borderRadius: 4 }],
+      datasets: [{ label: 'Realized P&L', data: values,
+        backgroundColor: values.map(v => v >= 0 ? 'rgba(34,197,94,0.78)' : 'rgba(239,68,68,0.75)'),
+        borderRadius: { topLeft: 6, topRight: 6 }, borderSkipped: 'bottom',
+        barPercentage: 0.7, categoryPercentage: 0.7 }],
     },
     options: {
       responsive: true,
@@ -1305,8 +1324,8 @@ function drawPnLChart(byCategory) {
         tooltip: { callbacks: { label: ctx => ` ${ctx.raw >= 0 ? '+' : ''}${fmtCurrency(ctx.raw)}` } },
       },
       scales: {
-        x: { ticks: { color: '#8b90a8', maxRotation: 30 }, grid: { color: 'rgba(46,50,72,0.5)' } },
-        y: { ticks: { color: '#8b90a8', callback: v => (v < 0 ? '-' : '') + fmtAxis(Math.abs(v)) }, grid: { color: 'rgba(46,50,72,0.5)' } },
+        x: { ticks: { color: TICK, maxRotation: 30, font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
+        y: { ticks: { color: TICK, callback: v => (v < 0 ? '-' : '') + fmtAxis(Math.abs(v)), font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
       },
     },
   });
@@ -1323,12 +1342,15 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
   const datasets = [{
     label: 'Cost Basis',
     data: cumData,
-    borderColor: '#4f46e5',
-    backgroundColor: 'rgba(79,70,229,0.08)',
+    borderColor: '#f59e0b',
+    backgroundColor: 'rgba(245,158,11,0.07)',
     fill: true,
-    tension: 0.35,
+    tension: 0.4,
     pointRadius: months.length > 30 ? 0 : 3,
     pointHoverRadius: 6,
+    pointBackgroundColor: '#f59e0b',
+    pointBorderColor: '#111111',
+    pointBorderWidth: 2,
     borderWidth: 2.5,
   }];
 
@@ -1343,7 +1365,7 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
       pointRadius: months.map((_, i) => i === months.length - 1 ? 8 : 0),
       pointHoverRadius: 10,
       pointBackgroundColor: '#22c55e',
-      pointBorderColor: '#0f1117',
+      pointBorderColor: '#111111',
       pointBorderWidth: 2,
       spanGaps: false,
     });
@@ -1363,8 +1385,8 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
         tooltip: { callbacks: { label: ctx => ctx.raw !== null ? ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` : null } },
       },
       scales: {
-        x: { ticks: { color: '#8b90a8', maxTicksLimit: 14 }, grid: { color: 'rgba(46,50,72,0.5)' } },
-        y: { ticks: { color: '#8b90a8', callback: fmtAxis }, grid: { color: 'rgba(46,50,72,0.5)' }, beginAtZero: true },
+        x: { ticks: { color: '#525252', maxTicksLimit: 14, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
+        y: { ticks: { color: '#525252', callback: fmtAxis, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, beginAtZero: true },
       },
     },
   });
