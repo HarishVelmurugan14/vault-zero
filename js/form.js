@@ -453,14 +453,22 @@ async function renderManualPricePanel(container, stream, assetId) {
 
   let latestPrice = '', latestDate = '';
   try {
-    const data = await API.get('manual_prices', {
-      limit: 100,
-      filters: { asset_type: stream.manualPriceType, asset_id: assetId },
-    });
-    if (data.rows?.length) {
-      const sorted = [...data.rows].sort((a, b) => new Date(b.price_date) - new Date(a.price_date));
-      latestPrice = sorted[0].price_per_unit;
-      latestDate  = sorted[0].price_date?.substring(0, 10) || '';
+    if (stream.currentPriceCol) {
+      const data = await API.get(stream.assetTable, { limit: 1, filters: { id: assetId } });
+      if (data.rows?.length) {
+        latestPrice = data.rows[0][stream.currentPriceCol] || '';
+        latestDate  = '';
+      }
+    } else {
+      const data = await API.get('manual_prices', {
+        limit: 100,
+        filters: { asset_type: stream.manualPriceType, asset_id: assetId },
+      });
+      if (data.rows?.length) {
+        const sorted = [...data.rows].sort((a, b) => new Date(b.price_date) - new Date(a.price_date));
+        latestPrice = sorted[0].price_per_unit;
+        latestDate  = sorted[0].price_date?.substring(0, 10) || '';
+      }
     }
   } catch (_) {}
 
@@ -504,7 +512,11 @@ async function renderManualPricePanel(container, stream, assetId) {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
     try {
-      await API.updateManualPrice(stream.manualPriceType, assetId, price, date);
+      if (stream.currentPriceCol) {
+        await API.update(stream.assetTable, assetId, { [stream.currentPriceCol]: price });
+      } else {
+        await API.updateManualPrice(stream.manualPriceType, assetId, price, date);
+      }
       _insightsCache   = null;
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
