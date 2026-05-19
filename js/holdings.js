@@ -192,7 +192,12 @@ async function buildHoldingsRows() {
           const price = parseFloat(a[stream.currentPriceCol] || 0);
           if (price > 0) currentValue = netQty * price;
         } else if (stream.manualPriceType) {
-          const price = manualPricesMap[`${stream.manualPriceType}|${aid}`] || 0;
+          let price = 0;
+          if (a.price_fetch_way === 'formula') {
+            price = parseFloat(a['current_price'] || 0);
+          } else {
+            price = manualPricesMap[`${stream.manualPriceType}|${aid}`] || 0;
+          }
           if (price > 0) currentValue = netQty * price;
         }
 

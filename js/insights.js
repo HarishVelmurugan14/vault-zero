@@ -614,7 +614,11 @@ function aggregateInsights(filteredData) {
       if (stream.currentPriceCol) {
         priceINR = parseFloat(asset?.[stream.currentPriceCol] || 0);
       } else if (stream.manualPriceType) {
-        priceINR = _manualPricesMap[`${stream.manualPriceType}|${assetId}`] || 0;
+        if (asset?.price_fetch_way === 'formula') {
+          priceINR = parseFloat(asset?.['current_price'] || 0);
+        } else {
+          priceINR = _manualPricesMap[`${stream.manualPriceType}|${assetId}`] || 0;
+        }
       }
       const curVal    = priceINR && m.currentQty > 0 ? m.currentQty * priceINR : 0;
       const unrealPnL = curVal > 0 ? curVal - m.netCost : 0;

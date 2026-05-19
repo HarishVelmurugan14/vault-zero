@@ -156,7 +156,7 @@ const STREAMS = {
 
   precious_metals_physical: {
     label: 'Precious Metals — Physical',
-    currentPriceCol: 'current_price',
+    currentPriceCol: null,
     manualPriceType: 'physical_precious_metal',
     amountCol: 'amount',
     assetTable: 'precious_metal_physical_assets',
@@ -167,6 +167,7 @@ const STREAMS = {
       { id: 'name', label: 'Name', type: 'text', required: true, placeholder: 'e.g. Gold Coin' },
       { id: 'metal_type', label: 'Metal', type: 'select', options: ['Gold', 'Silver'], required: true },
       { id: 'form', label: 'Form', type: 'select', options: ['Coin', 'Bar', 'Jewellery'], required: true },
+      { id: 'price_fetch_way', label: 'Price Source', type: 'select', options: ['manual', 'formula'], required: true },
     ],
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true },
@@ -219,6 +220,7 @@ const STREAMS = {
       { id: 'name', label: 'Property Name', type: 'text', required: true, placeholder: 'e.g. Thiyagadurugam | 10 Cent Land' },
       { id: 'location', label: 'Location', type: 'text', placeholder: 'City / Area' },
       { id: 'unit_of_measure', label: 'Unit', type: 'select', options: ['Cents', 'Sq.ft', 'Acres', 'Sq.m'], required: true },
+      { id: 'price_fetch_way', label: 'Price Source', type: 'select', options: ['manual', 'formula'], required: true },
     ],
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true },
