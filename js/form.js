@@ -524,6 +524,88 @@ async function renderManualPricePanel(container, stream, assetId) {
   });
 }
 
+// ── Balance update form for staticBalance streams (EPF, Bank Accounts) ───────
+
+async function renderBalanceUpdateForm(container, stream) {
+  let assets = [];
+  try { assets = (await API.getAssets(stream)).rows || []; } catch (_) {}
+  const active = assets.filter(a => String(a.is_active).toUpperCase() === 'TRUE');
+
+  const wrap = document.createElement('div');
+  wrap.className = 'form-fields';
+
+  // Asset selector
+  const { wrapper: assetWrapper, select: assetSelect } = renderAssetDropdown(active, stream);
+  wrap.appendChild(assetWrapper);
+
+  // Balance panel (shown after asset selected)
+  const panel = document.createElement('div');
+  panel.className = 'manual-price-panel';
+  panel.style.display = 'none';
+  wrap.appendChild(panel);
+
+  container.appendChild(wrap);
+
+  // Add new asset button
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn-secondary btn-sm';
+  addBtn.style.marginTop = '12px';
+  addBtn.textContent = '+ Add New Account';
+  addBtn.addEventListener('click', () => renderNewAssetForm(container, stream, active));
+  wrap.appendChild(addBtn);
+
+  assetSelect.addEventListener('change', async () => {
+    const assetId = assetSelect.value;
+    panel.style.display = assetId ? 'block' : 'none';
+    if (!assetId) return;
+
+    const asset = active.find(a => String(a.id) === assetId) || {};
+    const currentBal = parseFloat(asset[stream.currentBalanceCol] || 0);
+
+    panel.innerHTML = `
+      <div class="manual-price-header">
+        <span class="manual-price-title">Balance</span>
+        <span class="manual-price-current">${currentBal > 0 ? 'Current: ₹' + formatINR(currentBal) : 'Not set'}</span>
+      </div>
+      <div class="manual-price-fields">
+        <div class="field-group">
+          <label for="new-balance">New Balance (₹) *</label>
+          <input type="number" id="new-balance" step="0.01" placeholder="Enter current balance" />
+          <span class="field-error"></span>
+        </div>
+      </div>
+      <button type="button" class="btn-primary btn-sm balance-save">Update Balance</button>
+      <span class="manual-price-status"></span>
+    `;
+
+    panel.querySelector('.balance-save').addEventListener('click', async () => {
+      const input   = panel.querySelector('#new-balance');
+      const status  = panel.querySelector('.manual-price-status');
+      const saveBtn = panel.querySelector('.balance-save');
+      const val = parseFloat(input.value);
+      if (!val || val < 0) { showToast('Enter a valid balance', 'error'); return; }
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+      try {
+        await API.update(stream.assetTable, assetId, { [stream.currentBalanceCol]: val });
+        _insightsCache   = null;
+        _holdingsAllRows = null;
+        LSC.clear('insights', 'holdings');
+        status.textContent = `✓ Updated to ₹${formatINR(val)}`;
+        status.className = 'manual-price-status saved';
+        showToast('Balance updated!');
+      } catch (err) {
+        showToast('Failed: ' + err.message, 'error');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Update Balance';
+      }
+    });
+  });
+}
+
 // Utility helpers
 function todayStr() {
   return new Date().toISOString().split('T')[0];

@@ -163,6 +163,14 @@ async function startLogForm() {
     return;
   }
 
+  if (STATE.stream?.staticBalance) {
+    const container = document.getElementById('log-content');
+    container.innerHTML = '';
+    setHeader('log-content', STATE.category.name, () => renderCategories('log'));
+    await renderBalanceUpdateForm(container, STATE.stream);
+    return;
+  }
+
   const container = document.getElementById('log-content');
   container.innerHTML = '';
 

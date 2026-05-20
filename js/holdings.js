@@ -116,9 +116,11 @@ async function buildHoldingsRows() {
     { cat: CATEGORIES.find(c => c.id === 7), stream: STREAMS.crypto,                   subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 8), stream: STREAMS.equity_sip,               subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 9), stream: STREAMS.debt_hybrid_sip,          subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 10), stream: STREAMS.epf,                     subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 11), stream: STREAMS.bank_accounts,           subcatName: null },
   ];
 
-  const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable])), 'manual_prices'];
+  const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices'];
   let res = {};
   try {
     res = await API.batchGet(allSheets);
@@ -140,8 +142,23 @@ async function buildHoldingsRows() {
   for (const entry of streamEntries) {
     const { cat, stream, subcatName } = entry;
     const assets = res[stream.assetTable]?.rows || [];
-    const txns   = res[stream.txnTable]?.rows   || [];
     if (!assets.length) continue;
+
+    // ── staticBalance streams (EPF, Bank) — no transactions, read balance directly ──
+    if (stream.staticBalance) {
+      assets
+        .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
+        .forEach(a => {
+          const balance = parseFloat(a[stream.currentBalanceCol] || 0);
+          if (!balance) return;
+          rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
+                      subcategory: '', name: a[stream.assetNameCol],
+                      invested: balance, currentValue: balance });
+        });
+      continue;
+    }
+
+    const txns = res[stream.txnTable]?.rows || [];
 
     // Per-asset: track buy units + buy amount separately for avg cost method
     const buyUnitsByAsset = {};

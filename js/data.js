@@ -26,8 +26,10 @@ const CATEGORIES = [
   { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf', hasSubcategories: true },
   { id: 6, bucket_id: 3, name: 'Precious Metals', stream: 'precious_metals', hasSubcategories: true },
   { id: 7, bucket_id: 3, name: 'Cryptocurrency', stream: 'crypto', hasSubcategories: true },
-  { id: 8, bucket_id: 1, name: 'Indian EQ MF — SIP', stream: 'equity_sip', hasSubcategories: false },
+  { id: 8, bucket_id: 1, name: 'Indian EQ MF — SIP',    stream: 'equity_sip',      hasSubcategories: false },
   { id: 9, bucket_id: 2, name: 'Debt & Hybrid MF — SIP', stream: 'debt_hybrid_sip', hasSubcategories: false },
+  { id: 10, bucket_id: 2, name: 'EPF',           stream: 'epf',           hasSubcategories: false },
+  { id: 11, bucket_id: 2, name: 'Bank Accounts',  stream: 'bank_accounts', hasSubcategories: false },
 ];
 
 // Stream configurations — defines tables, asset form fields, transaction form fields
@@ -294,6 +296,33 @@ const STREAMS = {
       { id: 'sip_date', label: 'SIP Day of Month (1–28)', type: 'number', step: '1', placeholder: '5' },
       { id: 'effective_date', label: 'Effective Date', type: 'date', required: true },
       { id: 'reason', label: 'Reason', type: 'select', options: ['Regular', 'Rebalance', 'Redeem'], required: true },
+    ],
+  },
+
+  epf: {
+    label: 'EPF',
+    staticBalance: true,
+    currentBalanceCol: 'current_balance',
+    assetTable: 'epf_assets', txnTable: null,
+    assetIdCol: 'id', assetNameCol: 'account_name',
+    assetFields: [
+      { id: 'account_name',    label: 'Account Name',        type: 'text',   required: true, placeholder: 'e.g. Zoho EPF' },
+      { id: 'uan',             label: 'UAN',                  type: 'text',   placeholder: '101596118819' },
+      { id: 'current_balance', label: 'Current Balance (₹)',  type: 'number', step: '0.01', required: true },
+    ],
+  },
+
+  bank_accounts: {
+    label: 'Bank Accounts',
+    staticBalance: true,
+    currentBalanceCol: 'current_balance',
+    assetTable: 'bank_assets', txnTable: null,
+    assetIdCol: 'id', assetNameCol: 'account_name',
+    assetFields: [
+      { id: 'account_name',    label: 'Account Name',        type: 'text',   required: true, placeholder: 'e.g. HDFC Savings' },
+      { id: 'bank_name',       label: 'Bank',                 type: 'text',   required: true },
+      { id: 'account_type',    label: 'Type',  type: 'select', options: ['Savings', 'Current', 'FD', 'RD'], required: true },
+      { id: 'current_balance', label: 'Current Balance (₹)', type: 'number', step: '0.01', required: true },
     ],
   },
 

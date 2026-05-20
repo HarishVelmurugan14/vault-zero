@@ -457,6 +457,11 @@ function drawCharts(chartsArea, rawData) {
   taxSection.appendChild(makeReportCard('Estimated Tax Liability', 'report-tax-table', true));
   chartsArea.appendChild(taxSection);
 
+  // ── INDIAN EQ MUTUAL FUNDS ────────────────────────────────
+  const mfSection = makeSectionHeader('Indian EQ Mutual Funds — Fund Detail', '#22c55e');
+  mfSection.appendChild(makeReportCard('Per-Fund P&L (FIFO)', 'report-mf-detail', true));
+  chartsArea.appendChild(mfSection);
+
   requestAnimationFrame(() => {
     drawBucketChart(agg.byBucket);
     drawCategoryChart(agg.byCategory);
@@ -472,6 +477,7 @@ function drawCharts(chartsArea, rawData) {
     drawTopHoldingsChart(agg.topHoldings);
     drawPnLChart(agg.byCategory);
     drawTaxTable('report-tax-table', agg.byCategory);
+    drawMFReport('report-mf-detail', rawData);
   });
 }
 
@@ -486,8 +492,10 @@ const ENTRIES = [
   { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
   { catId: 6, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
   { catId: 7, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto,                   subcatName: null },
-  { catId: 8, catName: 'Indian EQ MF SIP',           bucketId: 1, stream: STREAMS.equity_sip,               subcatName: null },
-  { catId: 9, catName: 'Debt & Hybrid MF SIP',       bucketId: 2, stream: STREAMS.debt_hybrid_sip,          subcatName: null },
+  { catId: 8,  catName: 'Indian EQ MF SIP',     bucketId: 1, stream: STREAMS.equity_sip,      subcatName: null },
+  { catId: 9,  catName: 'Debt & Hybrid MF SIP', bucketId: 2, stream: STREAMS.debt_hybrid_sip, subcatName: null },
+  { catId: 10, catName: 'EPF',                  bucketId: 2, stream: STREAMS.epf,              subcatName: null },
+  { catId: 11, catName: 'Bank Accounts',         bucketId: 2, stream: STREAMS.bank_accounts,   subcatName: null },
 ];
 
 async function fetchAllInsightsData() {
@@ -498,7 +506,7 @@ async function fetchAllInsightsData() {
   }
 
   let data;
-  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable])), 'manual_prices'];
+  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices'];
 
   try {
     const res = await API.batchGet(allSheets);
@@ -597,6 +605,22 @@ function aggregateInsights(filteredData) {
 
     const assetMap = {};
     assets.forEach(a => { assetMap[String(a.id)] = a; });
+
+    // ── staticBalance streams (EPF, Bank) — read balance directly, no P&L ──
+    if (stream.staticBalance) {
+      assets
+        .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
+        .forEach(a => {
+          const balance = parseFloat(a[stream.currentBalanceCol] || 0);
+          if (!balance) return;
+          byCategory[catName].netCost      += balance;
+          byCategory[catName].currentValue  = (byCategory[catName].currentValue || 0) + balance;
+          byBucket[bucketId].netCost       += balance;
+          byBucket[bucketId].currentValue   = (byBucket[bucketId].currentValue || 0) + balance;
+          totalCurrentValue += balance;
+        });
+      return; // skip transaction-based logic for this stream
+    }
 
     const txnsByAsset = {};
     txns.forEach(t => {
@@ -1333,6 +1357,227 @@ function drawPnLChart(byCategory) {
       },
     },
   });
+}
+
+// ── Indian EQ MF Detailed Report — FIFO engine ───────────────────────────────
+
+function computeFIFOMFMetrics(stream, txns, currentNAV) {
+  const sorted = [...txns].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+
+  const lots       = [];   // { remaining: units, costPerUnit }
+  let totalInvested  = 0;
+  let totalWithdrawn = 0;
+  let realizedPnL    = 0;
+  const buyDates     = [];
+  let firstDate      = null;
+  let lastDate       = null;
+  const cashflows    = [];
+  let hasSells       = false;
+
+  sorted.forEach(t => {
+    const date  = new Date(t.txn_date);
+    if (isNaN(date)) return;
+    const units = parseFloat(t.units || 0);
+    const nav   = parseFloat(t.nav   || 0);
+    const amt   = getAmtINR(stream, t);
+
+    if (!firstDate) firstDate = date;
+    lastDate = date;
+
+    if (t.txn_type === 'Buy') {
+      const costPerUnit = units > 1e-6 ? amt / units : nav;
+      lots.push({ remaining: units, costPerUnit });
+      totalInvested += amt;
+      buyDates.push(date);
+      cashflows.push({ amount: -amt, date });
+
+    } else {  // Sell / Redeem / SWP
+      if (units < 1e-6) return;
+      hasSells = true;
+      const sellNavPerUnit = units > 1e-6 ? amt / units : nav;
+      let toSell = units;
+      totalWithdrawn += amt;
+      cashflows.push({ amount: amt, date });
+
+      while (toSell > 1e-6 && lots.length > 0) {
+        const lot      = lots[0];
+        const consumed = Math.min(lot.remaining, toSell);
+        realizedPnL   += consumed * (sellNavPerUnit - lot.costPerUnit);
+        lot.remaining -= consumed;
+        toSell        -= consumed;
+        if (lot.remaining < 1e-6) lots.shift();
+      }
+    }
+  });
+
+  const remainingUnits = lots.reduce((s, l) => s + l.remaining, 0);
+  const remainingCost  = lots.reduce((s, l) => s + l.remaining * l.costPerUnit, 0);
+  const isActive       = remainingUnits > 0.001;
+  const currentValue   = isActive && currentNAV > 0 ? remainingUnits * currentNAV : 0;
+  const unrealizedPnL  = currentValue > 0 ? currentValue - remainingCost : null;
+  const unrealizedPct  = unrealizedPnL !== null && remainingCost > 0
+    ? unrealizedPnL / remainingCost * 100 : null;
+
+  const absoluteReturn = totalInvested > 0
+    ? (currentValue + totalWithdrawn - totalInvested) / totalInvested * 100 : null;
+
+  // XIRR: for active funds add today's value as terminal CF; inactive funds
+  // already have the last sell as their terminal inflow — no addition needed.
+  const xirrCfs = [...cashflows];
+  if (isActive && currentValue > 0) {
+    xirrCfs.push({ amount: currentValue, date: new Date() });
+  }
+  const xirr = computeXIRR(xirrCfs);
+
+  // Avg days between consecutive buys
+  let avgDaysBetweenBuys = null;
+  if (buyDates.length >= 2) {
+    const span = buyDates[buyDates.length - 1] - buyDates[0];
+    avgDaysBetweenBuys = Math.round(span / ((buyDates.length - 1) * 86400000));
+  }
+
+  // Months held: first buy → today (active) or last transaction date (inactive)
+  const today   = new Date();
+  const endDate = isActive ? today : lastDate;
+  const monthsHeld = firstDate
+    ? Math.floor((endDate - firstDate) / (30.44 * 86400000)) : null;
+
+  return {
+    totalInvested, totalWithdrawn, realizedPnL,
+    remainingCost, remainingUnits, currentValue,
+    unrealizedPnL, unrealizedPct, isActive,
+    absoluteReturn, xirr,
+    firstDate, lastDate, monthsHeld,
+    avgDaysBetweenBuys, buyCount: buyDates.length, hasSells,
+  };
+}
+
+function buildMFReport(rawData) {
+  const entry = rawData.find(e => e.catId === 1 && e.stream === STREAMS.equity_mf);
+  if (!entry || !entry.assets?.length) return [];
+
+  const { stream, assets, txns } = entry;
+
+  const assetMap = {};
+  assets.forEach(a => { assetMap[String(a.id)] = a; });
+
+  const txnsByAsset = {};
+  txns.forEach(t => {
+    const aid = String(t[stream.assetIdCol]);
+    if (!txnsByAsset[aid]) txnsByAsset[aid] = [];
+    txnsByAsset[aid].push(t);
+  });
+
+  const funds = [];
+  Object.entries(txnsByAsset).forEach(([assetId, assetTxns]) => {
+    const asset      = assetMap[assetId];
+    if (!asset) return;
+    const currentNAV = parseFloat(asset[stream.currentPriceCol] || 0);
+    const m          = computeFIFOMFMetrics(stream, assetTxns, currentNAV);
+    funds.push({ name: asset[stream.assetNameCol] || 'Unknown', ...m });
+  });
+
+  funds.sort((a, b) => {
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    return a.isActive
+      ? b.currentValue - a.currentValue
+      : b.totalInvested - a.totalInvested;
+  });
+
+  return funds;
+}
+
+function drawMFReport(divId, rawData) {
+  const wrap = document.getElementById(divId);
+  if (!wrap) return;
+
+  const funds = buildMFReport(rawData);
+  if (!funds.length) {
+    wrap.innerHTML = '<p class="chart-empty">No equity mutual fund transactions yet.</p>';
+    return;
+  }
+
+  function fmtDate(d) {
+    if (!d) return '—';
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+  }
+  function fmtPct(v) {
+    if (v === null || v === undefined) return '<span style="color:var(--text-muted)">—</span>';
+    const cls = v >= 0 ? 'positive' : 'negative';
+    return `<span class="${cls}">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
+  }
+  function fmtPnL(v) {
+    if (v === null || v === undefined) return '<span style="color:var(--text-muted)">—</span>';
+    const cls = v >= 0 ? 'positive' : 'negative';
+    return `<span class="${cls}">${v >= 0 ? '+' : ''}${fmtCurrency(v)}</span>`;
+  }
+
+  let html = `<div class="report-table-wrap">
+  <table class="report-table mf-detail-table">
+    <thead><tr>
+      <th style="text-align:left">Fund</th>
+      <th>Status</th>
+      <th>Invested</th>
+      <th>Current Value</th>
+      <th>Unreal. P&amp;L ₹</th>
+      <th>Unreal. %</th>
+      <th>Total Invested</th>
+      <th>Withdrawn</th>
+      <th>Realized P&amp;L</th>
+      <th>Abs. Return %</th>
+      <th>XIRR</th>
+      <th>First Buy</th>
+      <th>Last Txn</th>
+      <th>Months</th>
+      <th>Avg Buy Gap</th>
+    </tr></thead>
+    <tbody>`;
+
+  funds.forEach(f => {
+    const badge = f.isActive
+      ? `<span class="mf-badge mf-badge-active">Active</span>`
+      : `<span class="mf-badge mf-badge-inactive">Inactive</span>`;
+
+    const investedDisp = f.isActive
+      ? fmtCurrency(f.remainingCost)
+      : `<span style="color:var(--text-muted)">₹0</span>`;
+
+    const cvDisp = f.currentValue > 0
+      ? fmtCurrency(f.currentValue)
+      : `<span style="color:var(--text-muted)">—</span>`;
+
+    const unrealPnL  = f.isActive ? fmtPnL(f.unrealizedPnL) : `<span style="color:var(--text-muted)">—</span>`;
+    const unrealPct  = f.isActive ? fmtPct(f.unrealizedPct)  : `<span style="color:var(--text-muted)">—</span>`;
+
+    const realPnL = f.hasSells
+      ? fmtPnL(f.realizedPnL)
+      : `<span style="color:var(--text-muted)">—</span>`;
+
+    const xirrDisp = f.xirr !== null
+      ? `<span class="${f.xirr >= 0 ? 'positive' : 'negative'}">${fmtXIRR(f.xirr)}</span>`
+      : `<span style="color:var(--text-muted)">—</span>`;
+
+    html += `<tr>
+      <td title="${f.name}">${f.name}</td>
+      <td style="text-align:center">${badge}</td>
+      <td>${investedDisp}</td>
+      <td>${cvDisp}</td>
+      <td>${unrealPnL}</td>
+      <td>${unrealPct}</td>
+      <td>${fmtCurrency(f.totalInvested)}</td>
+      <td>${f.totalWithdrawn > 0 ? fmtCurrency(f.totalWithdrawn) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td>${realPnL}</td>
+      <td>${fmtPct(f.absoluteReturn)}</td>
+      <td>${xirrDisp}</td>
+      <td style="white-space:nowrap">${fmtDate(f.firstDate)}</td>
+      <td style="white-space:nowrap">${fmtDate(f.lastDate)}</td>
+      <td>${f.monthsHeld !== null ? f.monthsHeld + 'm' : '—'}</td>
+      <td>${f.avgDaysBetweenBuys !== null ? f.avgDaysBetweenBuys + 'd' : '—'}</td>
+    </tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
 }
 
 // ── Cumulative line ───────────────────────────────────────────────────────────

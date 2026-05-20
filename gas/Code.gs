@@ -281,6 +281,9 @@ function setupAllSheets() {
     real_estate_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_unit', 'registration_cost', 'other_expenses', 'notes', 'created_at'],
 
     manual_prices: ['id', 'asset_type', 'asset_id', 'price_per_unit', 'price_date', 'created_at'],
+
+    epf_assets:  ['id', 'account_name', 'uan', 'current_balance', 'is_active', 'created_at'],
+    bank_assets: ['id', 'account_name', 'bank_name', 'account_type', 'current_balance', 'is_active', 'created_at'],
   };
 
   Object.entries(sheets).forEach(([name, headers]) => {
