@@ -1453,7 +1453,7 @@ function computeFIFOMFMetrics(stream, txns, currentNAV) {
 }
 
 function buildMFReport(rawData) {
-  const entry = rawData.find(e => e.catId === 1 && e.stream === STREAMS.equity_mf);
+  const entry = rawData.find(e => e.catId === 1 && e.stream?.txnTable === 'equity_transactions');
   if (!entry || !entry.assets?.length) return [];
 
   const { stream, assets, txns } = entry;

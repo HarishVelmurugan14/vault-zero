@@ -606,6 +606,70 @@ async function renderBalanceUpdateForm(container, stream) {
   });
 }
 
+// ── Add new account overlay for staticBalance streams ─────────────────────────
+
+function renderNewAssetForm(container, stream) {
+  const overlay = document.createElement('div');
+  overlay.className = 'asset-form-overlay';
+
+  const box = document.createElement('div');
+  box.className = 'asset-form-box';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Add New Account';
+  box.appendChild(title);
+
+  const form = document.createElement('form');
+  stream.assetFields.forEach(f => form.appendChild(renderField(f)));
+
+  const actions = document.createElement('div');
+  actions.className = 'form-actions';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn-secondary';
+  cancel.textContent = 'Cancel';
+  cancel.onclick = () => overlay.remove();
+
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'btn-primary';
+  save.textContent = 'Save Account';
+
+  actions.appendChild(cancel);
+  actions.appendChild(save);
+  form.appendChild(actions);
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const data = collectFormData(form, stream.assetFields);
+    data.is_active = true;
+    try {
+      save.disabled = true;
+      save.textContent = 'Saving...';
+      await API.createAsset(stream, data);
+      CACHE.clear(stream.assetTable);
+      _insightsCache   = null;
+      _holdingsAllRows = null;
+      LSC.clear('insights', 'holdings');
+      overlay.remove();
+      // Reload the balance update form so new account appears in dropdown
+      container.innerHTML = '';
+      await renderBalanceUpdateForm(container, stream);
+      showToast('Account saved!');
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error');
+      save.disabled = false;
+      save.textContent = 'Save Account';
+    }
+  });
+
+  box.appendChild(form);
+  overlay.appendChild(box);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
 // Utility helpers
 function todayStr() {
   return new Date().toISOString().split('T')[0];
