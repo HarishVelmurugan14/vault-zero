@@ -309,18 +309,26 @@ function seedReferenceData() {
     bucketsSheet.appendRow([3, 'Hedge & Opportunities', 'Alternative assets and hedges', now]);
   }
 
-  // Categories
+  // Categories — additive: append any missing ids
   const catSheet = ss.getSheetByName('categories');
-  if (catSheet.getLastRow() <= 1) {
-    const now = new Date().toISOString();
-    catSheet.appendRow([1, 1, 'Indian EQ Mutual Fund', '', now]);
-    catSheet.appendRow([2, 1, 'Indian Equity Stocks', '', now]);
-    catSheet.appendRow([3, 1, 'US Equity Stocks', '', now]);
-    catSheet.appendRow([4, 1, 'Real Estate', '', now]);
-    catSheet.appendRow([5, 2, 'Debt & Hybrid Mutual Fund', '', now]);
-    catSheet.appendRow([6, 3, 'Precious Metals', '', now]);
-    catSheet.appendRow([7, 3, 'Cryptocurrency', '', now]);
-  }
+  const now = new Date().toISOString();
+  const allCatRows = catSheet.getLastRow() > 1
+    ? catSheet.getRange(2, 1, catSheet.getLastRow() - 1, 1).getValues().map(r => r[0])
+    : [];
+  const missingCats = [
+    [1, 1, 'Indian EQ Mutual Fund',       '', now],
+    [2, 1, 'Indian Equity Stocks',         '', now],
+    [3, 1, 'US Equity Stocks',             '', now],
+    [4, 1, 'Real Estate',                  '', now],
+    [5, 2, 'Debt & Hybrid Mutual Fund',    '', now],
+    [6, 3, 'Precious Metals',              '', now],
+    [7, 3, 'Cryptocurrency',               '', now],
+    [8, 1, 'Indian EQ MF SIP',             '', now],
+    [9, 2, 'Debt & Hybrid MF SIP',         '', now],
+    [10, 2, 'EPF',                          '', now],
+    [11, 2, 'Bank Accounts',               '', now],
+  ].filter(row => !allCatRows.includes(row[0]));
+  missingCats.forEach(row => catSheet.appendRow(row));
 
   // Subcategories
   const subSheet = ss.getSheetByName('subcategories');

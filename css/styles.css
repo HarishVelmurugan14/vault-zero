@@ -139,6 +139,10 @@ body::before {
   margin: 0 auto;
 }
 
+#page-insights .page {
+  max-width: 1440px;
+}
+
 .page-header {
   display: flex;
   align-items: center;
@@ -1115,7 +1119,8 @@ body::before {
   box-shadow: 0 4px 24px rgba(0,0,0,0.4);
 }
 
-.chart-card-full { margin-top: 12px; }
+.chart-card-full { margin-top: 12px; overflow: visible; }
+.chart-card-full .report-table-wrap { overflow-x: auto; }
 
 .chart-card-title {
   font-size: 10.5px;
@@ -1384,8 +1389,13 @@ body::before {
 .mf-badge-active   { background: rgba(34,197,94,0.15);  color: #22c55e; }
 .mf-badge-inactive { background: rgba(107,114,128,0.15); color: #9ca3af; }
 
-.mf-detail-table { min-width: 1100px; }
-.mf-detail-table td:first-child { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mf-detail-table { width: 100%; }
+.mf-detail-table th,
+.mf-detail-table td { padding: 9px 8px; font-size: 12px; }
+.mf-detail-table th:first-child,
+.mf-detail-table td:first-child { padding-left: 12px; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mf-detail-table th:not(:first-child),
+.mf-detail-table td:not(:first-child) { white-space: nowrap; }
 
 /* ── Liquidity Ladder ────────────────────────────────────────────────────────── */
 
