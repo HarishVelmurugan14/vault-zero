@@ -1763,3 +1763,8 @@ body::before {
   .summary-card-value { font-size: 24px; }
   .insights-grid-3    { grid-template-columns: 1fr 1fr 1fr; }
 }
+
+#vz-token-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(79,70,229,0.25);
+}

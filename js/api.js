@@ -1,5 +1,13 @@
 // VaultZero — API layer (Google Apps Script calls)
 
+// ── API token (stored in localStorage) ───────────────────────────────────────
+const AUTH = {
+  TOKEN_KEY: 'vz_api_token',
+  get()        { return localStorage.getItem(this.TOKEN_KEY) || ''; },
+  set(token)   { localStorage.setItem(this.TOKEN_KEY, token); },
+  clear()      { localStorage.removeItem(this.TOKEN_KEY); },
+};
+
 const API = {
   async get(sheet, { limit = CONFIG.PAGE_SIZE, offset = 0, filters = {} } = {}) {
     const params = new URLSearchParams({
@@ -7,10 +15,13 @@ const API = {
       limit,
       offset,
       filters: JSON.stringify(filters),
+      token: AUTH.get(),
     });
     const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?${params}`);
     if (!res.ok) throw new Error(`GET ${sheet} failed: ${res.status}`);
-    return res.json();
+    const data = await res.json();
+    if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
+    return data;
   },
 
   async insert(sheet, row) {
@@ -32,10 +43,11 @@ const API = {
   async _post(payload) {
     const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, token: AUTH.get() }),
     });
     if (!res.ok) throw new Error(`POST failed: ${res.status}`);
     const data = await res.json();
+    if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
     if (data.error) throw new Error(data.error);
     return data;
   },
@@ -98,12 +110,13 @@ async function fetchAssetsCached(stream) {
 
 // ── Batch read (single request for Insights / Holdings) ────────────────────────
 API.batchGet = async function(sheets, limit = 5000) {
-  const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), limit });
+  const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), limit, token: AUTH.get() });
   const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?${params}`);
   if (!res.ok) throw new Error('batchGet failed: ' + res.status);
   const data = await res.json();
-  if (data.error) throw new Error(data.error); // old GAS returns error JSON with HTTP 200
-  return data; // { tableName: { rows, total }, ... }
+  if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
+  if (data.error) throw new Error(data.error);
+  return data;
 };
 
 // ── localStorage cache with 30-minute TTL ──────────────────────────────────────

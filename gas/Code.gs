@@ -7,8 +7,32 @@ function getSpreadsheet() {
   return SpreadsheetApp.openById(SS_ID);
 }
 
+// ── Token gate ────────────────────────────────────────────────────────────────
+// Run TEST_setApiToken('your-secret-key') once from the GAS editor to enable.
+// Pass '' to remove the gate.
+
+function checkToken(token) {
+  const stored = PropertiesService.getScriptProperties().getProperty('api_token');
+  if (!stored) return true;            // gate not set — allow all
+  return String(token || '').trim() === stored;
+}
+
+function TEST_setApiToken(token) {
+  const props = PropertiesService.getScriptProperties();
+  if (token) {
+    props.setProperty('api_token', String(token).trim());
+    Logger.log('api_token set');
+    return { set: true };
+  }
+  props.deleteProperty('api_token');
+  Logger.log('api_token cleared');
+  return { set: false };
+}
+
 function doGet(e) {
   try {
+    if (!checkToken(e.parameter.token)) return respond({ error: 'unauthorized' });
+
     // Batch read: ?action=batchGet&sheets=table1,table2,...&limit=5000
     if (e.parameter.action === 'batchGet') {
       const sheets = e.parameter.sheets.split(',');
@@ -36,6 +60,8 @@ function doPost(e) {
   try {
     const payload = JSON.parse(e.postData.contents);
     const { action, sheet, row, id, rows } = payload;
+
+    if (!checkToken(payload.token)) return respond({ error: 'unauthorized' });
 
     if (!sheet) return respond({ error: 'sheet required' }, 400);
 

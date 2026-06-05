@@ -23,8 +23,86 @@ async function loadSubcatNames() {
   } catch (_) {}
 }
 
+// ── API token modal ───────────────────────────────────────────────────────────
+
+function showTokenModal(invalid = false) {
+  document.getElementById('vz-token-modal')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'vz-token-modal';
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:9999;
+    background:rgba(10,11,15,0.92);backdrop-filter:blur(8px);
+    display:flex;align-items:center;justify-content:center;padding:20px;
+  `;
+
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+                padding:32px 28px;max-width:380px;width:100%;text-align:center;">
+      <div style="font-size:28px;margin-bottom:12px;">🔑</div>
+      <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:6px;">VaultZero</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:24px;">Enter your API key to continue</div>
+      ${invalid ? `<div style="font-size:12px;color:#ef4444;margin-bottom:14px;background:rgba(239,68,68,0.1);padding:8px 12px;border-radius:6px;">
+        Invalid key — try again</div>` : ''}
+      <input id="vz-token-input" type="password" placeholder="Paste your API key"
+        style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);
+               border-radius:8px;padding:11px 14px;color:var(--text);font-size:14px;
+               outline:none;margin-bottom:14px;"
+        autocomplete="off" />
+      <button id="vz-token-submit"
+        style="width:100%;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;
+               border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;
+               cursor:pointer;">
+        Unlock
+      </button>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const input  = overlay.querySelector('#vz-token-input');
+  const submit = overlay.querySelector('#vz-token-submit');
+
+  input.focus();
+
+  async function tryToken() {
+    const token = input.value.trim();
+    if (!token) return;
+    submit.disabled = true;
+    submit.textContent = 'Checking…';
+    AUTH.set(token);
+    try {
+      // Test with a lightweight call
+      await API.get('buckets', { limit: 1 });
+      overlay.remove();          // success — app is now unlocked
+      loadSubcatNames();
+      renderNav();
+      showPage('log');
+    } catch (err) {
+      if (err.message === 'unauthorized') {
+        AUTH.clear();
+        showTokenModal(true);    // show invalid-key message
+      } else {
+        // Network/other error — token might be fine, let them in
+        overlay.remove();
+        renderNav();
+        showPage('log');
+      }
+    }
+  }
+
+  submit.addEventListener('click', tryToken);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') tryToken(); });
+}
+
 // Boot
 document.addEventListener('DOMContentLoaded', () => {
+  // If no token saved yet, show the key modal before anything else
+  if (!AUTH.get()) {
+    showTokenModal();
+    return;
+  }
+
   loadSubcatNames(); // fire-and-forget — populates SUBCAT_NAMES before user reaches Holdings/Insights
   renderNav();
   showPage('log');
