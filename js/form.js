@@ -636,6 +636,15 @@ async function renderGoalTransactionForm(container, stream, category, subcategor
   manageBar.appendChild(manageBtn);
   container.appendChild(manageBar);
 
+  // No goals yet — prompt to add via Manage Goals
+  if (!goals.length) {
+    const empty = document.createElement('div');
+    empty.className = 'goal-empty-state';
+    empty.textContent = `No goals yet for ${subcategory.name}. Tap "⚙ Manage Goals" above to add your first one.`;
+    container.appendChild(empty);
+    return;
+  }
+
   // Funds for this subcategory
   let assets = [];
   try {
