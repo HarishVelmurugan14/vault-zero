@@ -275,17 +275,22 @@ function renderAssetForm(container, stream, category, subcategory) {
       overlay.remove();
       // Reload the transaction form with new asset pre-selected
       const formContainer = document.getElementById('form-fields');
-      await renderTransactionForm(formContainer, stream, category, subcategory);
-      // Pre-select the newly created asset
-      const assetSel = formContainer.querySelector('#field-asset-name');
-      if (assetSel) {
-        // Re-fetch to get new asset in list
-        const assets = await fetchAssetsCached(stream);
-        const newAsset = assets.find(a => a.id === result.id);
-        if (newAsset) {
-          const opts = assetSel.querySelectorAll('option');
-          opts.forEach(o => { if (o.value == result.id) { o.selected = true; assetSel.dispatchEvent(new Event('change')); } });
+      if (formContainer) {
+        await renderTransactionForm(formContainer, stream, category, subcategory);
+        // Pre-select the newly created asset
+        const assetSel = formContainer.querySelector('#field-asset-name');
+        if (assetSel) {
+          // Re-fetch to get new asset in list
+          const assets = await fetchAssetsCached(stream);
+          const newAsset = assets.find(a => a.id === result.id);
+          if (newAsset) {
+            const opts = assetSel.querySelectorAll('option');
+            opts.forEach(o => { if (o.value == result.id) { o.selected = true; assetSel.dispatchEvent(new Event('change')); } });
+          }
         }
+      } else {
+        // Goal flow (no #form-fields) — re-render via the router
+        await startLogForm();
       }
       showToast('Asset saved!');
     } catch (err) {
@@ -604,6 +609,182 @@ async function renderBalanceUpdateForm(container, stream) {
       }
     });
   });
+}
+
+// ── Goal-tracked transaction form (debt Commitment / Yearly Bills) ────────────
+
+// Fetch active goals for a subcategory
+async function fetchActiveGoals(stream, subcategoryId) {
+  if (!stream.goalTable) return [];
+  try {
+    const res = await API.get(stream.goalTable, { limit: 200, filters: { subcategory_id: subcategoryId } });
+    return (res.rows || []).filter(g => String(g.is_active).toUpperCase() === 'TRUE');
+  } catch (_) { return []; }
+}
+
+async function renderGoalTransactionForm(container, stream, category, subcategory, goals) {
+  container.innerHTML = '';
+
+  // Funds for this subcategory
+  let assets = [];
+  try {
+    const all = await fetchAssetsCached(stream);
+    assets = all.filter(a => String(a.subcategory_id) === String(subcategory.id));
+  } catch (_) { showToast('Could not load funds.', 'error'); }
+
+  // Fund dropdown
+  const { wrapper: assetWrapper, select: assetSelect } = renderAssetDropdown(assets, stream);
+  container.appendChild(assetWrapper);
+
+  // Body (shown once a fund is selected)
+  const body = document.createElement('div');
+  body.id = 'goal-form-body';
+  body.style.display = 'none';
+  container.appendChild(body);
+
+  assetSelect.addEventListener('change', () => {
+    const val = assetSelect.value;
+    if (val === '__new__') {
+      assetSelect.value = '';
+      renderAssetForm(container, stream, category, subcategory);
+      return;
+    }
+    body.style.display = val ? 'block' : 'none';
+    if (val) buildGoalBody(body, stream, goals, val);
+  });
+}
+
+function buildGoalBody(body, stream, goals, fundId) {
+  body.innerHTML = '';
+
+  // Shared fields: type, date, NAV
+  body.appendChild(renderField({ id: 'goal-type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true }, 'Buy'));
+  body.appendChild(renderField({ id: 'goal-date', label: 'Date', type: 'date', required: true }, todayStr()));
+  body.appendChild(renderField({ id: 'goal-nav', label: 'NAV (₹)', type: 'number', step: '0.0001', required: true }));
+
+  const section = document.createElement('div');
+  section.id = 'goal-section';
+  body.appendChild(section);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-primary';
+  btn.textContent = 'Save Transaction';
+  body.appendChild(btn);
+
+  const typeSel = body.querySelector('#field-goal-type');
+
+  function renderSection() {
+    section.innerHTML = '';
+    if (typeSel.value === 'Buy') {
+      const grid = document.createElement('div');
+      grid.className = 'goal-buy-grid';
+      goals.forEach(g => {
+        const row = document.createElement('div');
+        row.className = 'goal-buy-row';
+        const name = document.createElement('span');
+        name.className = 'goal-buy-name';
+        name.textContent = g.name;
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.step = '0.01';
+        inp.className = 'goal-amount-input';
+        inp.placeholder = '0';
+        inp.dataset.goalId = g.id;
+        if (g.default_amount !== '' && g.default_amount !== undefined && g.default_amount !== null) {
+          inp.value = parseFloat(g.default_amount);
+        }
+        row.appendChild(name);
+        row.appendChild(inp);
+        grid.appendChild(row);
+      });
+      section.appendChild(grid);
+    } else {
+      // Sell — single goal + amount + reason
+      const gWrap = document.createElement('div');
+      gWrap.className = 'field-group';
+      const lbl = document.createElement('label');
+      lbl.textContent = 'Goal *';
+      const gSel = document.createElement('select');
+      gSel.id = 'goal-sell-select';
+      gSel.innerHTML = '<option value="">Select goal</option>' +
+        goals.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+      gWrap.appendChild(lbl);
+      gWrap.appendChild(gSel);
+      section.appendChild(gWrap);
+      section.appendChild(renderField({ id: 'goal-sell-amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true }));
+      section.appendChild(renderField({ id: 'goal-sell-notes', label: 'Reason', type: 'text', placeholder: 'e.g. Amma recharge done' }));
+    }
+  }
+
+  typeSel.addEventListener('change', renderSection);
+  renderSection();
+
+  btn.addEventListener('click', () => submitGoalTxn(stream, fundId, body, btn, renderSection));
+}
+
+async function submitGoalTxn(stream, fundId, body, btn, renderSection) {
+  const txnType = body.querySelector('#field-goal-type').value;
+  const txnDate = body.querySelector('#field-goal-date').value;
+  const nav     = parseFloat(body.querySelector('#field-goal-nav').value);
+
+  if (!txnDate)        { showToast('Select a date', 'error'); return; }
+  if (!nav || nav <= 0) { showToast('Enter a valid NAV', 'error'); return; }
+
+  const rows = [];
+
+  if (txnType === 'Buy') {
+    body.querySelectorAll('.goal-amount-input').forEach(inp => {
+      const amount = parseFloat(inp.value);
+      if (amount && amount > 0) {
+        rows.push({
+          [stream.assetIdCol]: fundId,
+          txn_type: 'Buy',
+          txn_date: txnDate,
+          nav,
+          amount: Math.round(amount * 100) / 100,
+          units: Math.round((amount / nav) * 1e6) / 1e6,
+          [stream.goalIdCol]: inp.dataset.goalId,
+          notes: '',
+        });
+      }
+    });
+    if (!rows.length) { showToast('Enter at least one amount', 'error'); return; }
+  } else {
+    const goalId = body.querySelector('#goal-sell-select').value;
+    const amount = parseFloat(body.querySelector('#field-goal-sell-amount').value);
+    const notes  = body.querySelector('#field-goal-sell-notes').value;
+    if (!goalId)          { showToast('Select a goal', 'error'); return; }
+    if (!amount || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    rows.push({
+      [stream.assetIdCol]: fundId,
+      txn_type: 'Sell',
+      txn_date: txnDate,
+      nav,
+      amount: Math.round(amount * 100) / 100,
+      units: Math.round((amount / nav) * 1e6) / 1e6,
+      [stream.goalIdCol]: goalId,
+      notes,
+    });
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    for (const row of rows) {
+      await API.insert(stream.txnTable, row);
+    }
+    _insightsCache   = null;
+    _holdingsAllRows = null;
+    LSC.clear('insights', 'holdings');
+    showToast(`${rows.length} transaction${rows.length > 1 ? 's' : ''} saved!`);
+    renderSection();  // reset inputs
+  } catch (err) {
+    showToast('Failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Transaction';
+  }
 }
 
 // ── Add new account overlay for staticBalance streams ─────────────────────────

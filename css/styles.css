@@ -1389,6 +1389,52 @@ body::before {
 .mf-badge-active   { background: rgba(34,197,94,0.15);  color: #22c55e; }
 .mf-badge-inactive { background: rgba(107,114,128,0.15); color: #9ca3af; }
 
+/* ── Goal buy grid (debt goal transaction form) ──────────────────────────────── */
+
+.goal-buy-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+.goal-buy-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.goal-buy-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+}
+.goal-amount-input {
+  width: 120px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  text-align: right;
+}
+.goal-amount-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79,70,229,0.25);
+}
+
+/* ── Debt goal tracker (insights) ────────────────────────────────────────────── */
+
+.debt-goal-group { margin-bottom: 18px; }
+.debt-goal-group:last-child { margin-bottom: 0; }
+.debt-goal-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.3px;
+  margin-bottom: 8px;
+}
+
 .mf-detail-table { width: 100%; }
 .mf-detail-table th,
 .mf-detail-table td { padding: 9px 8px; font-size: 12px; }

@@ -30,6 +30,7 @@ function fmtXIRR(r) {
 let _insightsCache = null;
 let _insightsCharts = [];
 let _manualPricesMap = {};
+let _debtGoalsList = [];
 
 const INSIGHT_FILTERS = {
   catName:   '',
@@ -462,6 +463,11 @@ function drawCharts(chartsArea, rawData) {
   mfSection.appendChild(makeReportCard('Per-Fund P&L (FIFO)', 'report-mf-detail', true));
   chartsArea.appendChild(mfSection);
 
+  // ── DEBT FUND GOALS ───────────────────────────────────────
+  const debtGoalSection = makeSectionHeader('Debt Fund Goals', '#0891b2');
+  debtGoalSection.appendChild(makeReportCard('Goal Balances', 'report-debt-goals', true));
+  chartsArea.appendChild(debtGoalSection);
+
   requestAnimationFrame(() => {
     drawBucketChart(agg.byBucket);
     drawCategoryChart(agg.byCategory);
@@ -478,6 +484,7 @@ function drawCharts(chartsArea, rawData) {
     drawPnLChart(agg.byCategory);
     drawTaxTable('report-tax-table', agg.byCategory);
     drawMFReport('report-mf-detail', rawData);
+    drawDebtGoalsReport('report-debt-goals', rawData);
   });
 }
 
@@ -502,15 +509,17 @@ async function fetchAllInsightsData() {
   const cached = LSC.get('insights');
   if (cached) {
     _manualPricesMap = cached.manualPrices || {};
+    _debtGoalsList   = cached.debtGoals || [];
     return cached.entries;
   }
 
   let data;
-  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices'];
+  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices', 'debt_goals'];
 
   try {
     const res = await API.batchGet(allSheets);
     _manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
+    _debtGoalsList   = res['debt_goals']?.rows || [];
     data = ENTRIES.map(entry => ({
       ...entry,
       assets: res[entry.stream.assetTable]?.rows || [],
@@ -535,9 +544,13 @@ async function fetchAllInsightsData() {
       const mpRes = await API.get('manual_prices', { limit: 1000 });
       _manualPricesMap = buildManualPricesMap(mpRes.rows || []);
     } catch (_) {}
+    try {
+      const gRes = await API.get('debt_goals', { limit: 500 });
+      _debtGoalsList = gRes.rows || [];
+    } catch (_) {}
   }
 
-  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap });
+  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, debtGoals: _debtGoalsList });
   return data;
 }
 
@@ -1577,6 +1590,89 @@ function drawMFReport(divId, rawData) {
   });
 
   html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
+}
+
+// ── Debt Fund Goals Tracker ───────────────────────────────────────────────────
+
+function drawDebtGoalsReport(divId, rawData) {
+  const wrap = document.getElementById(divId);
+  if (!wrap) return;
+
+  const goals = _debtGoalsList || [];
+  if (!goals.length) {
+    wrap.innerHTML = '<p class="chart-empty">No debt goals defined. Add rows to the debt_goals sheet.</p>';
+    return;
+  }
+
+  const entry = rawData.find(e => e.catId === 5 && e.stream?.txnTable === 'debt_hybrid_transactions');
+  if (!entry) {
+    wrap.innerHTML = '<p class="chart-empty">No debt fund data.</p>';
+    return;
+  }
+
+  const stream = entry.stream;
+
+  // fund_id → current NAV
+  const navByFund = {};
+  (entry.assets || []).forEach(a => { navByFund[String(a.id)] = parseFloat(a[stream.currentPriceCol] || 0); });
+
+  // Aggregate per goal: amounts + units-per-fund (so current value uses each fund's NAV)
+  const agg = {};
+  (entry.txns || []).forEach(t => {
+    const goalId = String(t[stream.goalIdCol] || '');
+    if (!goalId) return;
+    const fundId = String(t[stream.assetIdCol]);
+    const amt    = parseFloat(t.amount || 0);
+    const units  = parseFloat(t.units  || 0);
+    if (!agg[goalId]) agg[goalId] = { buyAmt: 0, sellAmt: 0, units: {} };
+    const g = agg[goalId];
+    if (t.txn_type === 'Buy') { g.buyAmt  += amt; g.units[fundId] = (g.units[fundId] || 0) + units; }
+    else                      { g.sellAmt += amt; g.units[fundId] = (g.units[fundId] || 0) - units; }
+  });
+
+  // Group goals by subcategory
+  const bySubcat = {};
+  goals.forEach(goal => {
+    const a = agg[String(goal.id)] || { buyAmt: 0, sellAmt: 0, units: {} };
+    const netInvested = a.buyAmt - a.sellAmt;
+    let currentValue = 0;
+    Object.entries(a.units).forEach(([fundId, u]) => { currentValue += u * (navByFund[fundId] || 0); });
+    const target  = parseFloat(goal.target_amount || 0);
+    const subName = SUBCAT_NAMES[goal.subcategory_id] || ('Subcategory ' + goal.subcategory_id);
+    if (!bySubcat[subName]) bySubcat[subName] = [];
+    bySubcat[subName].push({ name: goal.name, netInvested, currentValue, target });
+  });
+
+  // Render — one table per subcategory; target/progress columns only if any goal has a target
+  let html = '';
+  Object.entries(bySubcat).forEach(([subName, rows]) => {
+    const hasTarget = rows.some(r => r.target > 0);
+    html += `<div class="debt-goal-group">
+      <div class="debt-goal-group-title">${subName}</div>
+      <div class="report-table-wrap"><table class="report-table"><thead><tr>
+        <th style="text-align:left">Goal</th>
+        ${hasTarget ? '<th>Target</th>' : ''}
+        <th>Net Invested</th>
+        <th>Current Value</th>
+        ${hasTarget ? '<th>Progress</th>' : ''}
+      </tr></thead><tbody>`;
+
+    rows.forEach(r => {
+      const cvCls    = r.currentValue < 0 ? 'negative' : '';
+      const progress = r.target > 0 ? (r.currentValue / r.target * 100) : null;
+      html += `<tr>
+        <td>${r.name}</td>
+        ${hasTarget ? `<td>${r.target > 0 ? fmtCurrency(r.target) : '—'}</td>` : ''}
+        <td>${fmtCurrency(r.netInvested)}</td>
+        <td class="${cvCls}">${fmtCurrency(r.currentValue)}</td>
+        ${hasTarget ? `<td>${progress !== null ? progress.toFixed(0) + '%' : '—'}</td>` : ''}
+      </tr>`;
+    });
+
+    html += `</tbody></table></div></div>`;
+  });
+
   wrap.innerHTML = html;
 }
 

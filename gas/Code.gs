@@ -242,6 +242,20 @@ function writePriceFormula(sheet, sheetName, headers, rowNum) {
   if (formula) sheet.getRange(rowNum, priceIdx + 1).setFormula(formula);
 }
 
+// Run once to add goal_id column to existing debt_hybrid_transactions sheet
+function migrateAddGoalColumn() {
+  const ss    = getSpreadsheet();
+  const sheet = ss.getSheetByName('debt_hybrid_transactions');
+  if (!sheet || sheet.getLastRow() === 0) { Logger.log('Sheet not found or empty'); return; }
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.includes('goal_id')) { Logger.log('goal_id already exists'); return; }
+  // Insert goal_id before the last column (created_at)
+  const lastCol = headers.length;
+  sheet.insertColumnBefore(lastCol);
+  sheet.getRange(1, lastCol).setValue('goal_id');
+  Logger.log('goal_id column added at col ' + lastCol);
+}
+
 // Run once in GAS editor to add price column + formulas to existing asset rows
 function migrateAddPriceColumns() {
   const ss = getSpreadsheet();
@@ -284,7 +298,8 @@ function setupAllSheets() {
     equity_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 
     debt_hybrid_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'current_nav', 'created_at'],
-    debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
+    debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'goal_id', 'notes', 'created_at'],
+    debt_goals: ['id', 'subcategory_id', 'name', 'default_amount', 'target_amount', 'is_active', 'notes', 'created_at'],
     debt_hybrid_sip_mandates: ['id', 'fund_id', 'platform', 'mandate_ref', 'created_at'],
     debt_hybrid_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 
