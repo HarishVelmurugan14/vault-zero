@@ -625,6 +625,17 @@ async function fetchActiveGoals(stream, subcategoryId) {
 async function renderGoalTransactionForm(container, stream, category, subcategory, goals) {
   container.innerHTML = '';
 
+  // Manage goals bar
+  const manageBar = document.createElement('div');
+  manageBar.className = 'goal-manage-bar';
+  const manageBtn = document.createElement('button');
+  manageBtn.type = 'button';
+  manageBtn.className = 'btn-secondary btn-sm';
+  manageBtn.textContent = '⚙ Manage Goals';
+  manageBtn.addEventListener('click', () => renderManageGoalsOverlay(stream, subcategory, () => startLogForm()));
+  manageBar.appendChild(manageBtn);
+  container.appendChild(manageBar);
+
   // Funds for this subcategory
   let assets = [];
   try {
@@ -785,6 +796,140 @@ async function submitGoalTxn(stream, fundId, body, btn, renderSection) {
     btn.disabled = false;
     btn.textContent = 'Save Transaction';
   }
+}
+
+// ── Manage Goals overlay (add / remove goals for a subcategory) ───────────────
+
+async function renderManageGoalsOverlay(stream, subcategory, onDone) {
+  const overlay = document.createElement('div');
+  overlay.className = 'asset-form-overlay';
+
+  const box = document.createElement('div');
+  box.className = 'asset-form-box';
+
+  const title = document.createElement('h3');
+  title.textContent = `Manage Goals — ${subcategory.name}`;
+  box.appendChild(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'goal-manage-hint';
+  hint.textContent = 'Set a Default Amount for recurring bills (prefilled each month), or a Target Amount for goals you save toward.';
+  box.appendChild(hint);
+
+  // Existing goals list
+  const listWrap = document.createElement('div');
+  listWrap.className = 'goal-manage-list';
+  box.appendChild(listWrap);
+
+  // Add-goal form
+  const addTitle = document.createElement('div');
+  addTitle.className = 'goal-manage-add-title';
+  addTitle.textContent = 'Add Goal';
+  box.appendChild(addTitle);
+
+  const nameField = renderField({ id: 'goalmgr-name', label: 'Goal Name', type: 'text', required: true, placeholder: 'e.g. Bike, Insurance' });
+  const defField  = renderField({ id: 'goalmgr-default', label: 'Default Amount (₹/month)', type: 'number', step: '0.01' });
+  const tgtField  = renderField({ id: 'goalmgr-target', label: 'Target Amount (₹)', type: 'number', step: '0.01' });
+  box.appendChild(nameField);
+  box.appendChild(defField);
+  box.appendChild(tgtField);
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn-primary btn-sm';
+  addBtn.textContent = '+ Add Goal';
+  box.appendChild(addBtn);
+
+  // Footer
+  const actions = document.createElement('div');
+  actions.className = 'form-actions';
+  const doneBtn = document.createElement('button');
+  doneBtn.type = 'button';
+  doneBtn.className = 'btn-secondary';
+  doneBtn.textContent = 'Done';
+  actions.appendChild(doneBtn);
+  box.appendChild(actions);
+
+  async function loadGoals() {
+    const goals = await fetchActiveGoals(stream, subcategory.id);
+    listWrap.innerHTML = '';
+    if (!goals.length) {
+      listWrap.innerHTML = '<div class="goal-manage-empty">No goals yet — add one below.</div>';
+      return;
+    }
+    goals.forEach(g => {
+      const row = document.createElement('div');
+      row.className = 'goal-manage-row';
+      const meta = (g.default_amount !== '' && g.default_amount != null && g.default_amount !== '')
+        ? `₹${parseFloat(g.default_amount).toLocaleString('en-IN')}/mo`
+        : ((g.target_amount !== '' && g.target_amount != null && g.target_amount !== '')
+            ? `target ₹${parseFloat(g.target_amount).toLocaleString('en-IN')}` : '');
+      const name = document.createElement('span');
+      name.className = 'goal-manage-name';
+      name.textContent = g.name;
+      const metaEl = document.createElement('span');
+      metaEl.className = 'goal-manage-meta';
+      metaEl.textContent = meta;
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'btn-secondary btn-sm';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', async () => {
+        rm.disabled = true;
+        try {
+          await API.update(stream.goalTable, g.id, { is_active: false });
+          _insightsCache = null;
+          LSC.clear('insights', 'holdings');
+          await loadGoals();
+        } catch (e) {
+          showToast('Failed: ' + e.message, 'error');
+          rm.disabled = false;
+        }
+      });
+      row.appendChild(name);
+      row.appendChild(metaEl);
+      row.appendChild(rm);
+      listWrap.appendChild(row);
+    });
+  }
+
+  addBtn.addEventListener('click', async () => {
+    const name = box.querySelector('#field-goalmgr-name').value.trim();
+    const def  = box.querySelector('#field-goalmgr-default').value;
+    const tgt  = box.querySelector('#field-goalmgr-target').value;
+    if (!name) { showToast('Enter a goal name', 'error'); return; }
+
+    addBtn.disabled = true;
+    addBtn.textContent = 'Adding…';
+    try {
+      await API.insert(stream.goalTable, {
+        subcategory_id: subcategory.id,
+        name,
+        default_amount: def === '' ? '' : parseFloat(def),
+        target_amount:  tgt === '' ? '' : parseFloat(tgt),
+        is_active: true,
+      });
+      _insightsCache = null;
+      LSC.clear('insights', 'holdings');
+      box.querySelector('#field-goalmgr-name').value = '';
+      box.querySelector('#field-goalmgr-default').value = '';
+      box.querySelector('#field-goalmgr-target').value = '';
+      await loadGoals();
+      showToast('Goal added');
+    } catch (e) {
+      showToast('Failed: ' + e.message, 'error');
+    } finally {
+      addBtn.disabled = false;
+      addBtn.textContent = '+ Add Goal';
+    }
+  });
+
+  doneBtn.addEventListener('click', () => { overlay.remove(); if (onDone) onDone(); });
+  overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); if (onDone) onDone(); } });
+
+  await loadGoals();
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 // ── Add new account overlay for staticBalance streams ─────────────────────────

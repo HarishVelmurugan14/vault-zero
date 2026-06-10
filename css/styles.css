@@ -1423,6 +1423,35 @@ body::before {
   box-shadow: 0 0 0 3px rgba(79,70,229,0.25);
 }
 
+/* ── Manage goals overlay ────────────────────────────────────────────────────── */
+
+.goal-manage-bar { margin-bottom: 12px; }
+.goal-manage-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.goal-manage-list { margin-bottom: 8px; }
+.goal-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.goal-manage-name { flex: 1; font-size: 13px; color: var(--text); }
+.goal-manage-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.goal-manage-empty { color: var(--text-muted); font-size: 13px; padding: 10px 0; }
+.goal-manage-add-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin: 18px 0 10px;
+}
+
 /* ── Debt goal tracker (insights) ────────────────────────────────────────────── */
 
 .debt-goal-group { margin-bottom: 18px; }
