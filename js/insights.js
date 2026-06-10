@@ -31,6 +31,7 @@ let _insightsCache = null;
 let _insightsCharts = [];
 let _manualPricesMap = {};
 let _debtGoalsList = [];
+let _billCyclesList = [];
 
 const INSIGHT_FILTERS = {
   catName:   '',
@@ -510,16 +511,18 @@ async function fetchAllInsightsData() {
   if (cached) {
     _manualPricesMap = cached.manualPrices || {};
     _debtGoalsList   = cached.debtGoals || [];
+    _billCyclesList  = cached.billCycles || [];
     return cached.entries;
   }
 
   let data;
-  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices', 'debt_goals'];
+  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices', 'debt_goals', 'bill_cycles'];
 
   try {
     const res = await API.batchGet(allSheets);
     _manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
     _debtGoalsList   = res['debt_goals']?.rows || [];
+    _billCyclesList  = res['bill_cycles']?.rows || [];
     data = ENTRIES.map(entry => ({
       ...entry,
       assets: res[entry.stream.assetTable]?.rows || [],
@@ -548,9 +551,13 @@ async function fetchAllInsightsData() {
       const gRes = await API.get('debt_goals', { limit: 500 });
       _debtGoalsList = gRes.rows || [];
     } catch (_) {}
+    try {
+      const cRes = await API.get('bill_cycles', { limit: 2000 });
+      _billCyclesList = cRes.rows || [];
+    } catch (_) {}
   }
 
-  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, debtGoals: _debtGoalsList });
+  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, debtGoals: _debtGoalsList, billCycles: _billCyclesList });
   return data;
 }
 
@@ -1595,13 +1602,18 @@ function drawMFReport(divId, rawData) {
 
 // ── Debt Fund Goals Tracker ───────────────────────────────────────────────────
 
+function _monthsDiffInsights(a, b) {
+  const da = new Date(a), db = new Date(b);
+  return Math.max(0, (db.getFullYear() * 12 + db.getMonth()) - (da.getFullYear() * 12 + da.getMonth()));
+}
+
 function drawDebtGoalsReport(divId, rawData) {
   const wrap = document.getElementById(divId);
   if (!wrap) return;
 
   const goals = _debtGoalsList || [];
   if (!goals.length) {
-    wrap.innerHTML = '<p class="chart-empty">No debt goals defined. Add rows to the debt_goals sheet.</p>';
+    wrap.innerHTML = '<p class="chart-empty">No debt goals defined yet.</p>';
     return;
   }
 
@@ -1612,68 +1624,215 @@ function drawDebtGoalsReport(divId, rawData) {
   }
 
   const stream = entry.stream;
+  const cycleSubcats = stream.cycleSubcategories || [];
 
   // fund_id → current NAV
   const navByFund = {};
   (entry.assets || []).forEach(a => { navByFund[String(a.id)] = parseFloat(a[stream.currentPriceCol] || 0); });
 
-  // Aggregate per goal: amounts + units-per-fund (so current value uses each fund's NAV)
-  const agg = {};
+  // transactions grouped by goal
+  const txnsByGoal = {};
   (entry.txns || []).forEach(t => {
     const goalId = String(t[stream.goalIdCol] || '');
     if (!goalId) return;
-    const fundId = String(t[stream.assetIdCol]);
-    const amt    = parseFloat(t.amount || 0);
-    const units  = parseFloat(t.units  || 0);
-    if (!agg[goalId]) agg[goalId] = { buyAmt: 0, sellAmt: 0, units: {} };
-    const g = agg[goalId];
-    if (t.txn_type === 'Buy') { g.buyAmt  += amt; g.units[fundId] = (g.units[fundId] || 0) + units; }
-    else                      { g.sellAmt += amt; g.units[fundId] = (g.units[fundId] || 0) - units; }
+    (txnsByGoal[goalId] = txnsByGoal[goalId] || []).push(t);
   });
 
-  // Group goals by subcategory
+  // cycles grouped by goal
+  const cyclesByGoal = {};
+  (_billCyclesList || []).forEach(c => {
+    const gid = String(c.goal_id);
+    (cyclesByGoal[gid] = cyclesByGoal[gid] || []).push(c);
+  });
+
+  // group goals by subcategory
   const bySubcat = {};
   goals.forEach(goal => {
-    const a = agg[String(goal.id)] || { buyAmt: 0, sellAmt: 0, units: {} };
-    const netInvested = a.buyAmt - a.sellAmt;
-    let currentValue = 0;
-    Object.entries(a.units).forEach(([fundId, u]) => { currentValue += u * (navByFund[fundId] || 0); });
-    const target  = parseFloat(goal.target_amount || 0);
     const subName = SUBCAT_NAMES[goal.subcategory_id] || ('Subcategory ' + goal.subcategory_id);
-    if (!bySubcat[subName]) bySubcat[subName] = [];
-    bySubcat[subName].push({ name: goal.name, netInvested, currentValue, target });
+    if (!bySubcat[subName]) bySubcat[subName] = { cycle: cycleSubcats.includes(subName), goals: [] };
+    bySubcat[subName].goals.push(goal);
   });
 
-  // Render — one table per subcategory; target/progress columns only if any goal has a target
   let html = '';
-  Object.entries(bySubcat).forEach(([subName, rows]) => {
-    const hasTarget = rows.some(r => r.target > 0);
-    html += `<div class="debt-goal-group">
-      <div class="debt-goal-group-title">${subName}</div>
-      <div class="report-table-wrap"><table class="report-table"><thead><tr>
-        <th style="text-align:left">Goal</th>
-        ${hasTarget ? '<th>Target</th>' : ''}
-        <th>Net Invested</th>
-        <th>Current Value</th>
-        ${hasTarget ? '<th>Progress</th>' : ''}
-      </tr></thead><tbody>`;
-
-    rows.forEach(r => {
-      const cvCls    = r.currentValue < 0 ? 'negative' : '';
-      const progress = r.target > 0 ? (r.currentValue / r.target * 100) : null;
-      html += `<tr>
-        <td>${r.name}</td>
-        ${hasTarget ? `<td>${r.target > 0 ? fmtCurrency(r.target) : '—'}</td>` : ''}
-        <td>${fmtCurrency(r.netInvested)}</td>
-        <td class="${cvCls}">${fmtCurrency(r.currentValue)}</td>
-        ${hasTarget ? `<td>${progress !== null ? progress.toFixed(0) + '%' : '—'}</td>` : ''}
-      </tr>`;
-    });
-
-    html += `</tbody></table></div></div>`;
+  Object.entries(bySubcat).forEach(([subName, grp]) => {
+    html += grp.cycle
+      ? renderCycleSubcat(subName, grp.goals, txnsByGoal, cyclesByGoal, navByFund, stream)
+      : renderTargetSubcat(subName, grp.goals, txnsByGoal, navByFund, stream);
   });
 
   wrap.innerHTML = html;
+}
+
+// Net-balance view (Commitment & other target-based debt goals) — unchanged behaviour
+function renderTargetSubcat(subName, goals, txnsByGoal, navByFund, stream) {
+  const rows = goals.map(goal => {
+    const txns = txnsByGoal[String(goal.id)] || [];
+    let buyAmt = 0, sellAmt = 0; const units = {};
+    txns.forEach(t => {
+      const fundId = String(t[stream.assetIdCol]);
+      const amt = parseFloat(t.amount || 0), u = parseFloat(t.units || 0);
+      if (t.txn_type === 'Buy') { buyAmt += amt; units[fundId] = (units[fundId] || 0) + u; }
+      else                      { sellAmt += amt; units[fundId] = (units[fundId] || 0) - u; }
+    });
+    let currentValue = 0;
+    Object.entries(units).forEach(([f, u]) => { currentValue += u * (navByFund[f] || 0); });
+    return { name: goal.name, netInvested: buyAmt - sellAmt, currentValue, target: parseFloat(goal.target_amount || 0) };
+  });
+
+  const hasTarget = rows.some(r => r.target > 0);
+  let html = `<div class="debt-goal-group"><div class="debt-goal-group-title">${subName}</div>
+    <div class="report-table-wrap"><table class="report-table"><thead><tr>
+      <th style="text-align:left">Goal</th>
+      ${hasTarget ? '<th>Target</th>' : ''}
+      <th>Net Invested</th><th>Current Value</th>
+      ${hasTarget ? '<th>Progress</th>' : ''}
+    </tr></thead><tbody>`;
+  rows.forEach(r => {
+    const cvCls = r.currentValue < 0 ? 'negative' : '';
+    const progress = r.target > 0 ? (r.currentValue / r.target * 100) : null;
+    html += `<tr>
+      <td>${r.name}</td>
+      ${hasTarget ? `<td>${r.target > 0 ? fmtCurrency(r.target) : '—'}</td>` : ''}
+      <td>${fmtCurrency(r.netInvested)}</td>
+      <td class="${cvCls}">${fmtCurrency(r.currentValue)}</td>
+      ${hasTarget ? `<td>${progress !== null ? progress.toFixed(0) + '%' : '—'}</td>` : ''}
+    </tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+  return html;
+}
+
+// Cycle view (Yearly Bills): Savings (open cycles) + Payments (paid cycles)
+function renderCycleSubcat(subName, goals, txnsByGoal, cyclesByGoal, navByFund, stream) {
+  const today = new Date();
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  let totalSetAside = 0, totalExpectedByNow = 0, fundValue = 0;
+  const overdue = [];
+  const savingsRows = [];
+  const paidRows = [];   // { year, name, paidDate, planned, paid, note }
+
+  goals.forEach(goal => {
+    const gid = String(goal.id);
+    const txns = txnsByGoal[gid] || [];
+    const cycles = cyclesByGoal[gid] || [];
+
+    // Net units across funds (for fund-value reconciliation)
+    const units = {};
+    txns.forEach(t => {
+      const fundId = String(t[stream.assetIdCol]);
+      const u = parseFloat(t.units || 0);
+      units[fundId] = (units[fundId] || 0) + (t.txn_type === 'Buy' ? u : -u);
+    });
+    Object.entries(units).forEach(([f, u]) => { fundValue += u * (navByFund[f] || 0); });
+
+    // Open cycle → savings
+    const open = cycles
+      .filter(c => String(c.status).toLowerCase() === 'upcoming')
+      .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0];
+
+    if (open) {
+      const planned   = parseFloat(open.planned_amount || 0);
+      const expMonthly = parseFloat(open.expected_monthly || 0);
+      const start     = new Date(open.start_date);
+      const due       = new Date(open.due_date);
+      const cap       = expMonthly > 0 ? Math.round(planned / expMonthly) : 12;
+      const elapsed   = Math.min(_monthsDiffInsights(start, today), cap);
+      const expectedByNow = Math.round(expMonthly * elapsed);
+
+      const saved = txns
+        .filter(t => t.txn_type === 'Buy' && new Date(t.txn_date) >= start && new Date(t.txn_date) <= today)
+        .reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+
+      totalSetAside += expMonthly;
+      totalExpectedByNow += expectedByNow;
+
+      const isOverdue = due < today;
+      const dueSoon   = due >= today && _monthsDiffInsights(today, due) <= 2;
+      let status, cls;
+      if (dueSoon && saved < planned * 0.8)        { status = 'At risk';  cls = 'at_risk'; }
+      else if (expectedByNow > 0 && saved >= expectedByNow * 1.05) { status = 'Ahead';   cls = 'ahead'; }
+      else if (saved >= expectedByNow * 0.95)      { status = 'On track'; cls = 'on_track'; }
+      else                                          { status = 'Behind';  cls = 'behind'; }
+
+      if (isOverdue) overdue.push(`${goal.name} — ${open.cycle_label} was due ${MONTHS[due.getMonth()]} ${due.getFullYear()} but no payment logged.`);
+
+      savingsRows.push({
+        name: goal.name,
+        dueLabel: `${MONTHS[due.getMonth()]} ${due.getFullYear()}`,
+        planned, saved, expectedByNow, status, cls,
+      });
+    }
+
+    // Paid cycles → payments
+    cycles.filter(c => String(c.status).toLowerCase() === 'paid').forEach(c => {
+      const pd = c.paid_date ? new Date(c.paid_date) : null;
+      paidRows.push({
+        year: pd ? pd.getFullYear() : '—',
+        name: goal.name,
+        paidDate: c.paid_date || '—',
+        planned: parseFloat(c.planned_amount || 0),
+        paid: parseFloat(c.paid_amount || 0),
+        note: c.notes || '',
+      });
+    });
+  });
+
+  let html = `<div class="debt-goal-group"><div class="debt-goal-group-title">${subName}</div>`;
+
+  // Header summary
+  html += `<div class="cycle-summary">
+    <span>Monthly set-aside: <strong>${fmtCurrency(totalSetAside)}</strong>/mo</span>
+    <span>Saved (fund value): <strong>${fmtCurrency(fundValue)}</strong> vs expected ${fmtCurrency(totalExpectedByNow)}</span>
+  </div>`;
+
+  // Overdue warnings
+  overdue.forEach(msg => { html += `<div class="cycle-overdue">⚠ ${msg}</div>`; });
+
+  // Savings view
+  if (savingsRows.length) {
+    html += `<div class="cycle-subtitle">Savings (current cycle)</div>
+      <div class="report-table-wrap"><table class="report-table"><thead><tr>
+        <th style="text-align:left">Bill</th><th>Due</th><th>Planned</th><th>Saved / Expected</th><th>Status</th>
+      </tr></thead><tbody>`;
+    savingsRows.forEach(r => {
+      html += `<tr>
+        <td>${r.name}</td>
+        <td>${r.dueLabel}</td>
+        <td>${fmtCurrency(r.planned)}</td>
+        <td>${fmtCurrency(r.saved)} / ${fmtCurrency(r.expectedByNow)}</td>
+        <td><span class="cycle-badge ${r.cls}">${r.status}</span></td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  // Payments view (grouped by year desc)
+  if (paidRows.length) {
+    const years = [...new Set(paidRows.map(r => r.year))].sort((a, b) => b - a);
+    html += `<div class="cycle-subtitle">Payments</div>`;
+    years.forEach(year => {
+      const yr = paidRows.filter(r => r.year === year);
+      const total = yr.reduce((s, r) => s + r.paid, 0);
+      html += `<div class="report-table-wrap"><table class="report-table"><thead><tr>
+        <th style="text-align:left">${year}</th><th>Paid Date</th><th>Planned</th><th>Paid</th><th style="text-align:left">Note</th>
+      </tr></thead><tbody>`;
+      yr.forEach(r => {
+        html += `<tr>
+          <td>${r.name}</td>
+          <td>${r.paidDate}</td>
+          <td>${fmtCurrency(r.planned)}</td>
+          <td>${fmtCurrency(r.paid)}</td>
+          <td style="text-align:left">${r.note}</td>
+        </tr>`;
+      });
+      html += `<tr class="total-row"><td>Total ${year}</td><td></td><td></td><td>${fmtCurrency(total)}</td><td></td></tr>`;
+      html += `</tbody></table></div>`;
+    });
+  }
+
+  html += `</div>`;
+  return html;
 }
 
 // ── Cumulative line ───────────────────────────────────────────────────────────

@@ -1426,6 +1426,16 @@ body::before {
 /* ── Manage goals overlay ────────────────────────────────────────────────────── */
 
 .goal-manage-bar { margin-bottom: 12px; }
+.goal-cycle-info {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+.goal-cycle-info strong { color: var(--text); }
 .goal-empty-state {
   color: var(--text-muted);
   font-size: 13px;
@@ -1473,6 +1483,46 @@ body::before {
   letter-spacing: 0.3px;
   margin-bottom: 8px;
 }
+
+/* Yearly Bills cycle views */
+.cycle-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.cycle-summary strong { color: var(--text); }
+.cycle-subtitle {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin: 14px 0 6px;
+}
+.cycle-overdue {
+  font-size: 12px;
+  color: #ef4444;
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.3);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+.cycle-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.cycle-badge.ahead    { background: rgba(34,197,94,0.15);  color: #22c55e; }
+.cycle-badge.on_track { background: rgba(99,102,241,0.15); color: #818cf8; }
+.cycle-badge.behind   { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.cycle-badge.at_risk  { background: rgba(239,68,68,0.15);  color: #ef4444; }
 
 .mf-detail-table { width: 100%; }
 .mf-detail-table th,

@@ -622,6 +622,121 @@ async function fetchActiveGoals(stream, subcategoryId) {
   } catch (_) { return []; }
 }
 
+// ── Bill cycle helpers (Yearly Bills cycle model) ─────────────────────────────
+
+const MONTH_NAMES = ['January','February','March','April','May','June',
+                     'July','August','September','October','November','December'];
+
+function isCycleSubcat(stream, subcategory) {
+  return (stream.cycleSubcategories || []).includes(subcategory?.name);
+}
+
+// Next occurrence of a 1–12 month (1st of month). If already today/past this year → next year.
+function nextDueDate(dueMonth, from = new Date()) {
+  const m = parseInt(dueMonth);
+  let year = from.getFullYear();
+  const candidate = new Date(year, m - 1, 1);
+  if (candidate <= from) year += 1;
+  return new Date(year, m - 1, 1);
+}
+
+// Inclusive month count from a→b (e.g. Jun→Sep = 4 contribution months). Min 1.
+function monthsInclusive(a, b) {
+  const da = new Date(a), db = new Date(b);
+  return Math.max(1, (db.getFullYear() * 12 + db.getMonth()) - (da.getFullYear() * 12 + da.getMonth()) + 1);
+}
+
+// Whole months elapsed a→b (Jun 1 → Sep 1 = 3). Min 0.
+function monthsElapsed(a, b) {
+  const da = new Date(a), db = new Date(b);
+  return Math.max(0, (db.getFullYear() * 12 + db.getMonth()) - (da.getFullYear() * 12 + da.getMonth()));
+}
+
+function computeExpectedMonthly(planned, startDate, dueDate, firstCycle, cycleMonths) {
+  const months = firstCycle ? monthsInclusive(startDate, dueDate) : (parseInt(cycleMonths) || 12);
+  return Math.round(planned / Math.max(1, months));
+}
+
+function cycleLabelFor(name, dueDate) {
+  return `${name} ${new Date(dueDate).getFullYear()}`;
+}
+
+function isoDate(d) {
+  return new Date(d).toISOString().split('T')[0];
+}
+
+function addMonths(d, n) {
+  const dt = new Date(d);
+  dt.setMonth(dt.getMonth() + parseInt(n));
+  return dt;
+}
+
+async function fetchOpenCycle(stream, goalId) {
+  try {
+    const res = await API.get(stream.cycleTable, { limit: 500, filters: { goal_id: goalId } });
+    const open = (res.rows || []).filter(c => String(c.status).toLowerCase() === 'upcoming');
+    open.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+    return open[0] || null;
+  } catch (_) { return null; }
+}
+
+async function fetchRecentPaidCycle(stream, goalId) {
+  try {
+    const res = await API.get(stream.cycleTable, { limit: 500, filters: { goal_id: goalId } });
+    const paid = (res.rows || []).filter(c => String(c.status).toLowerCase() === 'paid' && c.paid_date);
+    paid.sort((a, b) => new Date(b.paid_date) - new Date(a.paid_date));
+    return paid[0] || null;
+  } catch (_) { return null; }
+}
+
+// Create the first cycle for a freshly-created cycle goal. Returns the expected monthly.
+async function createFirstCycle(stream, goal) {
+  const planned  = parseFloat(goal.annual_amount || 0);
+  const start    = new Date();
+  const due      = nextDueDate(goal.due_month, start);
+  const expected = computeExpectedMonthly(planned, start, due, true, goal.cycle_months);
+  await API.insert(stream.cycleTable, {
+    goal_id: goal.id,
+    cycle_label: cycleLabelFor(goal.name, due),
+    start_date: isoDate(start),
+    due_date: isoDate(due),
+    planned_amount: planned,
+    expected_monthly: expected,
+    first_cycle: true,
+    paid_amount: '',
+    paid_date: '',
+    status: 'upcoming',
+    notes: '',
+  });
+  return expected;
+}
+
+// Mark the open cycle paid and spawn the next one (one cycle_months later).
+async function closeCycleAndSpawn(stream, goal, cycle, paidAmount, paidDate) {
+  await API.update(stream.cycleTable, cycle.id, {
+    paid_amount: Math.round(paidAmount * 100) / 100,
+    paid_date: paidDate,
+    status: 'paid',
+  });
+  const cycleMonths = parseInt(goal.cycle_months) || 12;
+  const nextDue     = addMonths(cycle.due_date, cycleMonths);
+  const planned     = parseFloat(goal.annual_amount || cycle.planned_amount || 0);
+  const expected    = Math.round(planned / cycleMonths);
+  await API.insert(stream.cycleTable, {
+    goal_id: goal.id,
+    cycle_label: cycleLabelFor(goal.name, nextDue),
+    start_date: paidDate,
+    due_date: isoDate(nextDue),
+    planned_amount: planned,
+    expected_monthly: expected,
+    first_cycle: false,
+    paid_amount: '',
+    paid_date: '',
+    status: 'upcoming',
+    notes: '',
+  });
+}
+
 async function renderGoalTransactionForm(container, stream, category, subcategory, goals) {
   container.innerHTML = '';
 
@@ -643,6 +758,15 @@ async function renderGoalTransactionForm(container, stream, category, subcategor
     empty.textContent = `No goals yet for ${subcategory.name}. Tap "⚙ Manage Goals" above to add your first one.`;
     container.appendChild(empty);
     return;
+  }
+
+  // Cycle context (Yearly Bills): fetch each goal's open cycle for prefill + sell-close
+  const cycleMode = isCycleSubcat(stream, subcategory);
+  const openCycleByGoal = {};
+  if (cycleMode) {
+    await Promise.all(goals.map(async g => {
+      openCycleByGoal[String(g.id)] = await fetchOpenCycle(stream, g.id);
+    }));
   }
 
   // Funds for this subcategory
@@ -670,11 +794,13 @@ async function renderGoalTransactionForm(container, stream, category, subcategor
       return;
     }
     body.style.display = val ? 'block' : 'none';
-    if (val) buildGoalBody(body, stream, goals, val);
+    if (val) buildGoalBody(body, stream, goals, val, { cycleMode, openCycleByGoal });
   });
 }
 
-function buildGoalBody(body, stream, goals, fundId) {
+function buildGoalBody(body, stream, goals, fundId, ctx = {}) {
+  const cycleMode = !!ctx.cycleMode;
+  const openCycleByGoal = ctx.openCycleByGoal || {};
   body.innerHTML = '';
 
   // Shared fields: type, date, NAV
@@ -711,7 +837,12 @@ function buildGoalBody(body, stream, goals, fundId) {
         inp.className = 'goal-amount-input';
         inp.placeholder = '0';
         inp.dataset.goalId = g.id;
-        if (g.default_amount !== '' && g.default_amount !== undefined && g.default_amount !== null) {
+        // Prefill: cycle goals use open cycle's expected_monthly (surfaces first-cycle ramp);
+        // others use default_amount.
+        const cyc = cycleMode ? openCycleByGoal[String(g.id)] : null;
+        if (cyc && cyc.expected_monthly !== '' && cyc.expected_monthly != null) {
+          inp.value = parseFloat(cyc.expected_monthly);
+        } else if (!cycleMode && g.default_amount !== '' && g.default_amount !== undefined && g.default_amount !== null) {
           inp.value = parseFloat(g.default_amount);
         }
         row.appendChild(name);
@@ -732,6 +863,25 @@ function buildGoalBody(body, stream, goals, fundId) {
       gWrap.appendChild(lbl);
       gWrap.appendChild(gSel);
       section.appendChild(gWrap);
+
+      // Cycle confirmation banner (Yearly Bills): show the open cycle being closed
+      if (cycleMode) {
+        const cycInfo = document.createElement('div');
+        cycInfo.className = 'goal-cycle-info';
+        cycInfo.style.display = 'none';
+        section.appendChild(cycInfo);
+        gSel.addEventListener('change', () => {
+          const cyc = openCycleByGoal[String(gSel.value)];
+          if (cyc) {
+            const due = new Date(cyc.due_date).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+            cycInfo.innerHTML = `Closing <strong>${cyc.cycle_label}</strong> · due ${due} · planned ₹${parseFloat(cyc.planned_amount || 0).toLocaleString('en-IN')}`;
+            cycInfo.style.display = 'block';
+          } else {
+            cycInfo.style.display = 'none';
+          }
+        });
+      }
+
       section.appendChild(renderField({ id: 'goal-sell-amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true }));
       section.appendChild(renderField({ id: 'goal-sell-notes', label: 'Reason', type: 'text', placeholder: 'e.g. Amma recharge done' }));
     }
@@ -740,10 +890,13 @@ function buildGoalBody(body, stream, goals, fundId) {
   typeSel.addEventListener('change', renderSection);
   renderSection();
 
-  btn.addEventListener('click', () => submitGoalTxn(stream, fundId, body, btn, renderSection));
+  btn.addEventListener('click', () => submitGoalTxn(stream, fundId, body, btn, renderSection, { cycleMode, goals, openCycleByGoal }));
 }
 
-async function submitGoalTxn(stream, fundId, body, btn, renderSection) {
+async function submitGoalTxn(stream, fundId, body, btn, renderSection, ctx = {}) {
+  const cycleMode = !!ctx.cycleMode;
+  const goals = ctx.goals || [];
+  const openCycleByGoal = ctx.openCycleByGoal || {};
   const txnType = body.querySelector('#field-goal-type').value;
   const txnDate = body.querySelector('#field-goal-date').value;
   const nav     = parseFloat(body.querySelector('#field-goal-nav').value);
@@ -794,10 +947,34 @@ async function submitGoalTxn(stream, fundId, body, btn, renderSection) {
     for (const row of rows) {
       await API.insert(stream.txnTable, row);
     }
+
+    // Cycle close/spawn on a Yearly Bills Sell
+    let cycleClosed = false;
+    if (cycleMode && txnType === 'Sell' && rows.length === 1) {
+      const goalId = String(rows[0][stream.goalIdCol]);
+      const amount = rows[0].amount;
+      const goal   = goals.find(g => String(g.id) === goalId);
+      const recentPaid = await fetchRecentPaidCycle(stream, goalId);
+      const within30 = recentPaid && recentPaid.paid_date &&
+        Math.abs(new Date(txnDate) - new Date(recentPaid.paid_date)) <= 30 * 86400000;
+
+      if (within30 && confirm(`Add ₹${amount.toLocaleString('en-IN')} to the already-paid "${recentPaid.cycle_label}" (paid ${recentPaid.paid_date})? Cancel to close the next cycle instead.`)) {
+        await API.update(stream.cycleTable, recentPaid.id, {
+          paid_amount: Math.round((parseFloat(recentPaid.paid_amount || 0) + amount) * 100) / 100,
+        });
+      } else {
+        const open = openCycleByGoal[goalId] || await fetchOpenCycle(stream, goalId);
+        if (open && goal) { await closeCycleAndSpawn(stream, goal, open, amount, txnDate); cycleClosed = true; }
+      }
+    }
+
     _insightsCache   = null;
     _holdingsAllRows = null;
     LSC.clear('insights', 'holdings');
     showToast(`${rows.length} transaction${rows.length > 1 ? 's' : ''} saved!`);
+
+    // Cycle data changed → re-render the whole form so prefills/cycles refresh
+    if (cycleClosed) { startLogForm(); return; }
     renderSection();  // reset inputs
   } catch (err) {
     showToast('Failed: ' + err.message, 'error');
@@ -810,6 +987,8 @@ async function submitGoalTxn(stream, fundId, body, btn, renderSection) {
 // ── Manage Goals overlay (add / remove goals for a subcategory) ───────────────
 
 async function renderManageGoalsOverlay(stream, subcategory, onDone) {
+  const cycleMode = isCycleSubcat(stream, subcategory);
+
   const overlay = document.createElement('div');
   overlay.className = 'asset-form-overlay';
 
@@ -822,7 +1001,9 @@ async function renderManageGoalsOverlay(stream, subcategory, onDone) {
 
   const hint = document.createElement('p');
   hint.className = 'goal-manage-hint';
-  hint.textContent = 'Set a Default Amount for recurring bills (prefilled each month), or a Target Amount for goals you save toward.';
+  hint.textContent = cycleMode
+    ? 'Each bill: set its yearly cost and the month it is due. The first cycle ramps from now until the due month.'
+    : 'Set a Default Amount for recurring bills (prefilled each month), or a Target Amount for goals you save toward.';
   box.appendChild(hint);
 
   // Existing goals list
@@ -836,12 +1017,27 @@ async function renderManageGoalsOverlay(stream, subcategory, onDone) {
   addTitle.textContent = 'Add Goal';
   box.appendChild(addTitle);
 
-  const nameField = renderField({ id: 'goalmgr-name', label: 'Goal Name', type: 'text', required: true, placeholder: 'e.g. Bike, Insurance' });
-  const defField  = renderField({ id: 'goalmgr-default', label: 'Default Amount (₹/month)', type: 'number', step: '0.01' });
-  const tgtField  = renderField({ id: 'goalmgr-target', label: 'Target Amount (₹)', type: 'number', step: '0.01' });
-  box.appendChild(nameField);
-  box.appendChild(defField);
-  box.appendChild(tgtField);
+  box.appendChild(renderField({ id: 'goalmgr-name', label: 'Goal Name', type: 'text', required: true, placeholder: cycleMode ? 'e.g. Hotstar, Insurance' : 'e.g. Bike, TV' }));
+
+  if (cycleMode) {
+    box.appendChild(renderField({ id: 'goalmgr-annual', label: 'Annual Amount (₹)', type: 'number', step: '0.01', required: true }));
+    // Due month select (value = 1–12)
+    const dmWrap = document.createElement('div');
+    dmWrap.className = 'field-group';
+    const dmLbl = document.createElement('label');
+    dmLbl.textContent = 'Due Month *';
+    const dmSel = document.createElement('select');
+    dmSel.id = 'field-goalmgr-duemonth';
+    dmSel.innerHTML = '<option value="">Select month</option>' +
+      MONTH_NAMES.map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
+    dmWrap.appendChild(dmLbl);
+    dmWrap.appendChild(dmSel);
+    box.appendChild(dmWrap);
+    box.appendChild(renderField({ id: 'goalmgr-cyclemonths', label: 'Cycle Months (12 = yearly)', type: 'number', step: '1' }, 12));
+  } else {
+    box.appendChild(renderField({ id: 'goalmgr-default', label: 'Default Amount (₹/month)', type: 'number', step: '0.01' }));
+    box.appendChild(renderField({ id: 'goalmgr-target', label: 'Target Amount (₹)', type: 'number', step: '0.01' }));
+  }
 
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
@@ -869,10 +1065,18 @@ async function renderManageGoalsOverlay(stream, subcategory, onDone) {
     goals.forEach(g => {
       const row = document.createElement('div');
       row.className = 'goal-manage-row';
-      const meta = (g.default_amount !== '' && g.default_amount != null && g.default_amount !== '')
-        ? `₹${parseFloat(g.default_amount).toLocaleString('en-IN')}/mo`
-        : ((g.target_amount !== '' && g.target_amount != null && g.target_amount !== '')
-            ? `target ₹${parseFloat(g.target_amount).toLocaleString('en-IN')}` : '');
+      let meta = '';
+      if (cycleMode) {
+        const annual = parseFloat(g.annual_amount || 0);
+        const dm = parseInt(g.due_month);
+        meta = (annual ? `₹${annual.toLocaleString('en-IN')}/yr` : '') +
+               (dm >= 1 && dm <= 12 ? ` · due ${MONTH_NAMES[dm - 1].slice(0, 3)}` : '');
+      } else {
+        meta = (g.default_amount !== '' && g.default_amount != null)
+          ? `₹${parseFloat(g.default_amount).toLocaleString('en-IN')}/mo`
+          : ((g.target_amount !== '' && g.target_amount != null)
+              ? `target ₹${parseFloat(g.target_amount).toLocaleString('en-IN')}` : '');
+      }
       const name = document.createElement('span');
       name.className = 'goal-manage-name';
       name.textContent = g.name;
@@ -887,6 +1091,11 @@ async function renderManageGoalsOverlay(stream, subcategory, onDone) {
         rm.disabled = true;
         try {
           await API.update(stream.goalTable, g.id, { is_active: false });
+          // Cycle goals: mark the open cycle skipped too
+          if (cycleMode) {
+            const open = await fetchOpenCycle(stream, g.id);
+            if (open) await API.update(stream.cycleTable, open.id, { status: 'skipped' });
+          }
           _insightsCache = null;
           LSC.clear('insights', 'holdings');
           await loadGoals();
@@ -904,27 +1113,50 @@ async function renderManageGoalsOverlay(stream, subcategory, onDone) {
 
   addBtn.addEventListener('click', async () => {
     const name = box.querySelector('#field-goalmgr-name').value.trim();
-    const def  = box.querySelector('#field-goalmgr-default').value;
-    const tgt  = box.querySelector('#field-goalmgr-target').value;
     if (!name) { showToast('Enter a goal name', 'error'); return; }
 
     addBtn.disabled = true;
     addBtn.textContent = 'Adding…';
     try {
-      await API.insert(stream.goalTable, {
-        subcategory_id: subcategory.id,
-        name,
-        default_amount: def === '' ? '' : parseFloat(def),
-        target_amount:  tgt === '' ? '' : parseFloat(tgt),
-        is_active: true,
-      });
+      if (cycleMode) {
+        const annual = parseFloat(box.querySelector('#field-goalmgr-annual').value);
+        const dm     = parseInt(box.querySelector('#field-goalmgr-duemonth').value);
+        const cm     = parseInt(box.querySelector('#field-goalmgr-cyclemonths').value) || 12;
+        if (!annual || annual <= 0) { showToast('Enter a valid annual amount', 'error'); addBtn.disabled = false; addBtn.textContent = '+ Add Goal'; return; }
+        if (!dm || dm < 1 || dm > 12) { showToast('Select a due month', 'error'); addBtn.disabled = false; addBtn.textContent = '+ Add Goal'; return; }
+
+        const result = await API.insert(stream.goalTable, {
+          subcategory_id: subcategory.id,
+          name,
+          default_amount: Math.round(annual / 12),
+          annual_amount: annual,
+          due_month: dm,
+          cycle_months: cm,
+          target_amount: '',
+          is_active: true,
+        });
+        const expected = await createFirstCycle(stream, { id: result.id, name, annual_amount: annual, due_month: dm, cycle_months: cm });
+        const due = nextDueDate(dm);
+        showToast(`Goal added — save ₹${expected.toLocaleString('en-IN')}/mo until ${MONTH_NAMES[due.getMonth()].slice(0, 3)}`);
+      } else {
+        const def = box.querySelector('#field-goalmgr-default').value;
+        const tgt = box.querySelector('#field-goalmgr-target').value;
+        await API.insert(stream.goalTable, {
+          subcategory_id: subcategory.id,
+          name,
+          default_amount: def === '' ? '' : parseFloat(def),
+          target_amount:  tgt === '' ? '' : parseFloat(tgt),
+          is_active: true,
+        });
+        showToast('Goal added');
+      }
       _insightsCache = null;
       LSC.clear('insights', 'holdings');
-      box.querySelector('#field-goalmgr-name').value = '';
-      box.querySelector('#field-goalmgr-default').value = '';
-      box.querySelector('#field-goalmgr-target').value = '';
+      box.querySelectorAll('input, select').forEach(el => {
+        if (el.id === 'field-goalmgr-cyclemonths') el.value = 12;
+        else el.value = '';
+      });
       await loadGoals();
-      showToast('Goal added');
     } catch (e) {
       showToast('Failed: ' + e.message, 'error');
     } finally {

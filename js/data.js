@@ -70,6 +70,8 @@ const STREAMS = {
     goalTable: 'debt_goals',
     goalIdCol: 'goal_id',
     goalSubcategories: ['Commitment Fund', 'Yearly Bills'],
+    cycleSubcategories: ['Yearly Bills'],
+    cycleTable: 'bill_cycles',
     assetFields: [
       { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
       { id: 'fund_name', label: 'Fund Name', type: 'text', required: true, placeholder: 'e.g. ICICI Pru Ultra Short Term' },
