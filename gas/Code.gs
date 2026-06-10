@@ -242,53 +242,26 @@ function writePriceFormula(sheet, sheetName, headers, rowNum) {
   if (formula) sheet.getRange(rowNum, priceIdx + 1).setFormula(formula);
 }
 
-// Run once to add goal_id column to existing debt_hybrid_transactions sheet
-function migrateAddGoalColumn() {
-  const ss    = getSpreadsheet();
-  const sheet = ss.getSheetByName('debt_hybrid_transactions');
-  if (!sheet || sheet.getLastRow() === 0) { Logger.log('Sheet not found or empty'); return; }
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  if (headers.includes('goal_id')) { Logger.log('goal_id already exists'); return; }
-  // Insert goal_id before the last column (created_at)
-  const lastCol = headers.length;
-  sheet.insertColumnBefore(lastCol);
-  sheet.getRange(1, lastCol).setValue('goal_id');
-  Logger.log('goal_id column added at col ' + lastCol);
-}
-
-// Run once: add cycle columns to debt_goals + create bill_cycles sheet (Yearly Bills cycle model)
-function migrateAddCycleColumns() {
+// Run once to remove the reverted Yearly-Bills goal/cycle artifacts:
+// deletes the debt_goals + bill_cycles tabs and the goal_id column on
+// debt_hybrid_transactions. Safe to run multiple times.
+function cleanupGoalArtifacts() {
   const ss = getSpreadsheet();
 
-  // 1. Add annual_amount, due_month, cycle_months to debt_goals (before target_amount)
-  const goalsSheet = ss.getSheetByName('debt_goals');
-  if (goalsSheet && goalsSheet.getLastRow() > 0) {
-    const headers = goalsSheet.getRange(1, 1, 1, goalsSheet.getLastColumn()).getValues()[0];
-    const newCols = ['annual_amount', 'due_month', 'cycle_months'];
-    const missing = newCols.filter(c => !headers.includes(c));
-    if (missing.length) {
-      // Append to the end (simplest, order-independent — frontend maps by header name)
-      let col = goalsSheet.getLastColumn() + 1;
-      missing.forEach(c => { goalsSheet.getRange(1, col).setValue(c); col++; });
-      Logger.log('debt_goals: added ' + missing.join(', '));
-    } else {
-      Logger.log('debt_goals: cycle columns already present');
-    }
-  } else {
-    Logger.log('debt_goals sheet not found (run setupAllSheets first)');
-  }
+  ['debt_goals', 'bill_cycles'].forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (sh) { ss.deleteSheet(sh); Logger.log('Deleted sheet: ' + name); }
+    else    { Logger.log('Sheet not present: ' + name); }
+  });
 
-  // 2. Create bill_cycles sheet if missing
-  let cycles = ss.getSheetByName('bill_cycles');
-  if (!cycles) {
-    cycles = ss.insertSheet('bill_cycles');
-    cycles.appendRow(['id', 'goal_id', 'cycle_label', 'start_date', 'due_date', 'planned_amount',
-                      'expected_monthly', 'first_cycle', 'paid_amount', 'paid_date', 'status', 'notes', 'created_at']);
-    Logger.log('bill_cycles sheet created');
-  } else {
-    Logger.log('bill_cycles already exists');
+  const txn = ss.getSheetByName('debt_hybrid_transactions');
+  if (txn && txn.getLastColumn() > 0) {
+    const headers = txn.getRange(1, 1, 1, txn.getLastColumn()).getValues()[0];
+    const idx = headers.indexOf('goal_id');
+    if (idx >= 0) { txn.deleteColumn(idx + 1); Logger.log('Removed goal_id column (col ' + (idx + 1) + ')'); }
+    else          { Logger.log('goal_id column not present'); }
   }
-  Logger.log('Cycle migration complete.');
+  Logger.log('Cleanup complete.');
 }
 
 // Run once in GAS editor to add price column + formulas to existing asset rows
@@ -333,9 +306,7 @@ function setupAllSheets() {
     equity_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 
     debt_hybrid_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'current_nav', 'created_at'],
-    debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'goal_id', 'notes', 'created_at'],
-    debt_goals: ['id', 'subcategory_id', 'name', 'default_amount', 'annual_amount', 'due_month', 'cycle_months', 'target_amount', 'is_active', 'notes', 'created_at'],
-    bill_cycles: ['id', 'goal_id', 'cycle_label', 'start_date', 'due_date', 'planned_amount', 'expected_monthly', 'first_cycle', 'paid_amount', 'paid_date', 'status', 'notes', 'created_at'],
+    debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
     debt_hybrid_sip_mandates: ['id', 'fund_id', 'platform', 'mandate_ref', 'created_at'],
     debt_hybrid_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 

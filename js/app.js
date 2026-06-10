@@ -249,17 +249,6 @@ async function startLogForm() {
     return;
   }
 
-  // Goal-tracked subcategories (e.g. debt Commitment / Yearly Bills) → goal form
-  if (STATE.stream?.goalTable && STATE.subcategory &&
-      (STATE.stream.goalSubcategories || []).includes(STATE.subcategory.name)) {
-    const goals = await fetchActiveGoals(STATE.stream, STATE.subcategory.id);
-    const container = document.getElementById('log-content');
-    container.innerHTML = '';
-    setHeader('log-content', STATE.subcategory.name, () => renderSubcategories('log'));
-    await renderGoalTransactionForm(container, STATE.stream, STATE.category, STATE.subcategory, goals);
-    return;
-  }
-
   const container = document.getElementById('log-content');
   container.innerHTML = '';
 

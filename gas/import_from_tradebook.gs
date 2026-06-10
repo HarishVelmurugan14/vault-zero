@@ -127,15 +127,15 @@ function importFromTradebook() {
 
 // ── Shared helpers (used by import_from_coin.gs too) ──────────────────────────
 
-// Build an upsert entry. Inserts carry goal_id/notes/created_at defaults; updates
-// carry only the managed (financial) fields so other columns are preserved.
+// Build an upsert entry. Inserts add notes/created_at defaults; updates carry only
+// the managed (financial) fields so any other columns are preserved.
 function pushUpsert(bucket, idToRow, orderId, fundId, managed, dateMs, notes) {
   if (idToRow[orderId]) {
     bucket.toUpdate.push({ sheetRow: idToRow[orderId], fields: managed });
   } else {
     bucket.toInsert.push({
       dateMs, fundId,
-      fields: Object.assign({}, managed, { goal_id: '', notes: notes || '', created_at: new Date() }),
+      fields: Object.assign({}, managed, { notes: notes || '', created_at: new Date() }),
     });
   }
 }
