@@ -17,13 +17,13 @@
  */
 
 function importFromCoin() {
-  const ss        = SpreadsheetApp.getActiveSpreadsheet();
+  const ss        = vaultSpreadsheet_();
   const sourceSh  = ss.getSheetByName('Sheet1');
   const eqSheet   = ss.getSheetByName('equity_transactions');
   const debtSheet = ss.getSheetByName('debt_hybrid_transactions');
 
-  if (!sourceSh)              { SpreadsheetApp.getUi().alert('Sheet "Sheet1" not found.\nPaste your Coin CSV there, then run again.'); return; }
-  if (!eqSheet || !debtSheet) { SpreadsheetApp.getUi().alert('equity_transactions or debt_hybrid_transactions sheet not found.'); return; }
+  if (!sourceSh)              { notify_('Sheet "Sheet1" not found.\nPaste your Coin CSV there, then run again.'); return; }
+  if (!eqSheet || !debtSheet) { notify_('equity_transactions or debt_hybrid_transactions sheet not found.'); return; }
 
   ensureHeader(eqSheet);
   ensureHeader(debtSheet);
@@ -32,7 +32,7 @@ function importFromCoin() {
   const debtIdToRow = buildIdMap(debtSheet);
 
   const rawData = sourceSh.getDataRange().getValues();
-  if (rawData.length < 2) { SpreadsheetApp.getUi().alert('Sheet1 is empty — paste your Coin CSV first.'); return; }
+  if (rawData.length < 2) { notify_('Sheet1 is empty — paste your Coin CSV first.'); return; }
 
   const h = rawData[0].map(c => String(c).trim().toLowerCase());
   const C = {
@@ -48,7 +48,7 @@ function importFromCoin() {
     remarks: h.indexOf('remarks'),
   };
   if (C.isin === -1 || C.orderId === -1 || C.date === -1) {
-    SpreadsheetApp.getUi().alert('Required columns not found (isin, exchange_order_id, trade_date).');
+    notify_('Required columns not found (isin, exchange_order_id, trade_date).');
     return;
   }
 
@@ -107,7 +107,7 @@ function importFromCoin() {
     ? '\n\nSkipped:\n' + skipped.slice(0, 8).map(s => `• Line ${s.line}: ${s.scheme || s.isin} — ${s.reason}`).join('\n') +
       (skipped.length > 8 ? `\n… and ${skipped.length - 8} more` : '')
     : '';
-  SpreadsheetApp.getUi().alert(
+  notify_(
     `✅  Done\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
     `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
   );

@@ -35,14 +35,14 @@ const DEBT_ISIN_TO_FUND = {
 };
 
 function importFromTradebook() {
-  const ss          = SpreadsheetApp.getActiveSpreadsheet();
+  const ss          = vaultSpreadsheet_();
   const tradebookSh = ss.getSheetByName('Tradebook');
   const eqSheet     = ss.getSheetByName('equity_transactions');
   const debtSheet   = ss.getSheetByName('debt_hybrid_transactions');
 
-  if (!tradebookSh) { SpreadsheetApp.getUi().alert('Sheet "Tradebook" not found.'); return; }
-  if (!eqSheet)     { SpreadsheetApp.getUi().alert('Sheet "equity_transactions" not found.'); return; }
-  if (!debtSheet)   { SpreadsheetApp.getUi().alert('Sheet "debt_hybrid_transactions" not found.'); return; }
+  if (!tradebookSh) { notify_('Sheet "Tradebook" not found.'); return; }
+  if (!eqSheet)     { notify_('Sheet "equity_transactions" not found.'); return; }
+  if (!debtSheet)   { notify_('Sheet "debt_hybrid_transactions" not found.'); return; }
 
   ensureHeader(eqSheet);
   ensureHeader(debtSheet);
@@ -51,7 +51,7 @@ function importFromTradebook() {
   const debtIdToRow = buildIdMap(debtSheet);
 
   const rawData = tradebookSh.getDataRange().getValues();
-  if (rawData.length < 2) { SpreadsheetApp.getUi().alert('Tradebook sheet is empty.'); return; }
+  if (rawData.length < 2) { notify_('Tradebook sheet is empty.'); return; }
 
   const headerRow = rawData[0].map(c => String(c).trim().toLowerCase());
   const C = {
@@ -65,7 +65,7 @@ function importFromTradebook() {
     orderId: headerRow.indexOf('order_id'),
   };
   if (C.isin === -1 || C.date === -1 || C.orderId === -1) {
-    SpreadsheetApp.getUi().alert('Could not find required columns (isin, trade_date, order_id).');
+    notify_('Could not find required columns (isin, trade_date, order_id).');
     return;
   }
 
@@ -119,7 +119,7 @@ function importFromTradebook() {
     ? '\n\nSkipped:\n' + skipped.slice(0, 8).map(s => `• Line ${s.line}: ${s.symbol} — ${s.reason}`).join('\n') +
       (skipped.length > 8 ? `\n… and ${skipped.length - 8} more` : '')
     : '';
-  SpreadsheetApp.getUi().alert(
+  notify_(
     `✅  Done\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
     `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
   );
@@ -138,6 +138,21 @@ function pushUpsert(bucket, idToRow, orderId, fundId, managed, dateMs, notes) {
       fields: Object.assign({}, managed, { notes: notes || '', created_at: new Date() }),
     });
   }
+}
+
+// VaultZero spreadsheet — works whether the script is container-bound or standalone.
+function vaultSpreadsheet_() {
+  try {
+    const active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active;
+  } catch (e) {}
+  return SpreadsheetApp.openById('1R4yXbxb6YgXh-rDqnnw3iWOZe2ABcYMD96iN5hvDi5A');
+}
+
+// Alert when a UI is available, otherwise log — so the function never crashes
+// with "Cannot call SpreadsheetApp.getUi() from this context".
+function notify_(msg) {
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { Logger.log(msg); }
 }
 
 function getHeaders(sheet) {
