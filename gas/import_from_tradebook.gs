@@ -35,10 +35,10 @@ const DEBT_ISIN_TO_FUND = {
 };
 
 function importFromTradebook() {
-  const ss          = vaultSpreadsheet_();
-  const tradebookSh = ss.getSheetByName('Tradebook');
-  const eqSheet     = ss.getSheetByName('equity_transactions');
-  const debtSheet   = ss.getSheetByName('debt_hybrid_transactions');
+  const dataSS      = vaultDataSpreadsheet_();
+  const tradebookSh = vaultSpreadsheet_().getSheetByName('Tradebook');
+  const eqSheet     = dataSS.getSheetByName('equity_transactions');
+  const debtSheet   = dataSS.getSheetByName('debt_hybrid_transactions');
 
   if (!tradebookSh) { notify_('Sheet "Tradebook" not found.'); return; }
   if (!eqSheet)     { notify_('Sheet "equity_transactions" not found.'); return; }
@@ -140,13 +140,20 @@ function pushUpsert(bucket, idToRow, orderId, fundId, managed, dateMs, notes) {
   }
 }
 
-// VaultZero spreadsheet — works whether the script is container-bound or standalone.
+const VAULTZERO_ID_ = '1R4yXbxb6YgXh-rDqnnw3iWOZe2ABcYMD96iN5hvDi5A';
+
+// Where the CSV is pasted — the spreadsheet you're running from (active), else VaultZero.
 function vaultSpreadsheet_() {
   try {
     const active = SpreadsheetApp.getActiveSpreadsheet();
     if (active) return active;
   } catch (e) {}
-  return SpreadsheetApp.openById('1R4yXbxb6YgXh-rDqnnw3iWOZe2ABcYMD96iN5hvDi5A');
+  return SpreadsheetApp.openById(VAULTZERO_ID_);
+}
+
+// The VaultZero database — always the same spreadsheet, regardless of where you run from.
+function vaultDataSpreadsheet_() {
+  return SpreadsheetApp.openById(VAULTZERO_ID_);
 }
 
 // Alert when a UI is available, otherwise log — so the function never crashes

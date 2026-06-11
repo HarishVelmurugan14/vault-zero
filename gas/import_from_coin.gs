@@ -17,10 +17,10 @@
  */
 
 function importFromCoin() {
-  const ss        = vaultSpreadsheet_();
-  const sourceSh  = ss.getSheetByName('Sheet1');
-  const eqSheet   = ss.getSheetByName('equity_transactions');
-  const debtSheet = ss.getSheetByName('debt_hybrid_transactions');
+  const dataSS    = vaultDataSpreadsheet_();
+  const sourceSh  = vaultSpreadsheet_().getSheetByName('Sheet1');
+  const eqSheet   = dataSS.getSheetByName('equity_transactions');
+  const debtSheet = dataSS.getSheetByName('debt_hybrid_transactions');
 
   if (!sourceSh)              { notify_('Sheet "Sheet1" not found.\nPaste your Coin CSV there, then run again.'); return; }
   if (!eqSheet || !debtSheet) { notify_('equity_transactions or debt_hybrid_transactions sheet not found.'); return; }
