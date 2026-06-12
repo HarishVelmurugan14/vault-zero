@@ -114,8 +114,8 @@ const STREAMS = {
     label: 'US Equity Stocks',
     currentPriceCol: 'current_price',
     amountCol: 'amount_inr',
-    assetTable: 'us_equity_stocks_assets',
-    txnTable: 'us_equity_stocks_transactions',
+    assetTable: 'us_eq_indmoney_assets',
+    txnTable: 'us_eq_indmoney_transactions',
     assetIdCol: 'asset_id',
     assetNameCol: 'company_name',
     assetFields: [

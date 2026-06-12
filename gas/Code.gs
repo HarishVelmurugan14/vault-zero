@@ -209,7 +209,7 @@ const PRICE_COLUMN_CONFIG = {
   'equity_funds':                { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
   'debt_hybrid_funds':           { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
   'indian_equity_stocks_assets': { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct'     },
-  'us_equity_stocks_assets':     { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
+  'us_eq_indmoney_assets':       { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
   'us_equity_assets':            { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
   'precious_metal_etf_assets':   { codeCol: 'code',   priceCol: 'current_price', formulaType: 'nse'        },
   'crypto_assets':               { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'crypto_usd' },
@@ -265,6 +265,23 @@ function cleanupGoalArtifacts() {
   Logger.log('Cleanup complete.');
 }
 
+// Run once to rename the old IndMoney US tabs to the new names. Safe to re-run.
+function renameIndMoneyTabs() {
+  const ss = getSpreadsheet();
+  const renames = {
+    'us_equity_stocks_assets':       'us_eq_indmoney_assets',
+    'us_equity_stocks_transactions': 'us_eq_indmoney_transactions',
+  };
+  Object.entries(renames).forEach(([from, to]) => {
+    const sh = ss.getSheetByName(from);
+    if (!sh)                       { Logger.log('Skip (not found): ' + from); return; }
+    if (ss.getSheetByName(to))     { Logger.log('Skip (target exists): ' + to); return; }
+    sh.setName(to);
+    Logger.log('Renamed ' + from + ' → ' + to);
+  });
+  Logger.log('IndMoney tab rename complete.');
+}
+
 // Run once in GAS editor to add price column + formulas to existing asset rows
 function migrateAddPriceColumns() {
   const ss = getSpreadsheet();
@@ -312,8 +329,8 @@ function setupAllSheets() {
     indian_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     indian_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share', 'amount', 'notes', 'created_at'],
 
-    us_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
-    us_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
+    us_eq_indmoney_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
+    us_eq_indmoney_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
     // ── US Equity (IBKR) — wire-aware stream (additive) ──────────────────────
     us_wires: ['id', 'wire_date', 'payment_reference', 'inr_principal', 'commission', 'gst', 'correspondent_charge', 'inr_debited', 'usd_sent', 'usd_received', 'effective_rate', 'status', 'notes', 'created_at'],

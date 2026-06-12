@@ -123,13 +123,13 @@ function bulkImport() {
 
   // ── 8. US EQUITY STOCKS ─────────────────────────────────────────────────────
 
-  const usStockIds = insertRows('us_equity_stocks_assets', [
+  const usStockIds = insertRows('us_eq_indmoney_assets', [
     { _key: 'googl', subcategory_id: '', company_name: 'Alphabet Inc Class A', ticker: 'GOOGL', strategy: 'Long Term', is_active: true },
     { _key: 'aapl',  subcategory_id: '', company_name: 'Apple Inc',            ticker: 'AAPL',  strategy: 'Long Term', is_active: true },
     { _key: 'tsla',  subcategory_id: '', company_name: 'Tesla Inc',            ticker: 'TSLA',  strategy: 'Long Term', is_active: true },
   ]);
 
-  insertRows('us_equity_stocks_transactions', [
+  insertRows('us_eq_indmoney_transactions', [
     { asset_id: usStockIds['googl'], txn_type: 'Buy', txn_date: '2025-05-14', quantity: 0.24174268, price_per_share_usd: 164.97, amount_usd: 39.88,  conv_rate: 95.88, amount_inr: 3823.46 },
     { asset_id: usStockIds['aapl'],  txn_type: 'Buy', txn_date: '2025-05-14', quantity: 0.02828910, price_per_share_usd: 211.39, amount_usd: 5.98,   conv_rate: 95.87, amount_inr: 573.33  },
     { asset_id: usStockIds['tsla'],  txn_type: 'Buy', txn_date: '2025-05-14', quantity: 0.01650161, price_per_share_usd: 347.24, amount_usd: 5.73,   conv_rate: 95.88, amount_inr: 549.36  },

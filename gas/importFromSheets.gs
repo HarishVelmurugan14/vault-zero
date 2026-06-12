@@ -194,9 +194,9 @@ function importFromExistingSheets() {
 
   Logger.log('Importing US EQ Stocks...');
   const usRows = readSource(SOURCE.usStocks);
-  const usASheet = getVaultSheet('us_equity_stocks_assets');
+  const usASheet = getVaultSheet('us_eq_indmoney_assets');
   const usAHeaders = usASheet.getRange(1, 1, 1, usASheet.getLastColumn()).getValues()[0];
-  const usTSheet = getVaultSheet('us_equity_stocks_transactions');
+  const usTSheet = getVaultSheet('us_eq_indmoney_transactions');
   const usTHeaders = usTSheet.getRange(1, 1, 1, usTSheet.getLastColumn()).getValues()[0];
 
   usRows.forEach(r => {
