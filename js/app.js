@@ -249,6 +249,17 @@ async function startLogForm() {
     return;
   }
 
+  // US Equity (IBKR) — custom wire-aware log screen
+  if (STATE.stream?.usEquity) {
+    const usContainer = document.getElementById('log-content');
+    usContainer.innerHTML = '';
+    setHeader('log-content', STATE.subcategory?.name || STATE.category.name, () => {
+      STATE.category.hasSubcategories ? renderSubcategories('log') : renderCategories('log');
+    });
+    await renderUsEquityForm(usContainer, STATE.stream, STATE.category, STATE.subcategory);
+    return;
+  }
+
   const container = document.getElementById('log-content');
   container.innerHTML = '';
 

@@ -210,6 +210,7 @@ const PRICE_COLUMN_CONFIG = {
   'debt_hybrid_funds':           { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
   'indian_equity_stocks_assets': { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct'     },
   'us_equity_stocks_assets':     { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
+  'us_equity_assets':            { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
   'precious_metal_etf_assets':   { codeCol: 'code',   priceCol: 'current_price', formulaType: 'nse'        },
   'crypto_assets':               { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'crypto_usd' },
 };
@@ -316,6 +317,12 @@ function setupAllSheets() {
     us_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     us_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
+    // ── US Equity (IBKR) — wire-aware stream (additive) ──────────────────────
+    us_wires: ['id', 'wire_date', 'payment_reference', 'inr_principal', 'commission', 'gst', 'correspondent_charge', 'inr_debited', 'usd_sent', 'usd_received', 'effective_rate', 'status', 'notes', 'created_at'],
+    us_repatriations: ['id', 'repat_date', 'usd_withdrawn', 'ibkr_withdrawal_fee', 'correspondent_charge', 'inr_received', 'effective_rate_back', 'status', 'notes', 'created_at'],
+    us_equity_assets: ['id', 'subcategory_id', 'ticker', 'name', 'asset_type', 'is_active', 'current_price', 'created_at'],
+    us_equity_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_share_usd', 'usd_amount', 'wire_id', 'inr_cost_basis', 'realized_pnl_usd', 'notes', 'created_at'],
+
     precious_metal_etf_assets: ['id', 'subcategory_id', 'name', 'code', 'is_active', 'current_price', 'created_at'],
     precious_metal_etf_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_unit', 'amount', 'notes', 'created_at'],
 
@@ -375,6 +382,7 @@ function seedReferenceData() {
     [9, 2, 'Debt & Hybrid MF SIP',         '', now],
     [10, 2, 'EPF',                          '', now],
     [11, 2, 'Bank Accounts',               '', now],
+    [12, 1, 'US Equity',                    '', now],
   ].filter(row => !allCatRows.includes(row[0]));
   missingCats.forEach(row => catSheet.appendRow(row));
 
@@ -392,4 +400,14 @@ function seedReferenceData() {
     subSheet.appendRow([id++, 6, 'Physical', now]);
     // No subcategories for Indian Stocks (cat 2), US Stocks (cat 3), Real Estate (cat 4), Crypto (cat 7)
   }
+
+  // US Equity (cat 12) subcategories — additive (ids 22, 23)
+  const subRows = subSheet.getLastRow() > 1
+    ? subSheet.getRange(2, 1, subSheet.getLastRow() - 1, 1).getValues().map(r => r[0])
+    : [];
+  [
+    [22, 12, 'ETF (Passive)', now],
+    [23, 12, 'Stocks (Active)', now],
+  ].filter(row => !subRows.includes(row[0]))
+   .forEach(row => subSheet.appendRow(row));
 }

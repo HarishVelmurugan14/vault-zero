@@ -496,6 +496,7 @@ const ENTRIES = [
   { catId: 9,  catName: 'Debt & Hybrid MF SIP', bucketId: 2, stream: STREAMS.debt_hybrid_sip, subcatName: null },
   { catId: 10, catName: 'EPF',                  bucketId: 2, stream: STREAMS.epf,              subcatName: null },
   { catId: 11, catName: 'Bank Accounts',         bucketId: 2, stream: STREAMS.bank_accounts,   subcatName: null },
+  { catId: 12, catName: 'US Equity',             bucketId: 1, stream: STREAMS.us_equity_ibkr,  subcatName: null },
 ];
 
 async function fetchAllInsightsData() {
@@ -620,6 +621,70 @@ function aggregateInsights(filteredData) {
           totalCurrentValue += balance;
         });
       return; // skip transaction-based logic for this stream
+    }
+
+    // ── US Equity (IBKR) — INR cost basis from wires; current value via INR price ──
+    if (stream.usEquity) {
+      const byAsset = {};
+      txns.forEach(t => {
+        const aid = String(t[stream.assetIdCol]);
+        if (!byAsset[aid]) byAsset[aid] = { buyUnits: 0, buyCostINR: 0, netQty: 0, txns: [] };
+        const u = parseFloat(t.units || 0);
+        if (String(t.txn_type).toUpperCase() === 'BUY') {
+          byAsset[aid].buyUnits   += u;
+          byAsset[aid].buyCostINR += parseFloat(t[stream.costBasisCol] || 0);
+          byAsset[aid].netQty     += u;
+        } else {
+          byAsset[aid].netQty -= u;
+        }
+        byAsset[aid].txns.push(t);
+      });
+
+      Object.entries(byAsset).forEach(([aid, d]) => {
+        const asset = assetMap[aid];
+        if (d.buyUnits <= 0 || d.netQty <= 0) return;
+        const netCost   = d.netQty * (d.buyCostINR / d.buyUnits);
+        const priceINR  = parseFloat(asset?.[stream.currentPriceCol] || 0);
+        const curVal    = priceINR > 0 ? d.netQty * priceINR : 0;
+        const unrealPnL = curVal > 0 ? curVal - netCost : 0;
+
+        const resolvedSubcat = SUBCAT_NAMES[asset?.subcategory_id] || catName;
+        if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
+        bySubcat[resolvedSubcat].netCost      += netCost;
+        bySubcat[resolvedSubcat].currentValue += curVal;
+
+        byCategory[catName].netCost       += netCost;
+        byCategory[catName].currentValue   = (byCategory[catName].currentValue  || 0) + curVal;
+        byCategory[catName].unrealizedPnL  = (byCategory[catName].unrealizedPnL || 0) + unrealPnL;
+        byBucket[bucketId].netCost        += netCost;
+        byBucket[bucketId].currentValue    = (byBucket[bucketId].currentValue || 0) + curVal;
+        totalInvested      += d.buyCostINR;
+        totalCurrentValue  += curVal;
+        totalUnrealizedPnL += unrealPnL;
+
+        if (netCost > 100 && asset) {
+          topHoldings.push({ name: asset[stream.assetNameCol], catName, netCost, currentValue: curVal });
+        }
+
+        // INR cashflows for XIRR + monthly/yearly invested (buys only; USD stays in broker)
+        d.txns.forEach(t => {
+          if (String(t.txn_type).toUpperCase() !== 'BUY') return;
+          const inr = parseFloat(t[stream.costBasisCol] || 0);
+          const dt  = new Date(t.txn_date);
+          if (isNaN(dt) || !inr) return;
+          const cf = { amount: -inr, date: dt };
+          byCategory[catName].cashflows.push(cf);
+          allCashflows.push({ ...cf });
+          if (!byCategory[catName].firstBuyDate || dt < byCategory[catName].firstBuyDate) {
+            byCategory[catName].firstBuyDate = dt;
+          }
+          const month = (t.txn_date || '').substring(0, 7);
+          const year  = (t.txn_date || '').substring(0, 4);
+          if (month) { if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 }; byMonth[month].invested += inr; allMonthlyNet[month] = (allMonthlyNet[month] || 0) + inr; }
+          if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].invested  += inr; }
+        });
+      });
+      return;
     }
 
     const txnsByAsset = {};

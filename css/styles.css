@@ -1389,6 +1389,33 @@ body::before {
 .mf-badge-active   { background: rgba(34,197,94,0.15);  color: #22c55e; }
 .mf-badge-inactive { background: rgba(107,114,128,0.15); color: #9ca3af; }
 
+/* ── US Equity (IBKR) log + ledgers ──────────────────────────────────────────── */
+
+.us-toolbar { display: flex; gap: 8px; margin-bottom: 14px; }
+.goal-manage-hint {
+  font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;
+}
+.goal-manage-add-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); margin: 18px 0 10px;
+}
+.goal-manage-empty { color: var(--text-muted); font-size: 13px; padding: 10px 0; }
+.us-ledger-list { margin-bottom: 8px; }
+.us-ledger-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.us-ledger-status {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .mf-detail-table { width: 100%; }
 .mf-detail-table th,
 .mf-detail-table td { padding: 9px 8px; font-size: 12px; }

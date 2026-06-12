@@ -675,6 +675,296 @@ function renderNewAssetForm(container, stream) {
   document.body.appendChild(overlay);
 }
 
+// ── US Equity (IBKR) log form ─────────────────────────────────────────────────
+
+async function fetchWires(stream) {
+  try { const r = await API.get(stream.wireTable, { limit: 500 }); return r.rows || []; }
+  catch (_) { return []; }
+}
+
+// Latest wire whose wire_date ≤ the given date — drives BUY cost basis.
+function latestWireOnOrBefore(wires, dateStr) {
+  const d = new Date(dateStr);
+  return wires
+    .filter(w => new Date(w.wire_date) <= d)
+    .sort((a, b) => new Date(b.wire_date) - new Date(a.wire_date))[0] || null;
+}
+
+async function renderUsEquityForm(container, stream, category, subcategory) {
+  container.innerHTML = '';
+
+  // Toolbar — Wires & Repatriations (currency movements feed cost basis)
+  const bar = document.createElement('div');
+  bar.className = 'us-toolbar';
+  const wiresBtn = document.createElement('button');
+  wiresBtn.type = 'button'; wiresBtn.className = 'btn-secondary btn-sm';
+  wiresBtn.textContent = '💵 Wires';
+  wiresBtn.addEventListener('click', () => renderWiresOverlay(stream));
+  const repatBtn = document.createElement('button');
+  repatBtn.type = 'button'; repatBtn.className = 'btn-secondary btn-sm';
+  repatBtn.textContent = '↩ Repatriations';
+  repatBtn.addEventListener('click', () => renderRepatOverlay(stream));
+  bar.appendChild(wiresBtn);
+  bar.appendChild(repatBtn);
+  container.appendChild(bar);
+
+  // Assets for this subcategory
+  let assets = [];
+  try {
+    const all = await fetchAssetsCached(stream);
+    assets = subcategory ? all.filter(a => String(a.subcategory_id) === String(subcategory.id)) : all;
+  } catch (_) { showToast('Could not load assets.', 'error'); }
+
+  const { wrapper: assetWrapper, select: assetSelect } = renderAssetDropdown(assets, stream);
+  container.appendChild(assetWrapper);
+
+  const body = document.createElement('div');
+  body.id = 'us-form-body';
+  body.style.display = 'none';
+  container.appendChild(body);
+
+  assetSelect.addEventListener('change', () => {
+    const val = assetSelect.value;
+    if (val === '__new__') { assetSelect.value = ''; renderAssetForm(container, stream, category, subcategory); return; }
+    body.style.display = val ? 'block' : 'none';
+    if (val) buildUsTxnBody(body, stream, val);
+  });
+}
+
+function buildUsTxnBody(body, stream, assetId) {
+  body.innerHTML = '';
+  body.appendChild(renderField({ id: 'us-type', label: 'Type', type: 'select', options: ['BUY', 'SELL'], required: true }, 'BUY'));
+  body.appendChild(renderField({ id: 'us-date', label: 'Date', type: 'date', required: true }, todayStr()));
+  body.appendChild(renderField({ id: 'us-units', label: 'Units', type: 'number', step: '0.000001', required: true }));
+  body.appendChild(renderField({ id: 'us-price', label: 'Price / Share ($)', type: 'number', step: '0.0001', required: true }));
+  body.appendChild(renderField({ id: 'us-usd', label: 'USD Amount ($)', type: 'number', step: '0.01', readonly: true }));
+  body.appendChild(renderField({ id: 'us-notes', label: 'Notes', type: 'text' }));
+
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'btn-primary'; btn.textContent = 'Save Transaction';
+  body.appendChild(btn);
+
+  const unitsEl = body.querySelector('#field-us-units');
+  const priceEl = body.querySelector('#field-us-price');
+  const usdEl   = body.querySelector('#field-us-usd');
+  function recompute() {
+    const u = parseFloat(unitsEl.value) || 0, p = parseFloat(priceEl.value) || 0;
+    usdEl.value = (u && p) ? Math.round(u * p * 100) / 100 : '';
+  }
+  unitsEl.addEventListener('input', recompute);
+  priceEl.addEventListener('input', recompute);
+
+  btn.addEventListener('click', () => submitUsTxn(stream, assetId, body, btn));
+}
+
+async function submitUsTxn(stream, assetId, body, btn) {
+  const txnType = body.querySelector('#field-us-type').value;
+  const txnDate = body.querySelector('#field-us-date').value;
+  const units   = parseFloat(body.querySelector('#field-us-units').value);
+  const price   = parseFloat(body.querySelector('#field-us-price').value);
+  const notes   = body.querySelector('#field-us-notes').value;
+
+  if (!txnDate)            { showToast('Select a date', 'error'); return; }
+  if (!units || units <= 0) { showToast('Enter valid units', 'error'); return; }
+  if (!price || price <= 0) { showToast('Enter a valid price', 'error'); return; }
+  const usdAmount = Math.round(units * price * 100) / 100;
+
+  const row = {
+    [stream.assetIdCol]: assetId,
+    txn_type: txnType,
+    txn_date: txnDate,
+    units,
+    price_per_share_usd: price,
+    usd_amount: usdAmount,
+    notes,
+  };
+
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    if (txnType === 'BUY') {
+      const wire = latestWireOnOrBefore(await fetchWires(stream), txnDate);
+      if (!wire) {
+        showToast('No wire on/before this date — add one via 💵 Wires first.', 'error');
+        btn.disabled = false; btn.textContent = 'Save Transaction'; return;
+      }
+      row.wire_id = wire.id;
+      row.inr_cost_basis = Math.round(usdAmount * parseFloat(wire.effective_rate || 0) * 100) / 100;
+    } else {
+      // SELL — realized USD P&L vs weighted-avg USD cost of prior buys
+      const res = await API.get(stream.txnTable, { limit: 5000, filters: { [stream.assetIdCol]: assetId } });
+      const buys = (res.rows || []).filter(t => String(t.txn_type).toUpperCase() === 'BUY');
+      const bu = buys.reduce((s, t) => s + parseFloat(t.units || 0), 0);
+      const ba = buys.reduce((s, t) => s + parseFloat(t.usd_amount || 0), 0);
+      const avgUsd = bu > 0 ? ba / bu : 0;
+      row.realized_pnl_usd = Math.round((price - avgUsd) * units * 100) / 100;
+    }
+    await API.insert(stream.txnTable, row);
+    _insightsCache = null; _holdingsAllRows = null; LSC.clear('insights', 'holdings');
+    showToast('Transaction saved!');
+    ['#field-us-units', '#field-us-price', '#field-us-usd', '#field-us-notes'].forEach(s => { body.querySelector(s).value = ''; });
+  } catch (err) {
+    showToast('Failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save Transaction';
+  }
+}
+
+// ── Wires overlay (INR → USD) ─────────────────────────────────────────────────
+
+async function renderWiresOverlay(stream) {
+  const overlay = document.createElement('div'); overlay.className = 'asset-form-overlay';
+  const box = document.createElement('div'); box.className = 'asset-form-box';
+  const title = document.createElement('h3'); title.textContent = 'US Wires (INR → USD)'; box.appendChild(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'goal-manage-hint';
+  hint.textContent = 'inr_debited = principal + commission + GST + correspondent. effective_rate = inr_debited ÷ usd_received.';
+  box.appendChild(hint);
+
+  const listWrap = document.createElement('div'); listWrap.className = 'us-ledger-list'; box.appendChild(listWrap);
+
+  const addTitle = document.createElement('div'); addTitle.className = 'goal-manage-add-title'; addTitle.textContent = 'Add Wire'; box.appendChild(addTitle);
+  stream.wireFields.forEach(f => box.appendChild(renderField(f, f.id === 'wire_date' ? todayStr() : '')));
+
+  const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn-primary btn-sm'; addBtn.textContent = '+ Add Wire'; box.appendChild(addBtn);
+  const actions = document.createElement('div'); actions.className = 'form-actions';
+  const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'btn-secondary'; doneBtn.textContent = 'Done';
+  actions.appendChild(doneBtn); box.appendChild(actions);
+
+  function num(id) { return parseFloat(box.querySelector('#field-' + id).value) || 0; }
+  function val(id) { return box.querySelector('#field-' + id).value; }
+
+  async function loadWires() {
+    const wires = await fetchWires(stream);
+    listWrap.innerHTML = '';
+    if (!wires.length) { listWrap.innerHTML = '<div class="goal-manage-empty">No wires yet.</div>'; return; }
+    wires.sort((a, b) => new Date(b.wire_date) - new Date(a.wire_date));
+    wires.forEach(w => {
+      const row = document.createElement('div'); row.className = 'us-ledger-row';
+      row.innerHTML = `<span>${w.wire_date}</span>
+        <span>$${parseFloat(w.usd_received || 0).toLocaleString('en-US')}</span>
+        <span>@ ₹${parseFloat(w.effective_rate || 0).toFixed(2)}</span>
+        <span class="us-ledger-status">${w.status || ''}</span>`;
+      listWrap.appendChild(row);
+    });
+  }
+
+  addBtn.addEventListener('click', async () => {
+    const usdReceived = num('usd_received');
+    if (!val('wire_date'))         { showToast('Enter wire date', 'error'); return; }
+    if (num('inr_principal') <= 0) { showToast('Enter INR principal', 'error'); return; }
+    if (usdReceived <= 0)          { showToast('Enter USD received', 'error'); return; }
+
+    const inrDebited = Math.round((num('inr_principal') + num('commission') + num('gst') + num('correspondent_charge')) * 100) / 100;
+    const effRate    = Math.round(inrDebited / usdReceived * 10000) / 10000;
+
+    addBtn.disabled = true; addBtn.textContent = 'Adding…';
+    try {
+      await API.insert(stream.wireTable, {
+        wire_date: val('wire_date'),
+        payment_reference: val('payment_reference'),
+        inr_principal: num('inr_principal'),
+        commission: num('commission'),
+        gst: num('gst'),
+        correspondent_charge: num('correspondent_charge'),
+        inr_debited: inrDebited,
+        usd_sent: num('usd_sent'),
+        usd_received: usdReceived,
+        effective_rate: effRate,
+        status: val('status') || 'received',
+        notes: val('notes'),
+      });
+      showToast(`Wire added — effective ₹${effRate.toFixed(2)}/USD`);
+      stream.wireFields.forEach(f => { const el = box.querySelector('#field-' + f.id); if (el) el.value = f.id === 'wire_date' ? todayStr() : ''; });
+      await loadWires();
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    finally { addBtn.disabled = false; addBtn.textContent = '+ Add Wire'; }
+  });
+
+  doneBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  await loadWires();
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
+// ── Repatriations overlay (USD → INR) ─────────────────────────────────────────
+
+async function renderRepatOverlay(stream) {
+  const overlay = document.createElement('div'); overlay.className = 'asset-form-overlay';
+  const box = document.createElement('div'); box.className = 'asset-form-box';
+  const title = document.createElement('h3'); title.textContent = 'US Repatriations (USD → INR)'; box.appendChild(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'goal-manage-hint';
+  hint.textContent = 'effective_rate_back = inr_received ÷ usd_withdrawn (true round-trip-home ₹/USD).';
+  box.appendChild(hint);
+
+  const listWrap = document.createElement('div'); listWrap.className = 'us-ledger-list'; box.appendChild(listWrap);
+
+  const addTitle = document.createElement('div'); addTitle.className = 'goal-manage-add-title'; addTitle.textContent = 'Add Repatriation'; box.appendChild(addTitle);
+  stream.repatFields.forEach(f => box.appendChild(renderField(f, f.id === 'repat_date' ? todayStr() : '')));
+
+  const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn-primary btn-sm'; addBtn.textContent = '+ Add Repatriation'; box.appendChild(addBtn);
+  const actions = document.createElement('div'); actions.className = 'form-actions';
+  const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'btn-secondary'; doneBtn.textContent = 'Done';
+  actions.appendChild(doneBtn); box.appendChild(actions);
+
+  function num(id) { return parseFloat(box.querySelector('#field-' + id).value) || 0; }
+  function val(id) { return box.querySelector('#field-' + id).value; }
+
+  async function loadRepats() {
+    let repats = [];
+    try { const r = await API.get(stream.repatTable, { limit: 500 }); repats = r.rows || []; } catch (_) {}
+    listWrap.innerHTML = '';
+    if (!repats.length) { listWrap.innerHTML = '<div class="goal-manage-empty">No repatriations yet.</div>'; return; }
+    repats.sort((a, b) => new Date(b.repat_date) - new Date(a.repat_date));
+    repats.forEach(r => {
+      const row = document.createElement('div'); row.className = 'us-ledger-row';
+      row.innerHTML = `<span>${r.repat_date}</span>
+        <span>$${parseFloat(r.usd_withdrawn || 0).toLocaleString('en-US')}</span>
+        <span>@ ₹${parseFloat(r.effective_rate_back || 0).toFixed(2)}</span>
+        <span class="us-ledger-status">${r.status || ''}</span>`;
+      listWrap.appendChild(row);
+    });
+  }
+
+  addBtn.addEventListener('click', async () => {
+    const usdWithdrawn = num('usd_withdrawn');
+    const inrReceived  = num('inr_received');
+    if (!val('repat_date')) { showToast('Enter repat date', 'error'); return; }
+    if (usdWithdrawn <= 0)  { showToast('Enter USD withdrawn', 'error'); return; }
+    if (inrReceived <= 0)   { showToast('Enter INR received', 'error'); return; }
+
+    const effBack = Math.round(inrReceived / usdWithdrawn * 10000) / 10000;
+    addBtn.disabled = true; addBtn.textContent = 'Adding…';
+    try {
+      await API.insert(stream.repatTable, {
+        repat_date: val('repat_date'),
+        usd_withdrawn: usdWithdrawn,
+        ibkr_withdrawal_fee: num('ibkr_withdrawal_fee'),
+        correspondent_charge: num('correspondent_charge'),
+        inr_received: inrReceived,
+        effective_rate_back: effBack,
+        status: val('status') || 'received',
+        notes: val('notes'),
+      });
+      showToast(`Repatriation added — ₹${effBack.toFixed(2)}/USD back`);
+      stream.repatFields.forEach(f => { const el = box.querySelector('#field-' + f.id); if (el) el.value = f.id === 'repat_date' ? todayStr() : ''; });
+      await loadRepats();
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    finally { addBtn.disabled = false; addBtn.textContent = '+ Add Repatriation'; }
+  });
+
+  doneBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  await loadRepats();
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
 // Utility helpers
 function todayStr() {
   return new Date().toISOString().split('T')[0];

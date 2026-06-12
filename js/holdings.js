@@ -118,6 +118,7 @@ async function buildHoldingsRows() {
     { cat: CATEGORIES.find(c => c.id === 9), stream: STREAMS.debt_hybrid_sip,          subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 10), stream: STREAMS.epf,                     subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 11), stream: STREAMS.bank_accounts,           subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 12), stream: STREAMS.us_equity_ibkr,          subcatName: null },
   ];
 
   const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices'];
@@ -154,6 +155,37 @@ async function buildHoldingsRows() {
           rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
                       subcategory: '', name: a[stream.assetNameCol],
                       invested: balance, currentValue: balance });
+        });
+      continue;
+    }
+
+    // ── US Equity (IBKR) — INR cost basis from wires; current value via INR price ──
+    if (stream.usEquity) {
+      const usTxns = res[stream.txnTable]?.rows || [];
+      const buyUnits = {}, buyCostINR = {}, netQty = {};
+      usTxns.forEach(t => {
+        const aid = String(t[stream.assetIdCol]);
+        const u = parseFloat(t.units || 0);
+        if (String(t.txn_type).toUpperCase() === 'BUY') {
+          buyUnits[aid]   = (buyUnits[aid]   || 0) + u;
+          buyCostINR[aid] = (buyCostINR[aid] || 0) + parseFloat(t[stream.costBasisCol] || 0);
+          netQty[aid]     = (netQty[aid]     || 0) + u;
+        } else {
+          netQty[aid] = (netQty[aid] || 0) - u;
+        }
+      });
+      assets
+        .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
+        .forEach(a => {
+          const aid = String(a.id);
+          const tbu = buyUnits[aid] || 0, tbc = buyCostINR[aid] || 0, nq = netQty[aid] || 0;
+          if (tbu <= 0 || nq <= 0) return;
+          const invested = nq * (tbc / tbu);                          // remaining units × avg INR cost
+          const price = parseFloat(a[stream.currentPriceCol] || 0);   // INR/share (GOOGLEFINANCE)
+          const currentValue = price > 0 ? nq * price : 0;
+          rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
+                      subcategory: SUBCAT_NAMES[a.subcategory_id] || '',
+                      name: a[stream.assetNameCol], invested, currentValue });
         });
       continue;
     }

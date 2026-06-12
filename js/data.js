@@ -14,6 +14,7 @@ const SUBCAT_NAMES = {
   15: 'Arbitrage', 16: 'Credit Risk', 17: 'Balanced Advantage',
   18: 'Conservative Hybrid', 19: 'Equity Savings',
   20: 'Digital', 21: 'Physical',
+  22: 'ETF (Passive)', 23: 'Stocks (Active)',
 };
 
 // Categories keyed by bucket_id
@@ -21,7 +22,7 @@ const SUBCAT_NAMES = {
 const CATEGORIES = [
   { id: 1, bucket_id: 1, name: 'Indian EQ Mutual Fund', stream: 'equity_mf', hasSubcategories: true },
   { id: 2, bucket_id: 1, name: 'Indian Equity Stocks', stream: 'indian_stocks', hasSubcategories: true },
-  { id: 3, bucket_id: 1, name: 'US Equity Stocks', stream: 'us_stocks', hasSubcategories: true },
+  { id: 3, bucket_id: 1, name: 'US Equity (IndMoney)', stream: 'us_stocks', hasSubcategories: true },
   { id: 4, bucket_id: 1, name: 'Real Estate', stream: 'real_estate', hasSubcategories: true },
   { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf', hasSubcategories: true },
   { id: 6, bucket_id: 3, name: 'Precious Metals', stream: 'precious_metals', hasSubcategories: true },
@@ -30,6 +31,7 @@ const CATEGORIES = [
   { id: 9, bucket_id: 2, name: 'Debt & Hybrid MF — SIP', stream: 'debt_hybrid_sip', hasSubcategories: false },
   { id: 10, bucket_id: 2, name: 'EPF',           stream: 'epf',           hasSubcategories: false },
   { id: 11, bucket_id: 2, name: 'Bank Accounts',  stream: 'bank_accounts', hasSubcategories: false },
+  { id: 12, bucket_id: 1, name: 'US Equity',      stream: 'us_equity_ibkr', hasSubcategories: true },
 ];
 
 // Stream configurations — defines tables, asset form fields, transaction form fields
@@ -130,6 +132,59 @@ const STREAMS = {
       { id: 'amount_usd', label: 'Amount (USD)', type: 'number', step: '0.01', required: true, computed: 'quantity*price_per_share_usd' },
       { id: 'amount_inr', label: 'Amount (₹)', type: 'number', step: '0.01', required: true, triggers: 'conv_rate' },
       { id: 'conv_rate', label: 'Conv. Rate (auto)', type: 'number', step: '0.0001', readonly: true, computed: 'amount_inr/amount_usd' },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+  },
+
+  // US Equity (IBKR) — wire-aware. USD equity inside the broker; INR cost basis
+  // derived from the latest wire on or before each BUY. Custom log UI (usEquity).
+  us_equity_ibkr: {
+    label: 'US Equity',
+    usEquity: true,
+    currentPriceCol: 'current_price',   // INR per share (GOOGLEFINANCE direct_usd)
+    costBasisCol: 'inr_cost_basis',     // INR cost on BUY rows
+    assetTable: 'us_equity_assets',
+    txnTable: 'us_equity_transactions',
+    wireTable: 'us_wires',
+    repatTable: 'us_repatriations',
+    assetIdCol: 'asset_id',
+    assetNameCol: 'name',
+    assetFields: [
+      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
+      { id: 'ticker', label: 'Ticker', type: 'text', required: true, placeholder: 'e.g. VOO' },
+      { id: 'name', label: 'Name', type: 'text', required: true, placeholder: 'e.g. Vanguard S&P 500 ETF' },
+      { id: 'asset_type', label: 'Type', type: 'select', options: ['ETF', 'STOCK'], required: true },
+    ],
+    // Buy/Sell handled by a custom form (renderUsEquityForm) — these fields document the shape.
+    txnFields: [
+      { id: 'txn_type', label: 'Type', type: 'select', options: ['BUY', 'SELL'], required: true },
+      { id: 'txn_date', label: 'Date', type: 'date', required: true },
+      { id: 'units', label: 'Units', type: 'number', step: '0.000001', required: true, triggers: 'usd_amount' },
+      { id: 'price_per_share_usd', label: 'Price / Share ($)', type: 'number', step: '0.0001', required: true, triggers: 'usd_amount' },
+      { id: 'usd_amount', label: 'USD Amount ($)', type: 'number', step: '0.01', required: true, computed: 'units*price_per_share_usd' },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+    // Wire form fields (currency in)
+    wireFields: [
+      { id: 'wire_date', label: 'Wire Date', type: 'date', required: true },
+      { id: 'payment_reference', label: 'Payment Reference', type: 'text', placeholder: 'e.g. U20241815 Harish V' },
+      { id: 'inr_principal', label: 'INR Principal (₹)', type: 'number', step: '0.01', required: true },
+      { id: 'commission', label: 'Commission (₹)', type: 'number', step: '0.01' },
+      { id: 'gst', label: 'GST (₹)', type: 'number', step: '0.01' },
+      { id: 'correspondent_charge', label: 'Correspondent Charge (₹)', type: 'number', step: '0.01' },
+      { id: 'usd_sent', label: 'USD Sent ($)', type: 'number', step: '0.01', required: true },
+      { id: 'usd_received', label: 'USD Received ($)', type: 'number', step: '0.01', required: true },
+      { id: 'status', label: 'Status', type: 'select', options: ['received', 'sent'] },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+    // Repatriation form fields (currency out)
+    repatFields: [
+      { id: 'repat_date', label: 'Repat Date', type: 'date', required: true },
+      { id: 'usd_withdrawn', label: 'USD Withdrawn ($)', type: 'number', step: '0.01', required: true },
+      { id: 'ibkr_withdrawal_fee', label: 'IBKR Withdrawal Fee ($)', type: 'number', step: '0.01' },
+      { id: 'correspondent_charge', label: 'Correspondent Charge (₹)', type: 'number', step: '0.01' },
+      { id: 'inr_received', label: 'INR Received (₹)', type: 'number', step: '0.01', required: true },
+      { id: 'status', label: 'Status', type: 'select', options: ['received', 'sent'] },
       { id: 'notes', label: 'Notes', type: 'text' },
     ],
   },
