@@ -2,9 +2,9 @@
  * VaultZero — Import equity/debt transactions from Zerodha Tradebook CSV (one at a time)
  *
  * HOW TO USE:
- *   1. Paste one tradebook CSV into the "Tradebook" tab (A1, including header)
+ *   1. Paste one tradebook CSV into the "Tradebook" (or "Sheet1") tab (A1, incl. header)
  *   2. Run importFromTradebook()
- *   3. Clear the Tradebook tab, paste the next CSV, run again
+ *   3. Clear the tab, paste the next CSV, run again
  *
  * Unique key: order_id. Existing → row updated (financial fields only, preserving
  * goal_id/notes/created_at); new → inserted. Header-aware: rows are written by
@@ -31,16 +31,19 @@ const DEBT_ISIN_TO_FUND = {
   'INF204K01YH3': { id: 2, name: 'Nippon India Ultra Short Duration' },
   'INF174K01LC6': { id: 3, name: 'Kotak Arbitrage' },
   'INF109K016O4': { id: 4, name: 'ICICI Prudential Equity Arbitrage' },
-  'INF109K01Q49': null, // ICICI Liquid — skip (not in debt_hybrid_funds)
+  'INF109K01Q49': { id: 5, name: 'ICICI Liquid' },
+  'INF846K01CX4': { id: 6, name: 'Axis Liquid' },
+  'INF205K01KR8': { id: 7, name: 'Invesco India Arbitrage' },
 };
 
 function importFromTradebook() {
   const dataSS      = vaultDataSpreadsheet_();
-  const tradebookSh = vaultSpreadsheet_().getSheetByName('Tradebook');
+  const srcSS       = vaultSpreadsheet_();
+  const tradebookSh = srcSS.getSheetByName('Tradebook') || srcSS.getSheetByName('Sheet1');
   const eqSheet     = dataSS.getSheetByName('equity_transactions');
   const debtSheet   = dataSS.getSheetByName('debt_hybrid_transactions');
 
-  if (!tradebookSh) { notify_('Sheet "Tradebook" not found.'); return; }
+  if (!tradebookSh) { notify_('Paste the tradebook CSV into a "Tradebook" or "Sheet1" tab, then run again.'); return; }
   if (!eqSheet)     { notify_('Sheet "equity_transactions" not found.'); return; }
   if (!debtSheet)   { notify_('Sheet "debt_hybrid_transactions" not found.'); return; }
 
