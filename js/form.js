@@ -848,7 +848,7 @@ async function renderWiresOverlay(stream) {
       const row = document.createElement('div'); row.className = 'us-ledger-row';
       row.innerHTML = `<span>${w.wire_date}</span>
         <span>$${parseFloat(w.usd_received || 0).toLocaleString('en-US')}</span>
-        <span>@ ₹${parseFloat(w.effective_rate || 0).toFixed(2)}</span>
+        <span>@ ₹${parseFloat(w.effective_rate || 0).toFixed(2)}${w.actual_rate ? ` <small>(mkt ₹${parseFloat(w.actual_rate).toFixed(2)})</small>` : ''}</span>
         <span class="us-ledger-status">${w.status || ''}</span>`;
       listWrap.appendChild(row);
     });
@@ -862,6 +862,8 @@ async function renderWiresOverlay(stream) {
 
     const inrDebited = Math.round((num('inr_principal') + num('commission') + num('gst') + num('correspondent_charge')) * 100) / 100;
     const effRate    = Math.round(inrDebited / usdReceived * 10000) / 10000;
+    const usdSent    = num('usd_sent');
+    const actualRate = usdSent > 0 ? Math.round(num('inr_principal') / usdSent * 10000) / 10000 : 0;
 
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
@@ -873,9 +875,10 @@ async function renderWiresOverlay(stream) {
         gst: num('gst'),
         correspondent_charge: num('correspondent_charge'),
         inr_debited: inrDebited,
-        usd_sent: num('usd_sent'),
+        usd_sent: usdSent,
         usd_received: usdReceived,
         effective_rate: effRate,
+        actual_rate: actualRate,
         status: val('status') || 'received',
         notes: val('notes'),
       });
@@ -929,7 +932,7 @@ async function renderRepatOverlay(stream) {
       const row = document.createElement('div'); row.className = 'us-ledger-row';
       row.innerHTML = `<span>${r.repat_date}</span>
         <span>$${parseFloat(r.usd_withdrawn || 0).toLocaleString('en-US')}</span>
-        <span>@ ₹${parseFloat(r.effective_rate_back || 0).toFixed(2)}</span>
+        <span>@ ₹${parseFloat(r.effective_rate_back || 0).toFixed(2)}${r.actual_rate_back ? ` <small>(mkt ₹${parseFloat(r.actual_rate_back).toFixed(2)})</small>` : ''}</span>
         <span class="us-ledger-status">${r.status || ''}</span>`;
       listWrap.appendChild(row);
     });
@@ -942,7 +945,11 @@ async function renderRepatOverlay(stream) {
     if (usdWithdrawn <= 0)  { showToast('Enter USD withdrawn', 'error'); return; }
     if (inrReceived <= 0)   { showToast('Enter INR received', 'error'); return; }
 
-    const effBack = Math.round(inrReceived / usdWithdrawn * 10000) / 10000;
+    const effBack    = Math.round(inrReceived / usdWithdrawn * 10000) / 10000;
+    const grossUsd   = usdWithdrawn - num('ibkr_withdrawal_fee');
+    const actualBack = grossUsd > 0
+      ? Math.round((inrReceived + num('correspondent_charge')) / grossUsd * 10000) / 10000
+      : 0;
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
       await API.insert(stream.repatTable, {
@@ -952,6 +959,7 @@ async function renderRepatOverlay(stream) {
         correspondent_charge: num('correspondent_charge'),
         inr_received: inrReceived,
         effective_rate_back: effBack,
+        actual_rate_back: actualBack,
         status: val('status') || 'received',
         notes: val('notes'),
       });
