@@ -30,6 +30,7 @@ function fmtXIRR(r) {
 let _insightsCache = null;
 let _insightsCharts = [];
 let _manualPricesMap = {};
+let _usAux = { wires: [], repats: [], income: [] };
 
 const INSIGHT_FILTERS = {
   catName:   '',
@@ -503,15 +504,17 @@ async function fetchAllInsightsData() {
   const cached = LSC.get('insights');
   if (cached) {
     _manualPricesMap = cached.manualPrices || {};
+    _usAux = cached.usAux || { wires: [], repats: [], income: [] };
     return cached.entries;
   }
 
   let data;
-  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices'];
+  const allSheets = [...new Set(ENTRIES.flatMap(e => [e.stream.assetTable, e.stream.txnTable, ...(e.stream.auxTables || [])]).filter(Boolean)), 'manual_prices'];
 
   try {
     const res = await API.batchGet(allSheets);
     _manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
+    _usAux = { wires: res['us_wires']?.rows || [], repats: res['us_repatriations']?.rows || [], income: res['us_income']?.rows || [] };
     data = ENTRIES.map(entry => ({
       ...entry,
       assets: res[entry.stream.assetTable]?.rows || [],
@@ -536,9 +539,21 @@ async function fetchAllInsightsData() {
       const mpRes = await API.get('manual_prices', { limit: 1000 });
       _manualPricesMap = buildManualPricesMap(mpRes.rows || []);
     } catch (_) {}
+    try {
+      const [w, r, inc] = await Promise.allSettled([
+        API.get('us_wires', { limit: 1000 }),
+        API.get('us_repatriations', { limit: 1000 }),
+        API.get('us_income', { limit: 1000 }),
+      ]);
+      _usAux = {
+        wires:  w.status   === 'fulfilled' ? (w.value.rows   || []) : [],
+        repats: r.status   === 'fulfilled' ? (r.value.rows   || []) : [],
+        income: inc.status === 'fulfilled' ? (inc.value.rows || []) : [],
+      };
+    } catch (_) {}
   }
 
-  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap });
+  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, usAux: _usAux });
   return data;
 }
 
@@ -684,6 +699,20 @@ function aggregateInsights(filteredData) {
           if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].invested  += inr; }
         });
       });
+
+      // ── Derived US cash line (snapshot, no P&L) ──
+      const cashUsd = usEquityCashUsd(txns, _usAux.wires, _usAux.repats, _usAux.income);
+      if (Math.abs(cashUsd) > 0.01) {
+        const cashInr = cashUsd * usEquityLiveRate(assets, _usAux.wires, stream);
+        byCategory[catName].netCost      += cashInr;
+        byCategory[catName].currentValue  = (byCategory[catName].currentValue || 0) + cashInr;
+        byBucket[bucketId].netCost       += cashInr;
+        byBucket[bucketId].currentValue   = (byBucket[bucketId].currentValue || 0) + cashInr;
+        if (!bySubcat['Cash']) bySubcat['Cash'] = { netCost: 0, currentValue: 0 };
+        bySubcat['Cash'].netCost      += cashInr;
+        bySubcat['Cash'].currentValue += cashInr;
+        totalCurrentValue += cashInr;
+      }
       return;
     }
 

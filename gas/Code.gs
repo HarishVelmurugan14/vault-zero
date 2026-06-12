@@ -346,6 +346,7 @@ function setupAllSheets() {
     us_repatriations: ['id', 'repat_date', 'usd_withdrawn', 'ibkr_withdrawal_fee', 'correspondent_charge', 'inr_received', 'effective_rate_back', 'status', 'notes', 'created_at'],
     us_equity_assets: ['id', 'subcategory_id', 'ticker', 'name', 'asset_type', 'is_active', 'current_price_usd', 'current_price', 'created_at'],
     us_equity_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_share_usd', 'usd_amount', 'wire_id', 'inr_cost_basis', 'realized_pnl_usd', 'notes', 'created_at'],
+    us_income: ['id', 'income_type', 'income_date', 'usd_amount', 'notes', 'created_at'],
 
     precious_metal_etf_assets: ['id', 'subcategory_id', 'name', 'code', 'is_active', 'current_price', 'created_at'],
     precious_metal_etf_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_unit', 'amount', 'notes', 'created_at'],

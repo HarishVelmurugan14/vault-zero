@@ -704,8 +704,13 @@ async function renderUsEquityForm(container, stream, category, subcategory) {
   repatBtn.type = 'button'; repatBtn.className = 'btn-secondary btn-sm';
   repatBtn.textContent = '↩ Repatriations';
   repatBtn.addEventListener('click', () => renderRepatOverlay(stream));
+  const incomeBtn = document.createElement('button');
+  incomeBtn.type = 'button'; incomeBtn.className = 'btn-secondary btn-sm';
+  incomeBtn.textContent = '💲 Income';
+  incomeBtn.addEventListener('click', () => renderIncomeOverlay(stream));
   bar.appendChild(wiresBtn);
   bar.appendChild(repatBtn);
+  bar.appendChild(incomeBtn);
   container.appendChild(bar);
 
   // Assets for this subcategory
@@ -961,6 +966,74 @@ async function renderRepatOverlay(stream) {
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
   await loadRepats();
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
+// ── Income overlay (USD dividends / interest → feeds the US cash balance) ──────
+
+async function renderIncomeOverlay(stream) {
+  const overlay = document.createElement('div'); overlay.className = 'asset-form-overlay';
+  const box = document.createElement('div'); box.className = 'asset-form-box';
+  const title = document.createElement('h3'); title.textContent = 'US Income (Dividends / Interest)'; box.appendChild(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'goal-manage-hint';
+  hint.textContent = 'Log each USD dividend/interest credit. It adds to your US cash balance shown in Holdings.';
+  box.appendChild(hint);
+
+  const listWrap = document.createElement('div'); listWrap.className = 'us-ledger-list'; box.appendChild(listWrap);
+
+  const addTitle = document.createElement('div'); addTitle.className = 'goal-manage-add-title'; addTitle.textContent = 'Add Income'; box.appendChild(addTitle);
+  stream.incomeFields.forEach(f => box.appendChild(renderField(f, f.id === 'income_date' ? todayStr() : '')));
+
+  const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn-primary btn-sm'; addBtn.textContent = '+ Add Income'; box.appendChild(addBtn);
+  const actions = document.createElement('div'); actions.className = 'form-actions';
+  const doneBtn = document.createElement('button'); doneBtn.type = 'button'; doneBtn.className = 'btn-secondary'; doneBtn.textContent = 'Done';
+  actions.appendChild(doneBtn); box.appendChild(actions);
+
+  function num(id) { return parseFloat(box.querySelector('#field-' + id).value) || 0; }
+  function val(id) { return box.querySelector('#field-' + id).value; }
+
+  async function loadIncome() {
+    let rows = [];
+    try { const r = await API.get(stream.incomeTable, { limit: 500 }); rows = r.rows || []; } catch (_) {}
+    listWrap.innerHTML = '';
+    if (!rows.length) { listWrap.innerHTML = '<div class="goal-manage-empty">No income logged yet.</div>'; return; }
+    rows.sort((a, b) => new Date(b.income_date) - new Date(a.income_date));
+    rows.forEach(r => {
+      const row = document.createElement('div'); row.className = 'us-ledger-row';
+      row.innerHTML = `<span>${r.income_date}</span>
+        <span>${r.income_type || ''}</span>
+        <span>$${parseFloat(r.usd_amount || 0).toLocaleString('en-US')}</span>
+        <span class="us-ledger-status"></span>`;
+      listWrap.appendChild(row);
+    });
+  }
+
+  addBtn.addEventListener('click', async () => {
+    if (!val('income_date')) { showToast('Enter a date', 'error'); return; }
+    if (num('usd_amount') <= 0) { showToast('Enter a USD amount', 'error'); return; }
+    addBtn.disabled = true; addBtn.textContent = 'Adding…';
+    try {
+      await API.insert(stream.incomeTable, {
+        income_type: val('income_type') || 'Dividend',
+        income_date: val('income_date'),
+        usd_amount: num('usd_amount'),
+        notes: val('notes'),
+      });
+      _insightsCache = null; _holdingsAllRows = null; LSC.clear('insights', 'holdings');
+      showToast('Income added');
+      stream.incomeFields.forEach(f => { const el = box.querySelector('#field-' + f.id); if (el) el.value = f.id === 'income_date' ? todayStr() : ''; });
+      await loadIncome();
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    finally { addBtn.disabled = false; addBtn.textContent = '+ Add Income'; }
+  });
+
+  doneBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  await loadIncome();
   overlay.appendChild(box);
   document.body.appendChild(overlay);
 }

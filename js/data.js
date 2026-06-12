@@ -147,6 +147,9 @@ const STREAMS = {
     txnTable: 'us_equity_transactions',
     wireTable: 'us_wires',
     repatTable: 'us_repatriations',
+    incomeTable: 'us_income',
+    auxTables: ['us_wires', 'us_repatriations', 'us_income'],
+    usdPriceCol: 'current_price_usd',   // raw USD price/share (for live-rate derivation)
     assetIdCol: 'asset_id',
     assetNameCol: 'name',
     assetFields: [
@@ -185,6 +188,13 @@ const STREAMS = {
       { id: 'correspondent_charge', label: 'Correspondent Charge (₹)', type: 'number', step: '0.01' },
       { id: 'inr_received', label: 'INR Received (₹)', type: 'number', step: '0.01', required: true },
       { id: 'status', label: 'Status', type: 'select', options: ['received', 'sent'] },
+      { id: 'notes', label: 'Notes', type: 'text' },
+    ],
+    // Income form fields (dividends / interest credited as USD cash)
+    incomeFields: [
+      { id: 'income_type', label: 'Type', type: 'select', options: ['Dividend', 'Interest'], required: true },
+      { id: 'income_date', label: 'Date', type: 'date', required: true },
+      { id: 'usd_amount', label: 'USD Amount ($)', type: 'number', step: '0.01', required: true },
       { id: 'notes', label: 'Notes', type: 'text' },
     ],
   },

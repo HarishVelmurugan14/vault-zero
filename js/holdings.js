@@ -2,6 +2,35 @@
 
 let _holdingsAllRows = null;
 
+// ── US Equity (IBKR) shared helpers (used by holdings.js + insights.js) ───────
+
+// Uninvested USD cash = wires in − buys + sells − repats + income.
+function usEquityCashUsd(txns, wires, repats, income) {
+  const sum = (arr, f) => (arr || []).reduce((s, r) => s + (parseFloat(f(r)) || 0), 0);
+  const wiredIn   = sum(wires,  w => w.usd_received);
+  const repatOut  = sum(repats, r => r.usd_withdrawn);
+  const incomeIn  = sum(income, r => r.usd_amount);
+  let bought = 0, sold = 0;
+  (txns || []).forEach(t => {
+    const amt = parseFloat(t.usd_amount) || 0;
+    if (String(t.txn_type).toUpperCase() === 'BUY') bought += amt; else sold += amt;
+  });
+  return wiredIn - bought + sold - repatOut + incomeIn;
+}
+
+// Live ₹/USD: prefer GOOGLEFINANCE-derived spot (INR price ÷ USD price) from any
+// priced asset; fall back to avg all-in wire rate; final fallback 88.
+function usEquityLiveRate(assets, wires, stream) {
+  for (const a of (assets || [])) {
+    const inr = parseFloat(a[stream.currentPriceCol] || 0);
+    const usd = parseFloat(a[stream.usdPriceCol] || 0);
+    if (inr > 0 && usd > 0) return inr / usd;
+  }
+  const inrDebited = (wires || []).reduce((s, w) => s + (parseFloat(w.inr_debited) || 0), 0);
+  const usdRecv    = (wires || []).reduce((s, w) => s + (parseFloat(w.usd_received) || 0), 0);
+  return usdRecv > 0 ? inrDebited / usdRecv : 88;
+}
+
 async function renderHoldings() {
   const container = document.getElementById('holdings-content');
   const header = document.getElementById('holdings-header');
@@ -121,7 +150,7 @@ async function buildHoldingsRows() {
     { cat: CATEGORIES.find(c => c.id === 12), stream: STREAMS.us_equity_ibkr,          subcatName: null },
   ];
 
-  const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable]).filter(Boolean)), 'manual_prices'];
+  const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable, ...(e.stream.auxTables || [])]).filter(Boolean)), 'manual_prices'];
   let res = {};
   try {
     res = await API.batchGet(allSheets);
@@ -187,6 +216,19 @@ async function buildHoldingsRows() {
                       subcategory: SUBCAT_NAMES[a.subcategory_id] || '',
                       name: a[stream.assetNameCol], invested, currentValue });
         });
+
+      // ── Derived US cash line (wires − buys + sells − repats + income) ──
+      const wires   = res[stream.wireTable]?.rows   || [];
+      const repats  = res[stream.repatTable]?.rows  || [];
+      const income  = res[stream.incomeTable]?.rows || [];
+      const cashUsd = usEquityCashUsd(usTxns, wires, repats, income);
+      if (Math.abs(cashUsd) > 0.01) {
+        const rate = usEquityLiveRate(assets, wires, stream);
+        const cashInr = cashUsd * rate;
+        rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
+                    subcategory: 'Cash', name: 'Uninvested Cash (USD)',
+                    invested: cashInr, currentValue: cashInr });
+      }
       continue;
     }
 
