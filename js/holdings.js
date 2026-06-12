@@ -172,7 +172,8 @@ async function buildHoldingsRows() {
   for (const entry of streamEntries) {
     const { cat, stream, subcatName } = entry;
     const assets = res[stream.assetTable]?.rows || [];
-    if (!assets.length) continue;
+    // US equity may have cash (from a wire) before any asset exists — don't skip it.
+    if (!assets.length && !stream.usEquity) continue;
 
     // ── staticBalance streams (EPF, Bank) — no transactions, read balance directly ──
     if (stream.staticBalance) {

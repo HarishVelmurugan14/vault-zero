@@ -347,7 +347,8 @@ function applyFilters(rawData) {
       if (assetId) {
         assets = assets.filter(a => String(a.id) === String(assetId));
       }
-      if (!assets.length) return null;
+      // US equity can carry cash (from a wire) before any asset exists — keep it.
+      if (!assets.length && !entry.stream.usEquity) return null;
 
       const allowedAssetIds = new Set(assets.map(a => String(a.id)));
 
