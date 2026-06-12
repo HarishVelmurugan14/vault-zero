@@ -210,7 +210,7 @@ const PRICE_COLUMN_CONFIG = {
   'debt_hybrid_funds':           { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
   'indian_equity_stocks_assets': { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct'     },
   'us_eq_indmoney_assets':       { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
-  'us_equity_assets':            { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
+  'us_equity_assets':            { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd', usdPriceCol: 'current_price_usd' },
   'precious_metal_etf_assets':   { codeCol: 'code',   priceCol: 'current_price', formulaType: 'nse'        },
   'crypto_assets':               { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'crypto_usd' },
 };
@@ -241,6 +241,15 @@ function writePriceFormula(sheet, sheetName, headers, rowNum) {
       break;
   }
   if (formula) sheet.getRange(rowNum, priceIdx + 1).setFormula(formula);
+
+  // Optional second column holding the raw USD price (no FX conversion)
+  if (config.usdPriceCol) {
+    const usdIdx = headers.indexOf(config.usdPriceCol);
+    if (usdIdx >= 0) {
+      sheet.getRange(rowNum, usdIdx + 1)
+        .setFormula(`=IFERROR(GOOGLEFINANCE(${colLetter}${rowNum},"closeyest"),0)`);
+    }
+  }
 }
 
 // Run once to remove the reverted Yearly-Bills goal/cycle artifacts:
@@ -335,7 +344,7 @@ function setupAllSheets() {
     // ── US Equity (IBKR) — wire-aware stream (additive) ──────────────────────
     us_wires: ['id', 'wire_date', 'payment_reference', 'inr_principal', 'commission', 'gst', 'correspondent_charge', 'inr_debited', 'usd_sent', 'usd_received', 'effective_rate', 'status', 'notes', 'created_at'],
     us_repatriations: ['id', 'repat_date', 'usd_withdrawn', 'ibkr_withdrawal_fee', 'correspondent_charge', 'inr_received', 'effective_rate_back', 'status', 'notes', 'created_at'],
-    us_equity_assets: ['id', 'subcategory_id', 'ticker', 'name', 'asset_type', 'is_active', 'current_price', 'created_at'],
+    us_equity_assets: ['id', 'subcategory_id', 'ticker', 'name', 'asset_type', 'is_active', 'current_price_usd', 'current_price', 'created_at'],
     us_equity_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_share_usd', 'usd_amount', 'wire_id', 'inr_cost_basis', 'realized_pnl_usd', 'notes', 'created_at'],
 
     precious_metal_etf_assets: ['id', 'subcategory_id', 'name', 'code', 'is_active', 'current_price', 'created_at'],
