@@ -14,7 +14,7 @@ const SUBCAT_NAMES = {
   15: 'Arbitrage', 16: 'Credit Risk', 17: 'Balanced Advantage',
   18: 'Conservative Hybrid', 19: 'Equity Savings',
   20: 'Digital', 21: 'Physical',
-  22: 'ETF (Passive)', 23: 'Stocks (Active)',
+  29: 'ETF (Passive)', 30: 'Stocks (Active)',
 };
 
 // Categories keyed by bucket_id

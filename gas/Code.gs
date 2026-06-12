@@ -416,13 +416,13 @@ function seedReferenceData() {
     // No subcategories for Indian Stocks (cat 2), US Stocks (cat 3), Real Estate (cat 4), Crypto (cat 7)
   }
 
-  // US Equity (cat 12) subcategories — additive (ids 22, 23)
+  // US Equity (cat 12) subcategories — additive (ids 29, 30; ≤28 already used in live data)
   const subRows = subSheet.getLastRow() > 1
     ? subSheet.getRange(2, 1, subSheet.getLastRow() - 1, 1).getValues().map(r => r[0])
     : [];
   [
-    [22, 12, 'ETF (Passive)', now],
-    [23, 12, 'Stocks (Active)', now],
+    [29, 12, 'ETF (Passive)', now],
+    [30, 12, 'Stocks (Active)', now],
   ].filter(row => !subRows.includes(row[0]))
    .forEach(row => subSheet.appendRow(row));
 }
