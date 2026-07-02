@@ -111,7 +111,7 @@ const STREAMS = {
   },
 
   us_stocks: {
-    label: 'US Equity Stocks',
+    label: 'US Equity (IndMoney)',
     currentPriceCol: 'current_price',
     amountCol: 'amount_inr',
     assetTable: 'us_eq_indmoney_assets',

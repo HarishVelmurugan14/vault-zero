@@ -31,6 +31,68 @@ function usEquityLiveRate(assets, wires, stream) {
   return usdRecv > 0 ? inrDebited / usdRecv : 88;
 }
 
+// ── Reusable multi-select dropdown (checkbox panel) — shared with insights.js ──
+// options: [{ value, label }]. onChange() fires on every toggle.
+// Returns { wrapper, getSelected(), clear(), setOptions(opts) }.
+function makeMultiSelect(placeholder, options, onChange) {
+  const selected = new Set();
+  const wrap  = document.createElement('div');
+  wrap.className = 'multiselect';
+  const btn   = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'multiselect-btn holdings-filter-select';
+  const panel = document.createElement('div');
+  panel.className = 'multiselect-panel';
+  panel.style.display = 'none';
+
+  function relabel() {
+    btn.textContent = selected.size === 0 ? placeholder : `${placeholder} (${selected.size})`;
+  }
+  function buildPanel(opts) {
+    panel.innerHTML = '';
+    if (!opts.length) { panel.innerHTML = '<div class="multiselect-empty">None</div>'; return; }
+    opts.forEach(o => {
+      const item = document.createElement('label');
+      item.className = 'multiselect-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selected.has(o.value);
+      cb.addEventListener('change', () => {
+        if (cb.checked) selected.add(o.value); else selected.delete(o.value);
+        relabel();
+        onChange();
+      });
+      const span = document.createElement('span');
+      span.textContent = o.label;
+      item.appendChild(cb);
+      item.appendChild(span);
+      panel.appendChild(item);
+    });
+  }
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  });
+  document.addEventListener('click', e => { if (!wrap.contains(e.target)) panel.style.display = 'none'; });
+
+  buildPanel(options);
+  relabel();
+  wrap.appendChild(btn);
+  wrap.appendChild(panel);
+
+  return {
+    wrapper: wrap,
+    getSelected: () => [...selected],
+    clear: () => { selected.clear(); buildPanel(options); relabel(); },
+    setOptions: (opts) => {
+      [...selected].forEach(v => { if (!opts.find(o => o.value === v)) selected.delete(v); });
+      buildPanel(opts);
+      relabel();
+    },
+  };
+}
+
 async function renderHoldings() {
   const container = document.getElementById('holdings-content');
   const header = document.getElementById('holdings-header');
@@ -71,62 +133,39 @@ function renderHoldingsUI(container, allRows) {
   const filterBar = document.createElement('div');
   filterBar.className = 'holdings-filter-bar';
 
-  const catSelect = document.createElement('select');
-  catSelect.className = 'holdings-filter-select';
-  catSelect.innerHTML = '<option value="">All Categories</option>';
-  const cats = [...new Set(allRows.map(r => r.catName))];
-  cats.forEach(c => {
-    const o = document.createElement('option');
-    o.value = c;
-    o.textContent = c;
-    catSelect.appendChild(o);
-  });
+  const catOptions = [...new Set(allRows.map(r => r.catName))].sort()
+    .map(c => ({ value: c, label: c }));
 
-  const subcatSelect = document.createElement('select');
-  subcatSelect.className = 'holdings-filter-select';
-  subcatSelect.innerHTML = '<option value="">All Subcategories</option>';
+  const subcatOptionsFor = (cats) => [...new Set(
+    allRows
+      .filter(r => !cats.length || cats.includes(r.catName))
+      .map(r => r.subcategory)
+      .filter(Boolean)
+  )].sort().map(s => ({ value: s, label: s }));
 
-  function populateSubcats(catName) {
-    subcatSelect.innerHTML = '<option value="">All Subcategories</option>';
-    const subcats = [...new Set(
-      allRows
-        .filter(r => !catName || r.catName === catName)
-        .map(r => r.subcategory)
-        .filter(Boolean)
-    )].sort();
-    subcats.forEach(s => {
-      const o = document.createElement('option');
-      o.value = s;
-      o.textContent = s;
-      subcatSelect.appendChild(o);
-    });
-    subcatSelect.disabled = subcats.length === 0;
-  }
-
-  populateSubcats('');
-
-  catSelect.addEventListener('change', () => {
-    subcatSelect.value = '';
-    populateSubcats(catSelect.value);
+  const catMS = makeMultiSelect('All Categories', catOptions, () => {
+    subcatMS.setOptions(subcatOptionsFor(catMS.getSelected()));
     applyFilter();
   });
-
-  subcatSelect.addEventListener('change', applyFilter);
+  const subcatMS = makeMultiSelect('All Subcategories', subcatOptionsFor([]), () => applyFilter());
 
   const tableWrap = document.createElement('div');
 
   function applyFilter() {
-    const cat = catSelect.value;
-    const subcat = subcatSelect.value;
+    const cats = catMS.getSelected();
+    const subs = subcatMS.getSelected();
     const filtered = allRows.filter(r =>
-      (!cat || r.catName === cat) &&
-      (!subcat || r.subcategory === subcat)
+      (!cats.length || cats.includes(r.catName)) &&
+      (!subs.length || subs.includes(r.subcategory))
     );
-    renderHoldingsTable(tableWrap, filtered, { singleCat: !!cat, singleSubcat: !!subcat });
+    renderHoldingsTable(tableWrap, filtered, {
+      singleCat:    cats.length === 1,
+      singleSubcat: subs.length === 1,
+    });
   }
 
-  filterBar.appendChild(catSelect);
-  filterBar.appendChild(subcatSelect);
+  filterBar.appendChild(catMS.wrapper);
+  filterBar.appendChild(subcatMS.wrapper);
   container.appendChild(filterBar);
   container.appendChild(tableWrap);
 
@@ -434,7 +473,7 @@ function renderHoldingsTable(wrap, rows, { singleCat = false, singleSubcat = fal
     <div class="ht-grand-label">Total</div>
     <div class="ht-grand-num">₹${formatINR(grandInvested)}</div>
     <div class="ht-grand-num">${grandCurrent > 0 ? '₹' + formatINR(grandCurrent) : '—'}</div>
-    <div class="ht-grand-num ${grandPnL !== null ? (grandPnL >= 0 ? 'positive' : 'negative') : ''}">${grandPnL !== null ? (grandPnL >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(grandPnL)) : '—'}</div>
+    <div class="ht-grand-num ${grandPnL !== null ? (grandPnL >= 0 ? 'positive' : 'negative') : ''}">${grandPnL !== null ? (grandPnL >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(grandPnL)) : '—'}</div>
   `;
   tree.appendChild(gRow);
   wrap.appendChild(tree);
@@ -452,7 +491,7 @@ function makeBucketRow(bucket, totals) {
     </div>
     <div class="ht-bucket-num">₹${formatINR(totals.invested)}</div>
     <div class="ht-bucket-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
-    <div class="ht-bucket-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+    <div class="ht-bucket-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
 }
@@ -466,7 +505,7 @@ function makeCategoryRow(catName, totals) {
     <div class="ht-category-name"><span class="ht-toggle">▾</span>${catName}</div>
     <div class="ht-category-num">₹${formatINR(totals.invested)}</div>
     <div class="ht-category-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
-    <div class="ht-category-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+    <div class="ht-category-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
 }
@@ -480,7 +519,7 @@ function makeSubcatRow(subcatName, totals) {
     <div class="ht-subcat-name"><span class="ht-toggle">▾</span>${subcatName}</div>
     <div class="ht-subcat-num">₹${formatINR(totals.invested)}</div>
     <div class="ht-subcat-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
-    <div class="ht-subcat-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+    <div class="ht-subcat-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
 }
@@ -494,7 +533,7 @@ function makeAssetRow(r) {
     <div class="ht-asset-name">${r.name}</div>
     <div class="ht-asset-num">₹${formatINR(r.invested)}</div>
     <div class="ht-asset-num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</div>
-    <div class="ht-asset-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
+    <div class="ht-asset-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
 }

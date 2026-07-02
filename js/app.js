@@ -357,7 +357,7 @@ async function renderHistoryPage() {
     STATE.category = cat;
 
     if (cat.hasSubcategories) {
-      subcatSelect.innerHTML = '<option value="">Select Subcategory…</option>';
+      subcatSelect.innerHTML = '<option value="">All Subcategories</option>';
       subcatSelect.style.display = 'block';
       try {
         const data = await API.getSubcategories(cat.id);
@@ -369,7 +369,9 @@ async function renderHistoryPage() {
           subcatSelect.appendChild(o);
         });
       } catch (_) { showToast('Failed to load subcategories', 'error'); }
-      STATE.stream = null;
+      // Show all transactions for the category right away; subcat dropdown narrows.
+      STATE.stream = resolveStream(cat, null);
+      await renderHistoryInArea(txnArea);
     } else {
       STATE.stream = resolveStream(cat, null);
       await renderHistoryInArea(txnArea);
@@ -380,7 +382,13 @@ async function renderHistoryPage() {
     const opt = subcatSelect.options[subcatSelect.selectedIndex];
     txnArea.innerHTML = '';
     STATE.editMode = false;
-    if (!opt || !opt.value) { STATE.subcategory = null; STATE.stream = null; return; }
+    if (!opt || !opt.value) {
+      // "All Subcategories" — show the whole category again
+      STATE.subcategory = null;
+      STATE.stream = resolveStream(STATE.category, null);
+      await renderHistoryInArea(txnArea);
+      return;
+    }
     STATE.subcategory = { id: parseInt(opt.value), name: opt.dataset.name };
     STATE.stream = resolveStream(STATE.category, opt.dataset.name);
     await renderHistoryInArea(txnArea);

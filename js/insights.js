@@ -33,9 +33,9 @@ let _manualPricesMap = {};
 let _usAux = { wires: [], repats: [], income: [] };
 
 const INSIGHT_FILTERS = {
-  catName:   '',
-  subcatName:'',
-  assetKey:  '',   // "streamIdx|assetId"
+  catNames:    [],
+  subcatNames: [],
+  assetKeys:   [],   // ["streamIdx|assetId", …]
   year:      '',
   fromMonth: '',   // YYYY-MM
   toMonth:   '',   // YYYY-MM
@@ -58,7 +58,7 @@ async function renderInsights() {
       _insightsCache = null;
       _manualPricesMap = {};
       LSC.clear('insights');
-      Object.keys(INSIGHT_FILTERS).forEach(k => INSIGHT_FILTERS[k] = '');
+      resetInsightFilters();
       renderInsights();
     });
     header.appendChild(h2);
@@ -102,45 +102,91 @@ function renderInsightsPage(container, rawData) {
 
 // ── Filter bar ────────────────────────────────────────────────────────────────
 
+function resetInsightFilters() {
+  INSIGHT_FILTERS.catNames    = [];
+  INSIGHT_FILTERS.subcatNames = [];
+  INSIGHT_FILTERS.assetKeys   = [];
+  INSIGHT_FILTERS.year        = '';
+  INSIGHT_FILTERS.fromMonth   = '';
+  INSIGHT_FILTERS.toMonth     = '';
+}
+
 function buildFilterBar(filterArea, rawData, chartsArea) {
   filterArea.innerHTML = '';
 
   const bar = document.createElement('div');
   bar.className = 'insights-filter-bar';
 
-  // ── Category
-  const catSel = makeFilterGroup('Category', 'icat');
-  catSel.select.innerHTML = '<option value="">All Categories</option>';
-  const catNames = [...new Set(rawData.map(e => e.catName))];
-  catNames.forEach(c => {
-    const o = document.createElement('option');
-    o.value = c; o.textContent = c;
-    if (INSIGHT_FILTERS.catName === c) o.selected = true;
-    catSel.select.appendChild(o);
+  // Wrap a multi-select in a labeled filter group
+  const msGroup = (label, ms) => {
+    const group = document.createElement('div');
+    group.className = 'insights-filter-group';
+    const lbl = document.createElement('div');
+    lbl.className = 'insights-filter-label';
+    lbl.textContent = label;
+    group.appendChild(lbl);
+    group.appendChild(ms.wrapper);
+    return group;
+  };
+
+  // Option builders (cascade off the current selections)
+  const catOptions = [...new Set(rawData.map(e => e.catName))].map(c => ({ value: c, label: c }));
+  const subcatOptions = () => {
+    const cats = INSIGHT_FILTERS.catNames;
+    const set = new Set();
+    rawData.forEach(e => {
+      if (cats.length && !cats.includes(e.catName)) return;
+      e.assets.forEach(a => { const s = SUBCAT_NAMES[a.subcategory_id]; if (s) set.add(s); });
+    });
+    return [...set].sort().map(s => ({ value: s, label: s }));
+  };
+  const assetOptions = () => {
+    const cats = INSIGHT_FILTERS.catNames, subs = INSIGHT_FILTERS.subcatNames;
+    const seen = new Set(), opts = [];
+    rawData.forEach((e, idx) => {
+      if (cats.length && !cats.includes(e.catName)) return;
+      e.assets.forEach(a => {
+        if (subs.length && !subs.includes(SUBCAT_NAMES[a.subcategory_id] || '')) return;
+        const name = a[e.stream.assetNameCol] || '';
+        if (!name || seen.has(name)) return;
+        seen.add(name);
+        opts.push({ value: `${idx}|${a.id}`, label: name });
+      });
+    });
+    return opts;
+  };
+
+  const catMS = makeMultiSelect('All Categories', catOptions, () => {
+    INSIGHT_FILTERS.catNames = catMS.getSelected();
+    INSIGHT_FILTERS.subcatNames = [];
+    INSIGHT_FILTERS.assetKeys   = [];
+    subcatMS.clear(); subcatMS.setOptions(subcatOptions());
+    assetMS.clear();  assetMS.setOptions(assetOptions());
+    redrawCharts(chartsArea, rawData);
   });
-
-  // ── Subcategory
-  const subcatSel = makeFilterGroup('Subcategory', 'isubcat');
-
-  // ── Asset
-  const assetSel = makeFilterGroup('Asset', 'iasset');
+  const subcatMS = makeMultiSelect('All Subcategories', subcatOptions(), () => {
+    INSIGHT_FILTERS.subcatNames = subcatMS.getSelected();
+    INSIGHT_FILTERS.assetKeys   = [];
+    assetMS.clear(); assetMS.setOptions(assetOptions());
+    redrawCharts(chartsArea, rawData);
+  });
+  const assetMS = makeMultiSelect('All Assets', assetOptions(), () => {
+    INSIGHT_FILTERS.assetKeys = assetMS.getSelected();
+    redrawCharts(chartsArea, rawData);
+  });
 
   // ── Year
   const yearSel = makeFilterGroup('Year', 'iyear');
   yearSel.select.innerHTML = '<option value="">All Years</option>';
-  const allYears = getAllYears(rawData);
-  allYears.forEach(y => {
+  getAllYears(rawData).forEach(y => {
     const o = document.createElement('option');
     o.value = y; o.textContent = y;
     if (INSIGHT_FILTERS.year === y) o.selected = true;
     yearSel.select.appendChild(o);
   });
 
-  // ── From month-year
   const fromGroup = makeMonthGroup('From', 'ifrom', INSIGHT_FILTERS.fromMonth);
-
-  // ── To month-year
-  const toGroup = makeMonthGroup('To', 'ito', INSIGHT_FILTERS.toMonth);
+  const toGroup   = makeMonthGroup('To', 'ito', INSIGHT_FILTERS.toMonth);
 
   // ── Clear
   const clearWrap = document.createElement('div');
@@ -152,49 +198,23 @@ function buildFilterBar(filterArea, rawData, chartsArea) {
   clearBtn.className = 'btn-secondary btn-sm insights-clear-btn';
   clearBtn.textContent = '✕ Clear';
   clearBtn.addEventListener('click', () => {
-    Object.keys(INSIGHT_FILTERS).forEach(k => INSIGHT_FILTERS[k] = '');
+    resetInsightFilters();
     buildFilterBar(filterArea, rawData, chartsArea);
     redrawCharts(chartsArea, rawData);
   });
   clearWrap.appendChild(clearSpacer);
   clearWrap.appendChild(clearBtn);
 
-  bar.appendChild(catSel.group);
-  bar.appendChild(subcatSel.group);
-  bar.appendChild(assetSel.group);
+  bar.appendChild(msGroup('Category', catMS));
+  bar.appendChild(msGroup('Subcategory', subcatMS));
+  bar.appendChild(msGroup('Asset', assetMS));
   bar.appendChild(yearSel.group);
   bar.appendChild(fromGroup);
   bar.appendChild(toGroup);
   bar.appendChild(clearWrap);
   filterArea.appendChild(bar);
 
-  // Populate cascades on load
-  populateSubcats(subcatSel.select, assetSel.select, rawData);
-  populateAssets(assetSel.select, rawData);
-
-  // ── Wire events ──────────────────────────────────────────
-
-  catSel.select.addEventListener('change', () => {
-    INSIGHT_FILTERS.catName    = catSel.select.value;
-    INSIGHT_FILTERS.subcatName = '';
-    INSIGHT_FILTERS.assetKey   = '';
-    populateSubcats(subcatSel.select, assetSel.select, rawData);
-    populateAssets(assetSel.select, rawData);
-    redrawCharts(chartsArea, rawData);
-  });
-
-  subcatSel.select.addEventListener('change', () => {
-    INSIGHT_FILTERS.subcatName = subcatSel.select.value;
-    INSIGHT_FILTERS.assetKey   = '';
-    populateAssets(assetSel.select, rawData);
-    redrawCharts(chartsArea, rawData);
-  });
-
-  assetSel.select.addEventListener('change', () => {
-    INSIGHT_FILTERS.assetKey = assetSel.select.value;
-    redrawCharts(chartsArea, rawData);
-  });
-
+  // ── Wire year / month events ─────────────────────────────
   yearSel.select.addEventListener('change', () => {
     const y = yearSel.select.value;
     INSIGHT_FILTERS.year = y;
@@ -257,56 +277,6 @@ function makeMonthGroup(label, id, val) {
   return group;
 }
 
-function populateSubcats(subcatSel, assetSel, rawData) {
-  subcatSel.innerHTML = '<option value="">All Subcategories</option>';
-  const catFilter = INSIGHT_FILTERS.catName;
-  const subcats = new Set();
-
-  rawData.forEach(entry => {
-    if (catFilter && entry.catName !== catFilter) return;
-    entry.assets.forEach(a => {
-      const s = SUBCAT_NAMES[a.subcategory_id];
-      if (s) subcats.add(s);
-    });
-  });
-
-  [...subcats].sort().forEach(s => {
-    const o = document.createElement('option');
-    o.value = s; o.textContent = s;
-    if (INSIGHT_FILTERS.subcatName === s) o.selected = true;
-    subcatSel.appendChild(o);
-  });
-
-  subcatSel.disabled = subcats.size === 0;
-}
-
-function populateAssets(assetSel, rawData) {
-  assetSel.innerHTML = '<option value="">All Assets</option>';
-  const catFilter    = INSIGHT_FILTERS.catName;
-  const subcatFilter = INSIGHT_FILTERS.subcatName;
-  const seen = new Set();
-
-  rawData.forEach((entry, idx) => {
-    if (catFilter && entry.catName !== catFilter) return;
-    entry.assets.forEach(a => {
-      if (subcatFilter) {
-        const s = SUBCAT_NAMES[a.subcategory_id] || '';
-        if (s !== subcatFilter) return;
-      }
-      const name = a[entry.stream.assetNameCol] || '';
-      if (!name || seen.has(name)) return;
-      seen.add(name);
-      const key = `${idx}|${a.id}`;
-      const o = document.createElement('option');
-      o.value = key; o.textContent = name;
-      if (INSIGHT_FILTERS.assetKey === key) o.selected = true;
-      assetSel.appendChild(o);
-    });
-  });
-
-  assetSel.disabled = seen.size === 0;
-}
-
 function getAllYears(rawData) {
   const years = new Set();
   rawData.forEach(entry => {
@@ -321,31 +291,32 @@ function getAllYears(rawData) {
 // ── Filter application ────────────────────────────────────────────────────────
 
 function applyFilters(rawData) {
-  const { catName, subcatName, assetKey, fromMonth, toMonth } = INSIGHT_FILTERS;
+  const { catNames, subcatNames, assetKeys, fromMonth, toMonth } = INSIGHT_FILTERS;
 
-  // Parse assetKey → { entryIdx, assetId }
-  let assetEntryIdx = null, assetId = null;
-  if (assetKey) {
-    const [i, id] = assetKey.split('|');
-    assetEntryIdx = parseInt(i);
-    assetId = id;
-  }
+  // Parse assetKeys → entryIdx → Set(assetId)
+  const assetByEntry = {};
+  assetKeys.forEach(k => {
+    const [i, id] = k.split('|');
+    (assetByEntry[i] = assetByEntry[i] || new Set()).add(id);
+  });
+  const hasAssetFilter = assetKeys.length > 0;
 
   return rawData
     .map((entry, idx) => {
-      // Category filter
-      if (catName && entry.catName !== catName) return null;
+      // Category filter (multi)
+      if (catNames.length && !catNames.includes(entry.catName)) return null;
 
-      // Asset filter (restrict to a specific entry's asset)
-      if (assetEntryIdx !== null && idx !== assetEntryIdx) return null;
+      // Asset filter restricts to entries whose assets were picked
+      if (hasAssetFilter && !(String(idx) in assetByEntry)) return null;
 
       // Filter assets
       let assets = entry.assets;
-      if (subcatName) {
-        assets = assets.filter(a => (SUBCAT_NAMES[a.subcategory_id] || '') === subcatName);
+      if (subcatNames.length) {
+        assets = assets.filter(a => subcatNames.includes(SUBCAT_NAMES[a.subcategory_id] || ''));
       }
-      if (assetId) {
-        assets = assets.filter(a => String(a.id) === String(assetId));
+      if (hasAssetFilter) {
+        const ids = assetByEntry[String(idx)];
+        assets = assets.filter(a => ids.has(String(a.id)));
       }
       // US equity can carry cash (from a wire) before any asset exists — keep it.
       if (!assets.length && !entry.stream.usEquity) return null;
@@ -428,6 +399,12 @@ function drawCharts(chartsArea, rawData) {
   allocSection.appendChild(allocRow2);
   chartsArea.appendChild(allocSection);
 
+  // ── COMPOSITION ───────────────────────────────────────────
+  const compSection = makeSectionHeader('Composition', '#7c3aed');
+  compSection.appendChild(makeReportCard('Portfolio Composition by Category', 'report-comp-cat', true));
+  compSection.appendChild(makeReportCard('Subcategory Composition (within category)', 'report-comp-subcat', true));
+  chartsArea.appendChild(compSection);
+
   // ── PERFORMANCE ───────────────────────────────────────────
   const perfSection = makeSectionHeader('Performance', '#0891b2');
   perfSection.appendChild(makeReportCard('Stream-wise P&L', 'report-stream-table', true));
@@ -437,6 +414,8 @@ function drawCharts(chartsArea, rawData) {
   perfRow.appendChild(makeChartCard('Monthly Investment', 'chart-monthly'));
   perfRow.appendChild(makeChartCard('Yearly Summary', 'chart-yearly'));
   perfSection.appendChild(perfRow);
+  perfSection.appendChild(makeChartCard('Profit by Investment Year (Vintage)', 'chart-vintage', true));
+  perfSection.appendChild(makeReportCard('Monthly Contributions', 'report-monthly-table', true));
   chartsArea.appendChild(perfSection);
 
   // ── RISK & LIQUIDITY ──────────────────────────────────────
@@ -469,8 +448,12 @@ function drawCharts(chartsArea, rawData) {
     drawCategoryChart(agg.byCategory);
     drawSubcatChart(agg.bySubcat);
     drawAllocCvChart(agg.byCategory);
+    drawCategoryComposition('report-comp-cat', agg);
+    drawSubcatComposition('report-comp-subcat', agg);
+    drawMonthlyTable('report-monthly-table', agg);
     drawStreamTable('report-stream-table', agg);
     drawCumulativeChart(agg.allMonthlyNet, agg.totalCurrentValue);
+    drawVintageChart('chart-vintage', filtered);
     drawMonthlyChart(agg.byMonth);
     drawYearlyChart(agg.byYear);
     drawLiquidityLadder('report-liquidity', agg.byCategory, agg.netInvested);
@@ -480,6 +463,12 @@ function drawCharts(chartsArea, rawData) {
     drawPnLChart(agg.byCategory);
     drawTaxTable('report-tax-table', agg.byCategory);
     drawMFReport('report-mf-detail', rawData);
+
+    // Make every report table click-sortable (Stream P&L manages its own sort)
+    chartsArea.querySelectorAll('.report-table').forEach(t => {
+      if (t.closest('#report-stream-table')) return;
+      makeTableSortable(t);
+    });
   });
 }
 
@@ -488,7 +477,7 @@ function drawCharts(chartsArea, rawData) {
 const ENTRIES = [
   { catId: 1, catName: 'Indian EQ MF',              bucketId: 1, stream: STREAMS.equity_mf,               subcatName: null },
   { catId: 2, catName: 'Indian Equity Stocks',      bucketId: 1, stream: STREAMS.indian_stocks,            subcatName: null },
-  { catId: 3, catName: 'US Equity Stocks',           bucketId: 1, stream: STREAMS.us_stocks,                subcatName: null },
+  { catId: 3, catName: 'US Equity (IndMoney)',           bucketId: 1, stream: STREAMS.us_stocks,                subcatName: null },
   { catId: 4, catName: 'Real Estate',                bucketId: 1, stream: STREAMS.real_estate,              subcatName: null },
   { catId: 5, catName: 'Debt & Hybrid MF',           bucketId: 2, stream: STREAMS.debt_hybrid_mf,           subcatName: null },
   { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
@@ -607,11 +596,19 @@ function aggregateInsights(filteredData) {
   const byCategory    = {};
   const byBucket      = {};
   const bySubcat      = {};
+  const byCatSubcat   = {};   // catName → { subcatName → { netCost, currentValue } }
   const byMonth       = {};
   const byYear        = {};
   const allMonthlyNet = {};
   const topHoldings   = [];
   const allCashflows  = [];
+
+  const addCatSub = (cat, sub, nc, cv) => {
+    if (!byCatSubcat[cat]) byCatSubcat[cat] = {};
+    if (!byCatSubcat[cat][sub]) byCatSubcat[cat][sub] = { netCost: 0, currentValue: 0 };
+    byCatSubcat[cat][sub].netCost      += nc;
+    byCatSubcat[cat][sub].currentValue += cv;
+  };
 
   filteredData.forEach(entry => {
     const { catName, bucketId, subcatName, stream, assets, txns } = entry;
@@ -668,6 +665,7 @@ function aggregateInsights(filteredData) {
         if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
         bySubcat[resolvedSubcat].netCost      += netCost;
         bySubcat[resolvedSubcat].currentValue += curVal;
+        addCatSub(catName, resolvedSubcat, netCost, curVal);
 
         byCategory[catName].netCost       += netCost;
         byCategory[catName].currentValue   = (byCategory[catName].currentValue  || 0) + curVal;
@@ -712,6 +710,7 @@ function aggregateInsights(filteredData) {
         if (!bySubcat['Cash']) bySubcat['Cash'] = { netCost: 0, currentValue: 0 };
         bySubcat['Cash'].netCost      += cashInr;
         bySubcat['Cash'].currentValue += cashInr;
+        addCatSub(catName, 'Cash', cashInr, cashInr);
         totalCurrentValue += cashInr;
       }
       return;
@@ -746,6 +745,7 @@ function aggregateInsights(filteredData) {
       if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
       bySubcat[resolvedSubcat].netCost      += m.netCost;
       bySubcat[resolvedSubcat].currentValue += curVal;
+      addCatSub(catName, resolvedSubcat, m.netCost, curVal);
 
       byCategory[catName].netCost        += m.netCost;
       byCategory[catName].realizedPnL    += m.realizedPnL;
@@ -816,7 +816,7 @@ function aggregateInsights(filteredData) {
   return {
     totalInvested, totalRedeemed, totalRealizedPnL, netInvested,
     totalCurrentValue, totalUnrealizedPnL, overallXIRR,
-    byCategory, byBucket, bySubcat, byMonth, byYear,
+    byCategory, byBucket, bySubcat, byCatSubcat, byMonth, byYear,
     topHoldings: topHoldings.slice(0, 10),
     allMonthlyNet,
   };
@@ -884,7 +884,8 @@ function buildMetricStrip(agg) {
 const CAT_ICONS = {
   'Indian EQ MF':              '📊',
   'Indian Equity Stocks':      '📈',
-  'US Equity Stocks':          '🇺🇸',
+  'US Equity (IndMoney)':      '🏦',
+  'US Equity':                 '🇺🇸',
   'Real Estate':               '🏠',
   'Debt & Hybrid MF':          '🛡️',
   'Precious Metals (Digital)': '✨',
@@ -897,7 +898,7 @@ const CAT_ICONS = {
 const LIQUIDITY_TIERS = [
   { label: 'Instant',  color: '#8b5cf6', cats: ['Cryptocurrency'] },
   { label: '1 Day',    color: '#22c55e', cats: ['Indian Equity Stocks'] },
-  { label: '3-5 Days', color: '#3b82f6', cats: ['Indian EQ MF', 'Debt & Hybrid MF', 'US Equity Stocks', 'Precious Metals (Digital)'] },
+  { label: '3-5 Days', color: '#3b82f6', cats: ['Indian EQ MF', 'Debt & Hybrid MF', 'US Equity (IndMoney)', 'US Equity', 'Precious Metals (Digital)'] },
   { label: 'Weeks',    color: '#f59e0b', cats: ['Precious Metals (Physical)'] },
   { label: 'Months+',  color: '#ef4444', cats: ['Real Estate'] },
 ];
@@ -909,7 +910,8 @@ const CURRENCY_MAP = {
   'Precious Metals (Digital)': 'INR',
   'Precious Metals (Physical)':'INR',
   'Real Estate':               'INR',
-  'US Equity Stocks':          'USD',
+  'US Equity (IndMoney)':      'USD',
+  'US Equity':                 'USD',
   'Cryptocurrency':            'Crypto',
   'Indian EQ MF SIP':          'INR',
   'Debt & Hybrid MF SIP':      'INR',
@@ -918,7 +920,8 @@ const CURRENCY_MAP = {
 const TAX_CONFIG = {
   'Indian EQ MF':              { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
   'Indian Equity Stocks':      { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
-  'US Equity Stocks':          { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
+  'US Equity (IndMoney)':      { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
+  'US Equity':                 { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
   'Debt & Hybrid MF':          { ltcgMonths: null, rate: 'income', note: 'Taxed as income' },
   'Precious Metals (Digital)': { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
   'Precious Metals (Physical)':{ ltcgMonths: 36, ltcgRate: 0.20, stcgRate: 0.30 },
@@ -1027,6 +1030,144 @@ function drawStreamTable(divId, agg) {
   }
 
   render();
+}
+
+// ── Generic click-to-sort for any .report-table ──────────────────────────────
+// Reads a cell's data-sort attr if present, else parses its text as a number
+// (₹, %, +/− and commas stripped), falling back to case-insensitive text.
+// Rows with class .total-row stay pinned at the bottom.
+function makeTableSortable(table) {
+  if (!table || !table.tHead || !table.tBodies[0]) return;
+  const tbody = table.tBodies[0];
+  const ths = [...table.tHead.rows[0].cells];
+
+  const cellVal = (cell) => {
+    if (!cell) return -Infinity;
+    if (cell.dataset.sort !== undefined && cell.dataset.sort !== '') {
+      const n = parseFloat(cell.dataset.sort);
+      return isNaN(n) ? cell.dataset.sort.toLowerCase() : n;
+    }
+    const txt = (cell.textContent || '').trim();
+    if (txt === '' || txt === '—') return -Infinity;
+    const num = parseFloat(txt.replace(/[₹,%+\s]/g, '').replace(/−/g, '-'));
+    return isNaN(num) ? txt.toLowerCase() : num;
+  };
+
+  ths.forEach((th, col) => {
+    if (!(th.textContent || '').trim()) return;   // skip blank columns (e.g. % bar)
+    th.addEventListener('click', () => {
+      const asc = !th.classList.contains('sort-asc');
+      ths.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+
+      const rows   = [...tbody.rows];
+      const totals = rows.filter(r => r.classList.contains('total-row'));
+      const data   = rows.filter(r => !r.classList.contains('total-row'));
+      data.sort((ra, rb) => {
+        const a = cellVal(ra.cells[col]), b = cellVal(rb.cells[col]);
+        if (a < b) return asc ? -1 : 1;
+        if (a > b) return asc ? 1 : -1;
+        return 0;
+      });
+      data.forEach(r => tbody.appendChild(r));
+      totals.forEach(r => tbody.appendChild(r));
+    });
+  });
+}
+
+// ── Composition % tables ──────────────────────────────────────────────────────
+
+function _compVal(x) { return (x && x.currentValue > 0) ? x.currentValue : (x && x.netCost) || 0; }
+
+// Category-wise composition: each category's share of the whole portfolio.
+function drawCategoryComposition(divId, agg) {
+  const wrap = document.getElementById(divId);
+  if (!wrap) return;
+  const rows = Object.entries(agg.byCategory)
+    .map(([name, c]) => ({ name, val: _compVal(c) }))
+    .filter(r => r.val > 0)
+    .sort((a, b) => b.val - a.val);
+  const total = rows.reduce((s, r) => s + r.val, 0);
+  if (!total) { wrap.innerHTML = '<p class="chart-empty">No data.</p>'; return; }
+
+  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
+    <th style="text-align:left">Category</th><th>Value</th><th>% of Portfolio</th><th></th>
+  </tr></thead><tbody>`;
+  rows.forEach(r => {
+    const pct = r.val / total * 100;
+    html += `<tr>
+      <td>${CAT_ICONS[r.name] ? `<span class="stream-icon">${CAT_ICONS[r.name]}</span>` : ''}${r.name}</td>
+      <td>${fmtCurrency(r.val)}</td>
+      <td>${pct.toFixed(1)}%</td>
+      <td style="width:130px"><div class="comp-bar"><div class="comp-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div></td>
+    </tr>`;
+  });
+  html += `<tr class="total-row"><td>Total</td><td>${fmtCurrency(total)}</td><td>100%</td><td></td></tr>`;
+  html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
+}
+
+// Within each category, the subcategory composition (only multi-subcat categories).
+function drawSubcatComposition(divId, agg) {
+  const wrap = document.getElementById(divId);
+  if (!wrap) return;
+  const cats = Object.entries(agg.byCatSubcat || {})
+    .map(([cat, subs]) => {
+      const rows = Object.entries(subs)
+        .map(([sub, v]) => ({ sub, val: _compVal(v) }))
+        .filter(r => r.val > 0)
+        .sort((a, b) => b.val - a.val);
+      return { cat, rows, total: rows.reduce((s, r) => s + r.val, 0) };
+    })
+    .filter(c => c.rows.length > 1 && c.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  if (!cats.length) { wrap.innerHTML = '<p class="chart-empty">No multi-subcategory data.</p>'; return; }
+
+  let html = '';
+  cats.forEach(c => {
+    html += `<div class="comp-group"><div class="comp-group-title">${CAT_ICONS[c.cat] ? `<span class="stream-icon">${CAT_ICONS[c.cat]}</span>` : ''}${c.cat}</div>
+      <div class="report-table-wrap"><table class="report-table"><thead><tr>
+        <th style="text-align:left">Subcategory</th><th>Value</th><th>% of category</th><th></th>
+      </tr></thead><tbody>`;
+    c.rows.forEach(r => {
+      const pct = r.val / c.total * 100;
+      html += `<tr>
+        <td>${r.sub}</td><td>${fmtCurrency(r.val)}</td><td>${pct.toFixed(1)}%</td>
+        <td style="width:130px"><div class="comp-bar"><div class="comp-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div></td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  });
+  wrap.innerHTML = html;
+}
+
+// Amount contributed per month (invested / redeemed / net), newest first.
+function drawMonthlyTable(divId, agg) {
+  const wrap = document.getElementById(divId);
+  if (!wrap) return;
+  const months = Object.keys(agg.byMonth).sort((a, b) => b.localeCompare(a));
+  if (!months.length) { wrap.innerHTML = '<p class="chart-empty">No transactions.</p>'; return; }
+
+  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
+    <th style="text-align:left">Month</th><th>Invested</th><th>Redeemed</th><th>Net</th>
+  </tr></thead><tbody>`;
+  let tInv = 0, tRed = 0;
+  months.forEach(m => {
+    const inv = agg.byMonth[m].invested || 0, red = agg.byMonth[m].redeemed || 0, net = inv - red;
+    tInv += inv; tRed += red;
+    html += `<tr>
+      <td data-sort="${m}">${monthLabel(m)}</td>
+      <td>${fmtCurrency(inv)}</td>
+      <td>${red > 0 ? fmtCurrency(red) : '—'}</td>
+      <td class="${net >= 0 ? 'positive' : 'negative'}">${net >= 0 ? '+' : '-'}${fmtCurrency(Math.abs(net))}</td>
+    </tr>`;
+  });
+  const tNet = tInv - tRed;
+  html += `<tr class="total-row"><td>Total</td><td>${fmtCurrency(tInv)}</td><td>${tRed > 0 ? fmtCurrency(tRed) : '—'}</td>
+    <td class="${tNet >= 0 ? 'positive' : 'negative'}">${tNet >= 0 ? '+' : '-'}${fmtCurrency(Math.abs(tNet))}</td></tr>`;
+  html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
 }
 
 // ── Liquidity Ladder ──────────────────────────────────────────────────────────
@@ -1524,18 +1665,19 @@ function computeFIFOMFMetrics(stream, txns, currentNAV) {
   }
   const xirr = computeXIRR(xirrCfs);
 
-  // Avg days between consecutive buys
-  let avgDaysBetweenBuys = null;
-  if (buyDates.length >= 2) {
-    const span = buyDates[buyDates.length - 1] - buyDates[0];
-    avgDaysBetweenBuys = Math.round(span / ((buyDates.length - 1) * 86400000));
-  }
-
   // Months held: first buy → today (active) or last transaction date (inactive)
   const today   = new Date();
   const endDate = isActive ? today : lastDate;
   const monthsHeld = firstDate
     ? Math.floor((endDate - firstDate) / (30.44 * 86400000)) : null;
+
+  // Avg buy cadence: holding window (first buy → endDate) ÷ number of buys.
+  // Reflects how often you buy over the whole period, not just the span between
+  // the first and last purchase — e.g. 2 buys held over 6 months → ~90 days.
+  let avgDaysBetweenBuys = null;
+  if (buyDates.length >= 2 && endDate) {
+    avgDaysBetweenBuys = Math.round((endDate - buyDates[0]) / (buyDates.length * 86400000));
+  }
 
   return {
     totalInvested, totalWithdrawn, realizedPnL,
@@ -1684,7 +1826,7 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
   const cumData = months.map(m => { running += allMonthlyNet[m]; return Math.round(running); });
 
   const datasets = [{
-    label: 'Cost Basis',
+    label: 'Invested (cost basis)',
     data: cumData,
     borderColor: '#f59e0b',
     backgroundColor: 'rgba(245,158,11,0.07)',
@@ -1698,20 +1840,24 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
     borderWidth: 2.5,
   }];
 
+  // Current value: only known as of today (no historical prices), so drawn as a
+  // dashed reference line across the period with an emphasised endpoint. The gap
+  // to the invested line = current unrealised gain/loss.
   if (totalCurrentValue > 0) {
-    const cvData = months.map((_, i) => i === months.length - 1 ? Math.round(totalCurrentValue) : null);
     datasets.push({
-      label: 'Portfolio Value',
-      data: cvData,
+      label: 'Current Value (today)',
+      data: months.map(() => Math.round(totalCurrentValue)),
       borderColor: '#22c55e',
       backgroundColor: 'transparent',
-      borderWidth: 0,
-      pointRadius: months.map((_, i) => i === months.length - 1 ? 8 : 0),
-      pointHoverRadius: 10,
+      borderDash: [6, 4],
+      borderWidth: 2,
+      fill: false,
+      tension: 0,
+      pointRadius: months.map((_, i) => i === months.length - 1 ? 6 : 0),
+      pointHoverRadius: 8,
       pointBackgroundColor: '#22c55e',
       pointBorderColor: '#111111',
       pointBorderWidth: 2,
-      spanGaps: false,
     });
   }
 
@@ -1731,6 +1877,134 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
       scales: {
         x: { ticks: { color: '#525252', maxTicksLimit: 14, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
         y: { ticks: { color: '#525252', callback: fmtAxis, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+// ── Profit by Investment Year (vintage / cohort P&L) ──────────────────────────
+
+// Resolve an asset's current price in INR (GAS formula, manual price, or formula col).
+function resolvePriceINR(stream, asset, assetId) {
+  if (stream.currentPriceCol) return parseFloat(asset?.[stream.currentPriceCol] || 0);
+  if (stream.manualPriceType) {
+    if (asset?.price_fetch_way === 'formula') return parseFloat(asset?.current_price || 0);
+    return _manualPricesMap[`${stream.manualPriceType}|${assetId}`] || 0;
+  }
+  return 0;
+}
+
+// FIFO lots tagged with buy-year. Attributes realised P&L (on sells) and unrealised
+// P&L (on remaining lots) to the year the money was invested.
+function computeVintageProfit(filteredData) {
+  const byYear = {};
+  const add = (yr, k, v) => {
+    if (!yr) return;
+    (byYear[yr] = byYear[yr] || { invested: 0, currentValue: 0, realized: 0, unrealized: 0 })[k] += v;
+  };
+
+  filteredData.forEach(entry => {
+    const { stream, assets, txns } = entry;
+    if (stream.staticBalance) return;
+
+    const assetMap = {};
+    assets.forEach(a => { assetMap[String(a.id)] = a; });
+
+    const byAsset = {};
+    txns.forEach(t => {
+      const aid = String(t[stream.assetIdCol]);
+      (byAsset[aid] = byAsset[aid] || []).push(t);
+    });
+
+    Object.entries(byAsset).forEach(([aid, list]) => {
+      const asset    = assetMap[aid];
+      const priceINR = resolvePriceINR(stream, asset, aid);
+      const sorted   = [...list].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+      const lots     = [];   // { units, costPerUnit (INR), year }
+
+      sorted.forEach(t => {
+        const isBuy = stream.usEquity ? String(t.txn_type).toUpperCase() === 'BUY' : t.txn_type === 'Buy';
+        const units = stream.usEquity ? parseFloat(t.units || 0) : getQtyVal(t);
+        if (!units || units <= 0) return;
+        const yr = (t.txn_date || '').substring(0, 4);
+
+        if (isBuy) {
+          const costINR = stream.usEquity ? parseFloat(t[stream.costBasisCol] || 0) : getAmtINR(stream, t);
+          lots.push({ units, costPerUnit: costINR / units, year: yr });
+        } else {
+          // Sell: FIFO consume. Realised P&L in INR only for rupee streams
+          // (US equity sells settle in USD inside the broker — excluded here).
+          const sellPerUnit = stream.usEquity ? null : getAmtINR(stream, t) / units;
+          let toSell = units;
+          while (toSell > 1e-9 && lots.length) {
+            const lot = lots[0];
+            const c   = Math.min(lot.units, toSell);
+            if (sellPerUnit != null) add(lot.year, 'realized', c * (sellPerUnit - lot.costPerUnit));
+            lot.units -= c;
+            toSell    -= c;
+            if (lot.units < 1e-9) lots.shift();
+          }
+        }
+      });
+
+      // Remaining lots → invested + unrealised, by vintage year
+      lots.forEach(lot => {
+        const cost = lot.units * lot.costPerUnit;
+        add(lot.year, 'invested', cost);
+        if (priceINR > 0) {
+          const cv = lot.units * priceINR;
+          add(lot.year, 'currentValue', cv);
+          add(lot.year, 'unrealized', cv - cost);
+        }
+      });
+    });
+  });
+
+  return byYear;
+}
+
+function drawVintageChart(canvasId, filteredData) {
+  const byYear = computeVintageProfit(filteredData);
+  const years = Object.keys(byYear).filter(Boolean).sort();
+  if (!years.length) return emptyCard(canvasId, 'No investment history yet.');
+
+  const realized   = years.map(y => Math.round(byYear[y].realized));
+  const unrealized = years.map(y => Math.round(byYear[y].unrealized));
+  const GRID = 'rgba(255,255,255,0.05)', TICK = '#525252';
+
+  newChart(canvasId, {
+    type: 'bar',
+    data: {
+      labels: years,
+      datasets: [
+        { label: 'Unrealized', data: unrealized, stack: 'pnl', borderRadius: 4,
+          backgroundColor: unrealized.map(v => v >= 0 ? 'rgba(34,197,94,0.78)' : 'rgba(239,68,68,0.72)') },
+        { label: 'Realized',   data: realized,   stack: 'pnl', borderRadius: 4,
+          backgroundColor: realized.map(v => v >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.42)') },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        datalabels: { display: false },
+        legend: { position: 'top', labels: { color: TICK, usePointStyle: true, padding: 12, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.raw >= 0 ? '+' : ''}${fmtCurrency(ctx.raw)}`,
+            afterBody: items => {
+              const d = byYear[items[0].label];
+              const total = d.realized + d.unrealized;
+              return [
+                `Invested (still held): ${fmtCurrency(d.invested)}`,
+                `Total P&L: ${total >= 0 ? '+' : ''}${fmtCurrency(total)}`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: TICK, font: { size: 11 } }, grid: { color: GRID, drawBorder: false } },
+        y: { stacked: true, ticks: { color: TICK, callback: v => (v < 0 ? '-' : '') + fmtAxis(Math.abs(v)), font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
       },
     },
   });
