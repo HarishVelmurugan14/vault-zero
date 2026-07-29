@@ -1712,6 +1712,8 @@ function computeFIFOMFMetrics(stream, txns, currentNAV) {
     avgDaysBetweenBuys = Math.round((endDate - buyDates[0]) / (buyDates.length * 86400000));
   }
 
+  const { currentStreak, longestStreak } = computeSipStreaks(buyDates, today);
+
   return {
     totalInvested, totalWithdrawn, realizedPnL,
     remainingCost, remainingUnits, currentValue,
@@ -1719,7 +1721,35 @@ function computeFIFOMFMetrics(stream, txns, currentNAV) {
     absoluteReturn, xirr,
     firstDate, lastDate, monthsHeld,
     avgDaysBetweenBuys, buyCount: buyDates.length, hasSells,
+    currentStreak, longestStreak,
   };
+}
+
+// Consecutive-month SIP streaks. Buys are collapsed to one point per calendar
+// month; two months are "consecutive" if within 45 days. currentStreak = the
+// trailing run ending at the latest month (0 if the current month was missed,
+// i.e. the last buy is >45 days ago). longestStreak = the longest run ever.
+function computeSipStreaks(buyDates, today) {
+  if (!buyDates.length) return { currentStreak: 0, longestStreak: 0 };
+  // One representative (earliest) date per YYYY-MM, sorted ascending
+  const byMonth = {};
+  buyDates.forEach(d => {
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!byMonth[key] || d < byMonth[key]) byMonth[key] = d;
+  });
+  const months = Object.values(byMonth).sort((a, b) => a - b);
+
+  let longest = 1, run = 1;
+  for (let i = 1; i < months.length; i++) {
+    const gap = (months[i] - months[i - 1]) / 86400000;
+    run = gap <= 45 ? run + 1 : 1;
+    if (run > longest) longest = run;
+  }
+  // Missed the current month → current streak broken
+  const daysSinceLast = (today - months[months.length - 1]) / 86400000;
+  const currentStreak = daysSinceLast > 45 ? 0 : run;
+
+  return { currentStreak, longestStreak: longest };
 }
 
 function buildMFReport(rawData) {
@@ -1800,6 +1830,8 @@ function drawMFReport(divId, rawData) {
       <th>Last Txn</th>
       <th>Months</th>
       <th>Avg Buy Gap</th>
+      <th>SIP Streak</th>
+      <th>Longest Streak</th>
     </tr></thead>
     <tbody>`;
 
@@ -1843,6 +1875,8 @@ function drawMFReport(divId, rawData) {
       <td style="white-space:nowrap">${fmtDate(f.lastDate)}</td>
       <td>${f.monthsHeld !== null ? f.monthsHeld + 'm' : '—'}</td>
       <td>${f.avgDaysBetweenBuys !== null ? f.avgDaysBetweenBuys + 'd' : '—'}</td>
+      <td>${f.currentStreak > 0 ? `<span class="positive">${f.currentStreak}</span>` : '<span style="color:var(--text-muted)">0</span>'}</td>
+      <td>${f.longestStreak || 0}</td>
     </tr>`;
   });
 
@@ -1852,11 +1886,12 @@ function drawMFReport(divId, rawData) {
   // ── Drill-down: rolling SIP journey per fund ──
   const entry = rawData.find(e => e.catId === 1 && e.stream?.txnTable === 'equity_transactions');
   if (!entry) return;
-  const txnsByAsset = {};
+  const txnsByAsset = {}, assetMap = {};
   entry.txns.forEach(t => {
     const aid = String(t[entry.stream.assetIdCol]);
     (txnsByAsset[aid] = txnsByAsset[aid] || []).push(t);
   });
+  entry.assets.forEach(a => { assetMap[String(a.id)] = a; });
 
   wrap.querySelectorAll('.mf-fund-row').forEach(row => {
     row.addEventListener('click', () => {
@@ -1865,10 +1900,15 @@ function drawMFReport(divId, rawData) {
       wrap.querySelectorAll('.mf-drill').forEach(d => d.remove());
       wrap.querySelectorAll('.mf-fund-row.expanded').forEach(r => r.classList.remove('expanded'));
 
-      const rows   = computeRollingSIP(entry.stream, txnsByAsset[row.dataset.fundId] || []);
+      const fid        = row.dataset.fundId;
+      const txns       = txnsByAsset[fid] || [];
+      const currentNAV = parseFloat(assetMap[fid]?.[entry.stream.currentPriceCol] || 0);
+      const vint       = computeFundVintage(entry.stream, txns, currentNAV);
+      const roll       = computeRollingSIP(entry.stream, txns);
+
       const dr     = document.createElement('tr');
       dr.className = 'mf-drill';
-      dr.innerHTML = `<td colspan="${row.cells.length}">${renderRollingSIP(rows)}</td>`;
+      dr.innerHTML = `<td colspan="${row.cells.length}">${renderFundVintage(vint)}${renderRollingSIP(roll)}</td>`;
       row.after(dr);
       row.classList.add('expanded');
     });
@@ -1900,6 +1940,60 @@ function computeRollingSIP(stream, txns) {
     });
   });
   return out;
+}
+
+// Units still held (FIFO, sold units excluded) grouped by the year they were bought,
+// valued at today's NAV — "what my money from each year is worth now".
+function computeFundVintage(stream, txns, currentNAV) {
+  const sorted = [...(txns || [])].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+  const lots = [];   // { units, costPerUnit, year }
+  sorted.forEach(t => {
+    const units = parseFloat(t.units || 0);
+    if (units <= 0) return;
+    if (t.txn_type === 'Buy') {
+      const amt = getAmtINR(stream, t);
+      lots.push({ units, costPerUnit: amt / units, year: (t.txn_date || '').substring(0, 4) });
+    } else {
+      let toSell = units;
+      while (toSell > 1e-9 && lots.length) {
+        const lot = lots[0];
+        const c = Math.min(lot.units, toSell);
+        lot.units -= c; toSell -= c;
+        if (lot.units < 1e-9) lots.shift();
+      }
+    }
+  });
+  const byYear = {};
+  lots.forEach(lot => {
+    if (!byYear[lot.year]) byYear[lot.year] = { year: lot.year, units: 0, cost: 0 };
+    byYear[lot.year].units += lot.units;
+    byYear[lot.year].cost  += lot.units * lot.costPerUnit;
+  });
+  return Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year)).map(v => {
+    const currentValue = currentNAV > 0 ? v.units * currentNAV : 0;
+    return { ...v, currentValue, profit: currentValue - v.cost, absReturn: v.cost > 0 ? (currentValue - v.cost) / v.cost * 100 : 0 };
+  });
+}
+
+function renderFundVintage(vint) {
+  if (!vint.length) return '<div class="mf-drill-wrap"><p class="chart-empty">No units currently held.</p></div>';
+  let h = `<div class="mf-drill-wrap"><div class="mf-drill-title">Held units by buy-year · valued at today's NAV (sold units excluded)</div>
+    <table class="report-table"><thead><tr>
+      <th style="text-align:left">Buy Year</th><th>Units Held</th><th>Invested (held)</th><th>Current Value</th><th>Profit</th><th>Return</th>
+    </tr></thead><tbody>`;
+  vint.forEach(v => {
+    const pc = v.profit >= 0 ? 'positive' : 'negative';
+    h += `<tr>
+      <td>${v.year}</td>
+      <td>${v.units.toFixed(3)}</td>
+      <td>${fmtCurrency(v.cost)}</td>
+      <td>${fmtCurrency(v.currentValue)}</td>
+      <td class="${pc}">${v.profit >= 0 ? '+' : '-'}${fmtCurrency(Math.abs(v.profit))}</td>
+      <td class="${pc}">${v.absReturn >= 0 ? '+' : ''}${v.absReturn.toFixed(1)}%</td>
+    </tr>`;
+  });
+  h += `</tbody></table></div>`;
+  return h;
 }
 
 function renderRollingSIP(rows) {
@@ -2147,18 +2241,7 @@ function buildHealthCheck(agg, filtered, rawData) {
     text: `Satellite/high-risk assets (crypto, small-cap, US) are ${satPct.toFixed(0)}% of the portfolio${satPct > 30 ? ' — above a ~30% comfort band' : ' — within a healthy band'}.`,
   });
 
-  // Cap split vs target (47/35/17)
-  const capTargets = { 'Large Cap': 47, 'Mid Cap': 35, 'Small Cap': 17 };
-  const capTotal = Object.keys(capTargets).reduce((s, c) => s + cv(agg.bySubcat[c] || {}), 0);
-  if (capTotal > 0) {
-    Object.keys(capTargets).forEach(c => {
-      const pct = cv(agg.bySubcat[c] || {}) / capTotal * 100;
-      const dev = pct - capTargets[c];
-      if (Math.abs(dev) >= 7) {
-        flags.push({ level: 'warn', text: `${c} is ${pct.toFixed(0)}% of equity MF vs ${capTargets[c]}% target — ${dev > 0 ? 'overweight' : 'underweight'} ${Math.abs(dev).toFixed(0)}pp.` });
-      }
-    });
-  }
+  // (Cap-split vs 47/35/17 target intentionally omitted — user uses a custom split.)
 
   // Equity drift (Wealth Builder bucket, id 1)
   const equityPct = totalVal > 0 ? cv(agg.byBucket[1] || {}) / totalVal * 100 : 0;
