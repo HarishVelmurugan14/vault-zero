@@ -460,6 +460,7 @@ function renderInsightsTab(container, agg, filtered, rawData) {
 
   } else if (tab === 'performance') {
     container.appendChild(makeReportCard('Stream-wise P&L', 'report-stream-table', true));
+    container.appendChild(makeChartCard('Rolling XIRR Trend', 'chart-xirr-trend', true));
     container.appendChild(makeChartCard('Profit by Investment Year (Vintage)', 'chart-vintage', true));
     const r = row2();
     r.appendChild(makeChartCard('Monthly Investment', 'chart-monthly'));
@@ -468,6 +469,7 @@ function renderInsightsTab(container, agg, filtered, rawData) {
     container.appendChild(makeReportCard('Monthly Contributions', 'report-monthly-table', true));
     requestAnimationFrame(() => {
       drawStreamTable('report-stream-table', agg);
+      drawXirrTrend('chart-xirr-trend', filtered);
       drawVintageChart('chart-vintage', filtered);
       drawMonthlyChart(agg.byMonth);
       drawYearlyChart(agg.byYear);
@@ -2325,4 +2327,113 @@ function drawCoreSatellite(divId, agg) {
   });
   html += `</tbody></table></div>`;
   wrap.innerHTML = html;
+}
+
+// ── Rolling XIRR trend ────────────────────────────────────────────────────────
+// Monthly portfolio value is reconstructed by carrying forward the INR price
+// recorded on each transaction (amount ÷ units); the current month uses the live
+// price. Rupee streams only (US-equity USD & static balances excluded). Approximate.
+
+function _pctOrNull(r) { return r !== null ? r * 100 : null; }
+
+function _rollingXirr(cashflows, monthEnd, windowMonths, valueAt) {
+  const start = new Date(monthEnd.getFullYear(), monthEnd.getMonth() - windowMonths + 1, 0);
+  const startVal = valueAt(start, false);
+  const cfs = [];
+  if (startVal > 0) cfs.push({ amount: -startVal, date: start });
+  cashflows.forEach(c => { if (c.date > start && c.date <= monthEnd) cfs.push({ amount: c.amount, date: c.date }); });
+  const endVal = valueAt(monthEnd, false);
+  if (endVal <= 0 || !cfs.length) return null;
+  cfs.push({ amount: endVal, date: monthEnd });
+  return _pctOrNull(computeXIRR(cfs));
+}
+
+function computeXirrTrend(filteredData) {
+  const assets = [];       // { events:[{date,units,price}], curPriceINR }
+  const cashflows = [];
+  let minDate = null;
+
+  filteredData.forEach(entry => {
+    const { stream, assets: rows, txns } = entry;
+    if (stream.usEquity || stream.staticBalance) return;
+    const assetMap = {};
+    rows.forEach(a => { assetMap[String(a.id)] = a; });
+    const byAsset = {};
+    txns.forEach(t => { const aid = String(t[stream.assetIdCol]); (byAsset[aid] = byAsset[aid] || []).push(t); });
+
+    Object.entries(byAsset).forEach(([aid, list]) => {
+      const sorted = list.filter(t => t.txn_date).sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+      const events = [];
+      sorted.forEach(t => {
+        const units = getQtyVal(t); if (!units) return;
+        const d = new Date(t.txn_date); if (isNaN(d)) return;
+        const amt = getAmtINR(stream, t);
+        if (!minDate || d < minDate) minDate = d;
+        events.push({ date: d, units: t.txn_type === 'Buy' ? units : -units, price: units > 0 ? amt / units : 0 });
+        cashflows.push({ date: d, amount: t.txn_type === 'Buy' ? -amt : amt });
+      });
+      if (events.length) assets.push({ events, curPriceINR: parseFloat(assetMap[aid]?.[stream.currentPriceCol] || 0) });
+    });
+  });
+
+  if (!minDate || !assets.length) return { months: [], sinceInception: [], roll1: [], roll3: [] };
+
+  const today = new Date();
+  const months = [];
+  let y = minDate.getFullYear(), m = minDate.getMonth();
+  while (y < today.getFullYear() || (y === today.getFullYear() && m <= today.getMonth())) {
+    months.push(new Date(y, m + 1, 0));
+    if (++m > 11) { m = 0; y++; }
+  }
+
+  const valueAt = (monthEnd, isCurrent) => {
+    let val = 0;
+    assets.forEach(a => {
+      let units = 0, lastPrice = 0;
+      a.events.forEach(ev => { if (ev.date <= monthEnd) { units += ev.units; lastPrice = ev.price; } });
+      if (units > 1e-9) val += units * ((isCurrent && a.curPriceINR > 0) ? a.curPriceINR : lastPrice);
+    });
+    return val;
+  };
+
+  const sinceInception = [], roll1 = [], roll3 = [];
+  months.forEach((me, idx) => {
+    const isCurrent = idx === months.length - 1;
+    const cfsSI = cashflows.filter(c => c.date <= me).map(c => ({ amount: c.amount, date: c.date }));
+    cfsSI.push({ amount: valueAt(me, isCurrent), date: me });
+    sinceInception.push(_pctOrNull(computeXIRR(cfsSI)));
+    roll1.push(idx >= 11 ? _rollingXirr(cashflows, me, 12, valueAt) : null);
+    roll3.push(idx >= 35 ? _rollingXirr(cashflows, me, 36, valueAt) : null);
+  });
+  return { months, sinceInception, roll1, roll3 };
+}
+
+function drawXirrTrend(canvasId, filteredData) {
+  const t = computeXirrTrend(filteredData);
+  if (t.months.length < 2) return emptyCard(canvasId, 'Not enough history for an XIRR trend.');
+  const labels = t.months.map(d => d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }));
+  const mk = (label, data, color, dash) => ({
+    label, data, borderColor: color, backgroundColor: 'transparent',
+    borderWidth: 2, borderDash: dash || [], tension: 0.3, pointRadius: 0, pointHoverRadius: 5, spanGaps: true,
+  });
+  const datasets = [mk('Since inception', t.sinceInception, '#f59e0b')];
+  if (t.roll1.some(v => v != null)) datasets.push(mk('1Y rolling', t.roll1, '#22c55e', [5, 4]));
+  if (t.roll3.some(v => v != null)) datasets.push(mk('3Y rolling', t.roll3, '#818cf8', [2, 3]));
+
+  newChart(canvasId, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      plugins: {
+        datalabels: { display: false },
+        legend: { position: 'top', labels: { color: '#8b90a8', usePointStyle: true, padding: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => ctx.raw != null ? ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%` : null } },
+      },
+      scales: {
+        x: { ticks: { color: '#525252', maxTicksLimit: 14, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
+        y: { ticks: { color: '#525252', callback: v => v.toFixed(0) + '%', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
+      },
+    },
+  });
 }
