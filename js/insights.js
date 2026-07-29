@@ -346,17 +346,6 @@ function redrawCharts(chartsArea, rawData) {
   drawCharts(chartsArea, rawData);
 }
 
-function makeSectionHeader(title, color) {
-  const section = document.createElement('div');
-  section.className = 'insights-section';
-  section.innerHTML = `
-    <div class="insights-section-header">
-      <div class="insights-section-dot" style="--sd-color:${color}"></div>
-      <div class="insights-section-title">${title}</div>
-    </div>
-  `;
-  return section;
-}
 
 function makeReportCard(title, divId, fullWidth = false) {
   const card = document.createElement('div');
@@ -368,12 +357,21 @@ function makeReportCard(title, divId, fullWidth = false) {
   return card;
 }
 
+const INSIGHT_TABS = [
+  { id: 'overview',    label: 'Overview' },
+  { id: 'allocation',  label: 'Allocation' },
+  { id: 'performance', label: 'Performance' },
+  { id: 'funds',       label: 'Funds' },
+  { id: 'risk',        label: 'Risk' },
+  { id: 'tax',         label: 'Tax' },
+];
+let _insightsActiveTab = 'overview';
+
 function drawCharts(chartsArea, rawData) {
   const filtered = applyFilters(rawData);
   const agg = aggregateInsights(filtered);
 
   chartsArea.innerHTML = '';
-
   if (typeof Chart !== 'undefined') {
     Chart.defaults.color = '#525252';
     Chart.defaults.borderColor = 'rgba(255,255,255,0.05)';
@@ -381,95 +379,126 @@ function drawCharts(chartsArea, rawData) {
     Chart.defaults.font.size = 11;
   }
 
-  // Hero + Metric Strip
   chartsArea.appendChild(buildPortfolioHero(agg));
   chartsArea.appendChild(buildMetricStrip(agg));
 
-  // ── ALLOCATION ────────────────────────────────────────────
-  const allocSection = makeSectionHeader('Allocation', '#f59e0b');
-  const allocRow1 = document.createElement('div');
-  allocRow1.className = 'insights-grid-2';
-  allocRow1.appendChild(makeChartCard('Portfolio by Bucket', 'chart-bucket'));
-  allocRow1.appendChild(makeChartCard('Portfolio by Category', 'chart-category'));
-  allocSection.appendChild(allocRow1);
-  const allocRow2 = document.createElement('div');
-  allocRow2.className = 'insights-grid-2';
-  allocRow2.appendChild(makeChartCard('Portfolio by Subcategory', 'chart-subcat'));
-  allocRow2.appendChild(makeChartCard('Allocation by Current Value', 'chart-alloc-cv'));
-  allocSection.appendChild(allocRow2);
-  chartsArea.appendChild(allocSection);
+  // Secondary nav (sub-tabs)
+  const nav = document.createElement('div');
+  nav.className = 'insights-subnav';
+  const tabContent = document.createElement('div');
+  tabContent.id = 'insights-tab-content';
 
-  // ── COMPOSITION ───────────────────────────────────────────
-  const compSection = makeSectionHeader('Composition', '#7c3aed');
-  compSection.appendChild(makeReportCard('Portfolio Composition by Category', 'report-comp-cat', true));
-  compSection.appendChild(makeReportCard('Subcategory Composition (within category)', 'report-comp-subcat', true));
-  chartsArea.appendChild(compSection);
-
-  // ── PERFORMANCE ───────────────────────────────────────────
-  const perfSection = makeSectionHeader('Performance', '#0891b2');
-  perfSection.appendChild(makeReportCard('Stream-wise P&L', 'report-stream-table', true));
-  perfSection.appendChild(makeChartCard('Portfolio Growth', 'chart-cumulative', true));
-  const perfRow = document.createElement('div');
-  perfRow.className = 'insights-grid-2';
-  perfRow.appendChild(makeChartCard('Monthly Investment', 'chart-monthly'));
-  perfRow.appendChild(makeChartCard('Yearly Summary', 'chart-yearly'));
-  perfSection.appendChild(perfRow);
-  perfSection.appendChild(makeChartCard('Profit by Investment Year (Vintage)', 'chart-vintage', true));
-  perfSection.appendChild(makeReportCard('Monthly Contributions', 'report-monthly-table', true));
-  chartsArea.appendChild(perfSection);
-
-  // ── RISK & LIQUIDITY ──────────────────────────────────────
-  const riskSection = makeSectionHeader('Risk & Liquidity', '#d97706');
-  riskSection.appendChild(makeReportCard('Liquidity Ladder', 'report-liquidity', true));
-  const riskRow = document.createElement('div');
-  riskRow.className = 'insights-grid-2';
-  riskRow.appendChild(makeChartCard('Currency Exposure', 'chart-currency'));
-  riskRow.appendChild(makeChartCard('Equity Cap Split (Actual vs Target)', 'chart-capsplit'));
-  riskSection.appendChild(riskRow);
-  const riskRow2 = document.createElement('div');
-  riskRow2.className = 'insights-grid-2';
-  riskRow2.appendChild(makeChartCard('Top 10 Holdings', 'chart-top-holdings'));
-  riskRow2.appendChild(makeChartCard('Realized P&L by Category', 'chart-pnl'));
-  riskSection.appendChild(riskRow2);
-  chartsArea.appendChild(riskSection);
-
-  // ── TAX INTELLIGENCE ──────────────────────────────────────
-  const taxSection = makeSectionHeader('Tax Intelligence', '#a855f7');
-  taxSection.appendChild(makeReportCard('Estimated Tax Liability', 'report-tax-table', true));
-  chartsArea.appendChild(taxSection);
-
-  // ── INDIAN EQ MUTUAL FUNDS ────────────────────────────────
-  const mfSection = makeSectionHeader('Indian EQ Mutual Funds — Fund Detail', '#22c55e');
-  mfSection.appendChild(makeReportCard('Per-Fund P&L (FIFO)', 'report-mf-detail', true));
-  chartsArea.appendChild(mfSection);
-
-  requestAnimationFrame(() => {
-    drawBucketChart(agg.byBucket);
-    drawCategoryChart(agg.byCategory);
-    drawSubcatChart(agg.bySubcat);
-    drawAllocCvChart(agg.byCategory);
-    drawCategoryComposition('report-comp-cat', agg);
-    drawSubcatComposition('report-comp-subcat', agg);
-    drawMonthlyTable('report-monthly-table', agg);
-    drawStreamTable('report-stream-table', agg);
-    drawCumulativeChart(agg.allMonthlyNet, agg.totalCurrentValue);
-    drawVintageChart('chart-vintage', filtered);
-    drawMonthlyChart(agg.byMonth);
-    drawYearlyChart(agg.byYear);
-    drawLiquidityLadder('report-liquidity', agg.byCategory, agg.netInvested);
-    drawCurrencyChart('chart-currency', agg.byCategory);
-    drawCapSplitChart('chart-capsplit', agg.bySubcat);
-    drawTopHoldingsChart(agg.topHoldings);
-    drawPnLChart(agg.byCategory);
-    drawTaxTable('report-tax-table', agg.byCategory);
-    drawMFReport('report-mf-detail', rawData);
-
-    // Make every report table click-sortable (Stream P&L manages its own sort)
-    chartsArea.querySelectorAll('.report-table').forEach(t => {
-      if (t.closest('#report-stream-table')) return;
-      makeTableSortable(t);
+  INSIGHT_TABS.forEach(t => {
+    const b = document.createElement('button');
+    b.className = 'insights-subnav-tab' + (t.id === _insightsActiveTab ? ' active' : '');
+    b.textContent = t.label;
+    b.addEventListener('click', () => {
+      if (_insightsActiveTab === t.id) return;
+      _insightsActiveTab = t.id;
+      nav.querySelectorAll('.insights-subnav-tab').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      renderInsightsTab(tabContent, agg, filtered, rawData);
     });
+    nav.appendChild(b);
   });
+
+  chartsArea.appendChild(nav);
+  chartsArea.appendChild(tabContent);
+  renderInsightsTab(tabContent, agg, filtered, rawData);
+}
+
+function enhanceReportTables(container) {
+  container.querySelectorAll('.report-table').forEach(t => {
+    if (t.closest('#report-stream-table')) return;   // has its own sort
+    makeTableSortable(t);
+  });
+}
+
+function renderInsightsTab(container, agg, filtered, rawData) {
+  _insightsCharts.forEach(c => { try { c.destroy(); } catch (_) {} });
+  _insightsCharts = [];
+  container.innerHTML = '';
+
+  const row2 = () => { const d = document.createElement('div'); d.className = 'insights-grid-2'; return d; };
+  const tab  = _insightsActiveTab;
+
+  if (tab === 'overview') {
+    container.appendChild(buildHealthCheck(agg, filtered, rawData));
+    container.appendChild(makeChartCard('Portfolio Growth', 'chart-cumulative', true));
+    const r = row2();
+    r.appendChild(makeChartCard('Portfolio by Bucket', 'chart-bucket'));
+    r.appendChild(makeChartCard('Portfolio by Category', 'chart-category'));
+    container.appendChild(r);
+    requestAnimationFrame(() => {
+      drawCumulativeChart(agg.allMonthlyNet, agg.totalCurrentValue);
+      drawBucketChart(agg.byBucket);
+      drawCategoryChart(agg.byCategory);
+    });
+
+  } else if (tab === 'allocation') {
+    const r1 = row2();
+    r1.appendChild(makeChartCard('Portfolio by Subcategory', 'chart-subcat'));
+    r1.appendChild(makeChartCard('Allocation by Current Value', 'chart-alloc-cv'));
+    container.appendChild(r1);
+    container.appendChild(makeReportCard('Core vs Satellite', 'report-core-sat', true));
+    container.appendChild(makeReportCard('Composition by Category', 'report-comp-cat', true));
+    container.appendChild(makeReportCard('Subcategory Composition (within category)', 'report-comp-subcat', true));
+    const r2 = row2();
+    r2.appendChild(makeChartCard('Currency Exposure', 'chart-currency'));
+    r2.appendChild(makeChartCard('Equity Cap Split (Actual vs Target)', 'chart-capsplit'));
+    container.appendChild(r2);
+    requestAnimationFrame(() => {
+      drawSubcatChart(agg.bySubcat);
+      drawAllocCvChart(agg.byCategory);
+      drawCoreSatellite('report-core-sat', agg);
+      drawCategoryComposition('report-comp-cat', agg);
+      drawSubcatComposition('report-comp-subcat', agg);
+      drawCurrencyChart('chart-currency', agg.byCategory);
+      drawCapSplitChart('chart-capsplit', agg.bySubcat);
+      enhanceReportTables(container);
+    });
+
+  } else if (tab === 'performance') {
+    container.appendChild(makeReportCard('Stream-wise P&L', 'report-stream-table', true));
+    container.appendChild(makeChartCard('Profit by Investment Year (Vintage)', 'chart-vintage', true));
+    const r = row2();
+    r.appendChild(makeChartCard('Monthly Investment', 'chart-monthly'));
+    r.appendChild(makeChartCard('Yearly Summary', 'chart-yearly'));
+    container.appendChild(r);
+    container.appendChild(makeReportCard('Monthly Contributions', 'report-monthly-table', true));
+    requestAnimationFrame(() => {
+      drawStreamTable('report-stream-table', agg);
+      drawVintageChart('chart-vintage', filtered);
+      drawMonthlyChart(agg.byMonth);
+      drawYearlyChart(agg.byYear);
+      drawMonthlyTable('report-monthly-table', agg);
+      enhanceReportTables(container);
+    });
+
+  } else if (tab === 'funds') {
+    container.appendChild(makeReportCard('Indian EQ Mutual Funds — Per-Fund P&L (FIFO)', 'report-mf-detail', true));
+    container.appendChild(makeChartCard('Realized P&L by Category', 'chart-pnl', true));
+    requestAnimationFrame(() => {
+      drawMFReport('report-mf-detail', rawData);
+      drawPnLChart(agg.byCategory);
+      enhanceReportTables(container);
+    });
+
+  } else if (tab === 'risk') {
+    container.appendChild(makeReportCard('Liquidity Ladder', 'report-liquidity', true));
+    container.appendChild(makeChartCard('Top 10 Holdings', 'chart-top-holdings', true));
+    requestAnimationFrame(() => {
+      drawLiquidityLadder('report-liquidity', agg.byCategory, agg.netInvested);
+      drawTopHoldingsChart(agg.topHoldings);
+    });
+
+  } else if (tab === 'tax') {
+    container.appendChild(makeReportCard('Estimated Tax Liability', 'report-tax-table', true));
+    requestAnimationFrame(() => {
+      drawTaxTable('report-tax-table', agg.byCategory);
+      enhanceReportTables(container);
+    });
+  }
 }
 
 // ── Data Fetching ─────────────────────────────────────────────────────────────
@@ -1059,6 +1088,10 @@ function makeTableSortable(table) {
       const asc = !th.classList.contains('sort-asc');
       ths.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
       th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+
+      // Collapse any open drill-down rows so they aren't orphaned by re-sorting
+      tbody.querySelectorAll('.mf-drill').forEach(r => r.remove());
+      tbody.querySelectorAll('.mf-fund-row.expanded').forEach(r => r.classList.remove('expanded'));
 
       const rows   = [...tbody.rows];
       const totals = rows.filter(r => r.classList.contains('total-row'));
@@ -1711,7 +1744,7 @@ function buildMFReport(rawData) {
     if (!asset) return;
     const currentNAV = parseFloat(asset[stream.currentPriceCol] || 0);
     const m          = computeFIFOMFMetrics(stream, assetTxns, currentNAV);
-    funds.push({ name: asset[stream.assetNameCol] || 'Unknown', ...m });
+    funds.push({ assetId, name: asset[stream.assetNameCol] || 'Unknown', ...m });
   });
 
   funds.sort((a, b) => {
@@ -1794,8 +1827,8 @@ function drawMFReport(divId, rawData) {
       ? `<span class="${f.xirr >= 0 ? 'positive' : 'negative'}">${fmtXIRR(f.xirr)}</span>`
       : `<span style="color:var(--text-muted)">—</span>`;
 
-    html += `<tr>
-      <td title="${f.name}">${f.name}</td>
+    html += `<tr class="mf-fund-row" data-fund-id="${f.assetId}">
+      <td title="${f.name}"><span class="mf-caret">▸</span>${f.name}</td>
       <td style="text-align:center">${badge}</td>
       <td>${investedDisp}</td>
       <td>${cvDisp}</td>
@@ -1815,6 +1848,81 @@ function drawMFReport(divId, rawData) {
 
   html += `</tbody></table></div>`;
   wrap.innerHTML = html;
+
+  // ── Drill-down: rolling SIP journey per fund ──
+  const entry = rawData.find(e => e.catId === 1 && e.stream?.txnTable === 'equity_transactions');
+  if (!entry) return;
+  const txnsByAsset = {};
+  entry.txns.forEach(t => {
+    const aid = String(t[entry.stream.assetIdCol]);
+    (txnsByAsset[aid] = txnsByAsset[aid] || []).push(t);
+  });
+
+  wrap.querySelectorAll('.mf-fund-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const next = row.nextElementSibling;
+      if (next && next.classList.contains('mf-drill')) { next.remove(); row.classList.remove('expanded'); return; }
+      wrap.querySelectorAll('.mf-drill').forEach(d => d.remove());
+      wrap.querySelectorAll('.mf-fund-row.expanded').forEach(r => r.classList.remove('expanded'));
+
+      const rows   = computeRollingSIP(entry.stream, txnsByAsset[row.dataset.fundId] || []);
+      const dr     = document.createElement('tr');
+      dr.className = 'mf-drill';
+      dr.innerHTML = `<td colspan="${row.cells.length}">${renderRollingSIP(rows)}</td>`;
+      row.after(dr);
+      row.classList.add('expanded');
+    });
+  });
+}
+
+// Reconstruct a fund's instalment-by-instalment SIP journey. Value at instalment N
+// = units accumulated through the Nth buy × the NAV recorded on that buy.
+function computeRollingSIP(stream, txns) {
+  const buys = (txns || [])
+    .filter(t => t.txn_type === 'Buy' && parseFloat(t.units || 0) > 0)
+    .sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+  const out = [];
+  let cumUnits = 0, cumInv = 0;
+  const cfs = [];
+  const firstDate = buys.length ? buys[0].txn_date : null;
+  buys.forEach((t, i) => {
+    const units = parseFloat(t.units || 0);
+    const nav   = parseFloat(t.nav || 0);
+    const amt   = getAmtINR(stream, t);
+    cumUnits += units; cumInv += amt;
+    cfs.push({ amount: -amt, date: new Date(t.txn_date) });
+    const value = nav > 0 ? cumUnits * nav : cumInv;
+    const xirr  = computeXIRR([...cfs, { amount: value, date: new Date(t.txn_date) }]);
+    out.push({
+      n: i + 1, from: firstDate, to: t.txn_date,
+      invested: cumInv, value, profit: value - cumInv,
+      absReturn: cumInv > 0 ? (value - cumInv) / cumInv * 100 : 0, xirr,
+    });
+  });
+  return out;
+}
+
+function renderRollingSIP(rows) {
+  if (!rows.length) return '<div class="mf-drill-wrap"><p class="chart-empty">No buy instalments.</p></div>';
+  const my = d => new Date(d).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  let h = `<div class="mf-drill-wrap"><div class="mf-drill-title">Rolling SIP journey · value uses the NAV recorded on each buy</div>
+    <table class="report-table"><thead><tr>
+      <th style="text-align:left">Instalment</th><th>Period</th><th>Invested</th><th>Value</th><th>Profit</th><th>Abs. Return</th><th>XIRR</th>
+    </tr></thead><tbody>`;
+  rows.forEach(r => {
+    const pc = r.profit >= 0 ? 'positive' : 'negative';
+    h += `<tr>
+      <td>#${r.n}</td>
+      <td>${my(r.from)} – ${my(r.to)}</td>
+      <td>${fmtCurrency(r.invested)}</td>
+      <td>${fmtCurrency(r.value)}</td>
+      <td class="${pc}">${r.profit >= 0 ? '+' : '-'}${fmtCurrency(Math.abs(r.profit))}</td>
+      <td class="${pc}">${r.absReturn >= 0 ? '+' : ''}${r.absReturn.toFixed(1)}%</td>
+      <td>${r.xirr !== null ? `<span class="${r.xirr >= 0 ? 'positive' : 'negative'}">${fmtXIRR(r.xirr)}</span>` : '—'}</td>
+    </tr>`;
+  });
+  h += `</tbody></table></div>`;
+  return h;
 }
 
 // ── Cumulative line ───────────────────────────────────────────────────────────
@@ -2008,4 +2116,130 @@ function drawVintageChart(canvasId, filteredData) {
       },
     },
   });
+}
+
+// ── Health Check (rule-based advisory flags, Overview tab) ────────────────────
+
+const XIRR_BENCHMARK = 0.12;   // assumed passive-index benchmark (Nifty ~TRI)
+
+function buildHealthCheck(agg, filtered, rawData) {
+  const flags = [];
+  const cv = c => (c && c.currentValue > 0) ? c.currentValue : (c && c.netCost) || 0;
+  const totalVal = agg.totalCurrentValue > 0 ? agg.totalCurrentValue : agg.netInvested;
+
+  // XIRR vs benchmark
+  if (agg.overallXIRR !== null) {
+    const x = agg.overallXIRR;
+    flags.push({
+      level: x >= XIRR_BENCHMARK ? 'good' : (x >= XIRR_BENCHMARK - 0.03 ? 'warn' : 'bad'),
+      text: `Overall XIRR ${fmtXIRR(x)} vs ~${(XIRR_BENCHMARK * 100).toFixed(0)}% index benchmark — ${x >= XIRR_BENCHMARK ? 'ahead of a passive index' : 'trailing a passive index'}.`,
+    });
+  }
+
+  // Core vs Satellite
+  const SATELLITE = new Set(['Cryptocurrency', 'US Equity', 'US Equity (IndMoney)']);
+  let satVal = 0;
+  Object.entries(agg.byCategory).forEach(([name, c]) => { if (SATELLITE.has(name)) satVal += cv(c); });
+  satVal += cv(agg.bySubcat['Small Cap'] || {});
+  const satPct = totalVal > 0 ? satVal / totalVal * 100 : 0;
+  flags.push({
+    level: satPct > 30 ? 'warn' : 'good',
+    text: `Satellite/high-risk assets (crypto, small-cap, US) are ${satPct.toFixed(0)}% of the portfolio${satPct > 30 ? ' — above a ~30% comfort band' : ' — within a healthy band'}.`,
+  });
+
+  // Cap split vs target (47/35/17)
+  const capTargets = { 'Large Cap': 47, 'Mid Cap': 35, 'Small Cap': 17 };
+  const capTotal = Object.keys(capTargets).reduce((s, c) => s + cv(agg.bySubcat[c] || {}), 0);
+  if (capTotal > 0) {
+    Object.keys(capTargets).forEach(c => {
+      const pct = cv(agg.bySubcat[c] || {}) / capTotal * 100;
+      const dev = pct - capTargets[c];
+      if (Math.abs(dev) >= 7) {
+        flags.push({ level: 'warn', text: `${c} is ${pct.toFixed(0)}% of equity MF vs ${capTargets[c]}% target — ${dev > 0 ? 'overweight' : 'underweight'} ${Math.abs(dev).toFixed(0)}pp.` });
+      }
+    });
+  }
+
+  // Equity drift (Wealth Builder bucket, id 1)
+  const equityPct = totalVal > 0 ? cv(agg.byBucket[1] || {}) / totalVal * 100 : 0;
+  if (equityPct > 70) flags.push({ level: 'warn', text: `Equity (Wealth Builder) is ${equityPct.toFixed(0)}% — beyond a 70% drift limit; consider rebalancing.` });
+
+  // Concentration (top 5 holdings)
+  const top5 = (agg.topHoldings || []).slice(0, 5).reduce((s, h) => s + (h.currentValue > 0 ? h.currentValue : h.netCost), 0);
+  const top5Pct = totalVal > 0 ? top5 / totalVal * 100 : 0;
+  flags.push({
+    level: top5Pct > 60 ? 'warn' : 'good',
+    text: `Top 5 holdings = ${top5Pct.toFixed(0)}% of portfolio${top5Pct > 60 ? ' — concentration risk' : ' — reasonably diversified'}.`,
+  });
+
+  // Idle US cash
+  const usCash = cv(agg.bySubcat['Cash'] || {});
+  if (usCash > 1000) flags.push({ level: 'warn', text: `${fmtCurrency(usCash)} sitting as uninvested US cash — not yet deployed.` });
+
+  // Best / worst vintage
+  const vy = computeVintageProfit(filtered);
+  const vyears = Object.keys(vy).filter(Boolean).map(y => ({ y, p: vy[y].realized + vy[y].unrealized }));
+  if (vyears.length) {
+    vyears.sort((a, b) => b.p - a.p);
+    const best = vyears[0], worst = vyears[vyears.length - 1];
+    flags.push({ level: 'good', text: `Best vintage: ${best.y} investments → ${best.p >= 0 ? '+' : ''}${fmtCurrency(best.p)} P&L.` });
+    if (worst.y !== best.y) flags.push({ level: worst.p < 0 ? 'bad' : 'info', text: `Weakest vintage: ${worst.y} → ${worst.p >= 0 ? '+' : ''}${fmtCurrency(worst.p)} P&L.` });
+  }
+
+  // Underperforming active MF funds (XIRR < 8%)
+  const laggards = buildMFReport(rawData).filter(f => f.isActive && f.xirr !== null && f.xirr < 0.08);
+  if (laggards.length) {
+    const names = laggards.slice(0, 3).map(f => f.name.split(' ').slice(0, 3).join(' ')).join(', ');
+    flags.push({ level: 'warn', text: `${laggards.length} active fund${laggards.length > 1 ? 's' : ''} with XIRR under 8% (${names}${laggards.length > 3 ? '…' : ''}) — review vs benchmark.` });
+  }
+
+  const order = { bad: 0, warn: 1, info: 2, good: 3 };
+  flags.sort((a, b) => order[a.level] - order[b.level]);
+
+  const card = document.createElement('div');
+  card.className = 'chart-card chart-card-full';
+  card.innerHTML = `<div class="chart-card-title">Health Check</div>
+    <div class="healthcheck-list">
+      ${flags.map(f => `<div class="hc-item hc-${f.level}"><span class="hc-dot"></span><span>${f.text}</span></div>`).join('')}
+    </div>
+    <p class="report-disclaimer">Heuristic checks against generic targets — not personalised advice. Benchmark is an assumed ${(XIRR_BENCHMARK * 100).toFixed(0)}% (no live index feed).</p>`;
+  return card;
+}
+
+// ── Core vs Satellite allocation table ────────────────────────────────────────
+
+function drawCoreSatellite(divId, agg) {
+  const wrap = document.getElementById(divId);
+  if (!wrap) return;
+  const cv = c => (c && c.currentValue > 0) ? c.currentValue : (c && c.netCost) || 0;
+  const SATELLITE = new Set(['Cryptocurrency', 'US Equity', 'US Equity (IndMoney)']);
+
+  let core = 0, sat = 0;
+  Object.entries(agg.byCategory).forEach(([name, c]) => {
+    const v = cv(c);
+    if (SATELLITE.has(name)) sat += v; else core += v;
+  });
+  const smallCap = cv(agg.bySubcat['Small Cap'] || {});   // reclassify small-cap as satellite
+  core -= smallCap; sat += smallCap;
+
+  const total = core + sat;
+  if (total <= 0) { wrap.innerHTML = '<p class="chart-empty">No data.</p>'; return; }
+
+  const rows = [
+    { label: 'Core Wealth Accumulators', note: 'Large/Mid/Flexi/Index MF · Debt · Gold · Real Estate', val: Math.max(0, core) },
+    { label: 'Satellite / Speculative',  note: 'Crypto · Small-cap · US equity',                         val: sat },
+  ];
+  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
+    <th style="text-align:left">Bucket</th><th>Value</th><th>%</th><th></th></tr></thead><tbody>`;
+  rows.forEach(r => {
+    const pct = r.val / total * 100;
+    html += `<tr>
+      <td>${r.label}<div class="cs-note">${r.note}</div></td>
+      <td>${fmtCurrency(r.val)}</td>
+      <td>${pct.toFixed(1)}%</td>
+      <td style="width:130px"><div class="comp-bar"><div class="comp-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div></td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
 }

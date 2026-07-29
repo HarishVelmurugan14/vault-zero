@@ -1422,6 +1422,49 @@ body::before {
   color: var(--text-muted);
 }
 
+/* ── Insights sub-nav ────────────────────────────────────────────────────────── */
+
+.insights-subnav {
+  display: flex; gap: 2px; flex-wrap: wrap;
+  margin: 18px 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+.insights-subnav-tab {
+  background: none; border: none; color: var(--text-muted);
+  padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color 0.12s;
+}
+.insights-subnav-tab:hover { color: var(--text); }
+.insights-subnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Health Check ────────────────────────────────────────────────────────────── */
+
+.healthcheck-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.hc-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  font-size: 13px; line-height: 1.45; color: var(--text);
+  padding: 9px 12px; border-radius: 8px; background: var(--surface2);
+}
+.hc-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.hc-good .hc-dot { background: #22c55e; }
+.hc-warn .hc-dot { background: #f59e0b; }
+.hc-bad  .hc-dot { background: #ef4444; }
+.hc-info .hc-dot { background: #818cf8; }
+.hc-bad  { border-left: 2px solid #ef4444; }
+.hc-warn { border-left: 2px solid #f59e0b; }
+.cs-note { font-size: 11px; color: var(--text-muted); margin-top: 2px; font-weight: 400; }
+
+/* ── MF fund drill-down (rolling SIP) ────────────────────────────────────────── */
+
+.mf-fund-row { cursor: pointer; }
+.mf-fund-row:hover td { background: rgba(79,70,229,0.06); }
+.mf-caret { display: inline-block; width: 12px; color: var(--text-muted); transition: transform 0.12s; }
+.mf-fund-row.expanded .mf-caret { transform: rotate(90deg); }
+.mf-drill td { background: var(--bg); padding: 0 !important; }
+.mf-drill-wrap { max-height: 320px; overflow: auto; padding: 10px 14px; }
+.mf-drill-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px; }
+
 /* ── Report tables ───────────────────────────────────────────────────────────── */
 
 .report-table-wrap { overflow-x: auto; margin-top: 4px; }
