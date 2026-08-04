@@ -23,6 +23,22 @@ async function loadSubcatNames() {
   } catch (_) {}
 }
 
+// One batched round-trip for boot metadata (subcategories + hidden + accounts),
+// instead of three separate Apps Script calls. Apps Script serializes requests
+// per user, so folding these cuts the queue that made the first tab feel slow.
+async function bootstrapMeta() {
+  try {
+    const res = await API.batchGet(['subcategories', 'hidden_items', 'accounts']);
+    (res['subcategories']?.rows || []).forEach(s => { SUBCAT_NAMES[s.id] = s.name; });
+    HIDDEN.loadFrom(res['hidden_items']?.rows || []);
+    ACCOUNTS.loadFrom(res['accounts']?.rows || []);
+  } catch (_) {
+    // Fallback to individual loaders if the batch fails
+    loadSubcatNames(); HIDDEN.load(); await ACCOUNTS.load();
+  }
+  renderAccountSwitcher();
+}
+
 // ── API token modal ───────────────────────────────────────────────────────────
 
 function showTokenModal(invalid = false) {
@@ -103,8 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  loadSubcatNames(); // fire-and-forget — populates SUBCAT_NAMES before user reaches Holdings/Insights
-  HIDDEN.load();     // fire-and-forget — populates the hidden set before Holdings/Insights render
+  bootstrapMeta();   // one batched round-trip: subcategories + hidden_items + accounts
   renderNav();
   showPage('log');
   // Warm insights + holdings cache in the background so first tab click is instant
@@ -117,6 +132,40 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, 3000);
 });
+
+// Account switcher (family view)
+function renderAccountSwitcher() {
+  const sel = document.getElementById('account-switcher');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const optAll = document.createElement('option');
+  optAll.value = 'all'; optAll.textContent = '👪 All Accounts';
+  sel.appendChild(optAll);
+  ACCOUNTS.list.forEach(a => {
+    const o = document.createElement('option');
+    o.value = String(a.id); o.textContent = a.name;
+    sel.appendChild(o);
+  });
+  const optAdd = document.createElement('option');
+  optAdd.value = '__add__'; optAdd.textContent = '＋ Add account…';
+  sel.appendChild(optAdd);
+  sel.value = ACCOUNTS.current;
+
+  sel.onchange = async () => {
+    if (sel.value === '__add__') {
+      const name = (prompt('New account name (e.g. Wife, Parents):') || '').trim();
+      if (name) {
+        try { const id = await ACCOUNTS.add(name); ACCOUNTS.setCurrent(id); showToast('Account added'); }
+        catch (e) { showToast('Failed: ' + e.message, 'error'); }
+      }
+      renderAccountSwitcher();
+      showPage(STATE.page);
+      return;
+    }
+    ACCOUNTS.setCurrent(sel.value);
+    showPage(STATE.page);
+  };
+}
 
 // Top nav tab switching
 function renderNav() {
@@ -517,6 +566,7 @@ async function loadTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
     const assetId = String(txn[stream.assetIdCol]);
     if (subcatAssetIds && !subcatAssetIds.has(assetId)) return;
     if (HIDDEN.isAsset(stream.assetTable, assetId)) return;   // hidden asset — excluded
+    if (!ACCOUNTS.matches(STATE.assetMap[assetId]?.account_id)) return;   // other account
     txn._assetName = STATE.assetMap[txn[stream.assetIdCol]]?.[stream.assetNameCol] || '';
     STATE.historyRows.push(txn);
   });

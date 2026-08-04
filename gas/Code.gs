@@ -291,6 +291,42 @@ function renameIndMoneyTabs() {
   Logger.log('IndMoney tab rename complete.');
 }
 
+// Run once to add multi-account support: creates the accounts sheet (seeds a
+// default 'Self' account, id 1), adds account_id to every asset table (existing
+// rows → account 1), and adds account_id to hidden_items (existing → global ''). Safe to re-run.
+function migrateAddAccounts() {
+  const ss = getSpreadsheet();
+
+  let acc = ss.getSheetByName('accounts');
+  if (!acc) { acc = ss.insertSheet('accounts'); acc.appendRow(['id', 'name', 'is_active', 'created_at']); }
+  if (acc.getLastRow() <= 1) acc.appendRow([1, 'Self', true, new Date().toISOString()]);
+
+  const tables = [
+    'equity_funds', 'debt_hybrid_funds', 'indian_equity_stocks_assets', 'us_eq_indmoney_assets',
+    'precious_metal_etf_assets', 'precious_metal_physical_assets', 'crypto_assets', 'real_estate_assets',
+    'epf_assets', 'bank_assets', 'us_equity_assets', 'us_wires', 'us_repatriations', 'us_income',
+  ];
+  tables.forEach(name => addAccountIdColumn_(ss, name, 1));
+  addAccountIdColumn_(ss, 'hidden_items', '');   // existing hides → global scope
+
+  Logger.log('Accounts migration complete.');
+}
+
+// Insert an account_id column at position 2 (after id) and backfill existing rows.
+function addAccountIdColumn_(ss, name, defaultVal) {
+  const sh = ss.getSheetByName(name);
+  if (!sh || sh.getLastRow() === 0) { Logger.log('skip (missing/empty): ' + name); return; }
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  if (headers.indexOf('account_id') >= 0) { Logger.log(name + ': account_id already present'); return; }
+  sh.insertColumnAfter(1);
+  sh.getRange(1, 2).setValue('account_id');
+  const rows = sh.getLastRow() - 1;
+  if (rows > 0 && defaultVal !== '') {
+    sh.getRange(2, 2, rows, 1).setValues(Array.from({ length: rows }, () => [defaultVal]));
+  }
+  Logger.log(name + ': added account_id');
+}
+
 // Run once in GAS editor to add price column + formulas to existing asset rows
 function migrateAddPriceColumns() {
   const ss = getSpreadsheet();
@@ -327,45 +363,46 @@ function setupAllSheets() {
     categories: ['id', 'bucket_id', 'name', 'description', 'created_at'],
     subcategories: ['id', 'category_id', 'name', 'created_at'],
 
-    equity_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'is_active', 'current_nav', 'created_at'],
+    equity_funds: ['id', 'account_id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'is_active', 'current_nav', 'created_at'],
     equity_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
     equity_sip_mandates: ['id', 'fund_id', 'platform', 'mandate_ref', 'created_at'],
     equity_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
 
-    debt_hybrid_funds: ['id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'current_nav', 'created_at'],
+    debt_hybrid_funds: ['id', 'account_id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'current_nav', 'created_at'],
     debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
 
-    indian_equity_stocks_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
+    indian_equity_stocks_assets: ['id', 'account_id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     indian_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share', 'amount', 'notes', 'created_at'],
 
-    us_eq_indmoney_assets: ['id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
+    us_eq_indmoney_assets: ['id', 'account_id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     us_eq_indmoney_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
     // ── US Equity (IBKR) — wire-aware stream (additive) ──────────────────────
-    us_wires: ['id', 'wire_date', 'payment_reference', 'inr_principal', 'commission', 'gst', 'correspondent_charge', 'inr_debited', 'usd_sent', 'usd_received', 'effective_rate', 'actual_rate', 'status', 'notes', 'created_at'],
-    us_repatriations: ['id', 'repat_date', 'usd_withdrawn', 'ibkr_withdrawal_fee', 'correspondent_charge', 'inr_received', 'effective_rate_back', 'actual_rate_back', 'status', 'notes', 'created_at'],
-    us_equity_assets: ['id', 'subcategory_id', 'ticker', 'name', 'asset_type', 'is_active', 'current_price_usd', 'current_price', 'created_at'],
+    us_wires: ['id', 'account_id', 'wire_date', 'payment_reference', 'inr_principal', 'commission', 'gst', 'correspondent_charge', 'inr_debited', 'usd_sent', 'usd_received', 'effective_rate', 'actual_rate', 'status', 'notes', 'created_at'],
+    us_repatriations: ['id', 'account_id', 'repat_date', 'usd_withdrawn', 'ibkr_withdrawal_fee', 'correspondent_charge', 'inr_received', 'effective_rate_back', 'actual_rate_back', 'status', 'notes', 'created_at'],
+    us_equity_assets: ['id', 'account_id', 'subcategory_id', 'ticker', 'name', 'asset_type', 'is_active', 'current_price_usd', 'current_price', 'created_at'],
     us_equity_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_share_usd', 'usd_amount', 'wire_id', 'inr_cost_basis', 'realized_pnl_usd', 'notes', 'created_at'],
-    us_income: ['id', 'income_type', 'income_date', 'usd_amount', 'notes', 'created_at'],
+    us_income: ['id', 'account_id', 'income_type', 'income_date', 'usd_amount', 'notes', 'created_at'],
 
-    precious_metal_etf_assets: ['id', 'subcategory_id', 'name', 'code', 'is_active', 'current_price', 'created_at'],
+    precious_metal_etf_assets: ['id', 'account_id', 'subcategory_id', 'name', 'code', 'is_active', 'current_price', 'created_at'],
     precious_metal_etf_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'units', 'price_per_unit', 'amount', 'notes', 'created_at'],
 
-    precious_metal_physical_assets: ['id', 'subcategory_id', 'name', 'metal_type', 'form', 'is_active', 'created_at'],
+    precious_metal_physical_assets: ['id', 'account_id', 'subcategory_id', 'name', 'metal_type', 'form', 'is_active', 'created_at'],
     precious_metal_physical_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_unit', 'amount', 'notes', 'created_at'],
 
-    crypto_assets: ['id', 'subcategory_id', 'name', 'ticker', 'is_active', 'current_price', 'created_at'],
+    crypto_assets: ['id', 'account_id', 'subcategory_id', 'name', 'ticker', 'is_active', 'current_price', 'created_at'],
     crypto_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
-    real_estate_assets: ['id', 'subcategory_id', 'name', 'location', 'unit_of_measure', 'is_active', 'created_at'],
+    real_estate_assets: ['id', 'account_id', 'subcategory_id', 'name', 'location', 'unit_of_measure', 'is_active', 'created_at'],
     real_estate_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_unit', 'registration_cost', 'other_expenses', 'notes', 'created_at'],
 
     manual_prices: ['id', 'asset_type', 'asset_id', 'price_per_unit', 'price_date', 'created_at'],
 
-    epf_assets:  ['id', 'account_name', 'uan', 'current_balance', 'is_active', 'created_at'],
-    bank_assets: ['id', 'account_name', 'bank_name', 'account_type', 'current_balance', 'is_active', 'created_at'],
+    epf_assets:  ['id', 'account_id', 'account_name', 'uan', 'current_balance', 'is_active', 'created_at'],
+    bank_assets: ['id', 'account_id', 'account_name', 'bank_name', 'account_type', 'current_balance', 'is_active', 'created_at'],
 
-    hidden_items: ['id', 'kind', 'ref', 'name', 'created_at'],
+    hidden_items: ['id', 'account_id', 'kind', 'ref', 'name', 'created_at'],
+    accounts: ['id', 'name', 'is_active', 'created_at'],
   };
 
   Object.entries(sheets).forEach(([name, headers]) => {
@@ -381,6 +418,12 @@ function setupAllSheets() {
 
 function seedReferenceData() {
   const ss = getSpreadsheet();
+
+  // Default account
+  const accSheet = ss.getSheetByName('accounts');
+  if (accSheet && accSheet.getLastRow() <= 1) {
+    accSheet.appendRow([1, 'Self', true, new Date().toISOString()]);
+  }
 
   // Buckets
   const bucketsSheet = ss.getSheetByName('buckets');

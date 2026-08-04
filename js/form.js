@@ -73,6 +73,7 @@ function renderAssetDropdown(assets, stream, selectedId = '') {
   select.appendChild(blank);
 
   assets
+    .filter(a => (typeof ACCOUNTS === 'undefined' || ACCOUNTS.matches(a.account_id)))
     .filter(a => !(typeof HIDDEN !== 'undefined' && HIDDEN.isAsset(stream.assetTable, a.id)))
     .forEach(a => {
       const o = document.createElement('option');
@@ -870,6 +871,7 @@ async function renderWiresOverlay(stream) {
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
       await API.insert(stream.wireTable, {
+        account_id: ACCOUNTS.writeAccountId(),
         wire_date: val('wire_date'),
         payment_reference: val('payment_reference'),
         inr_principal: num('inr_principal'),
@@ -955,6 +957,7 @@ async function renderRepatOverlay(stream) {
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
       await API.insert(stream.repatTable, {
+        account_id: ACCOUNTS.writeAccountId(),
         repat_date: val('repat_date'),
         usd_withdrawn: usdWithdrawn,
         ibkr_withdrawal_fee: num('ibkr_withdrawal_fee'),
@@ -1027,6 +1030,7 @@ async function renderIncomeOverlay(stream) {
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
       await API.insert(stream.incomeTable, {
+        account_id: ACCOUNTS.writeAccountId(),
         income_type: val('income_type') || 'Dividend',
         income_date: val('income_date'),
         usd_amount: num('usd_amount'),

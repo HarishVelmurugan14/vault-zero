@@ -67,9 +67,12 @@ const API = {
     return this.get(stream.txnTable, { limit: CONFIG.PAGE_SIZE, offset, filters });
   },
 
-  // Insert a new asset record
+  // Insert a new asset record (tagged with the current account)
   async createAsset(stream, assetData) {
     assetData.is_active = true;
+    if (typeof ACCOUNTS !== 'undefined' && assetData.account_id === undefined) {
+      assetData.account_id = ACCOUNTS.writeAccountId();
+    }
     return this.insert(stream.assetTable, assetData);
   },
 
@@ -108,52 +111,117 @@ async function fetchAssetsCached(stream) {
   return data.rows;
 }
 
-// ── Visibility (show/hide) — hidden categories, subcategories, assets ──────────
-// Hidden items are excluded from Log, History, Holdings, Insights and all sums.
-// Asset ref format: "assetTable|assetId". Category/subcategory ref = the id.
-const HIDDEN = {
-  cats:   new Set(),
-  subs:   new Set(),
-  assets: new Set(),
+// ── Accounts (family view) — assets belong to an account; view one or All ──────
+const ACCOUNTS = {
+  list: [],
+  current: localStorage.getItem('vz_account') || 'all',   // 'all' or an account id (string)
   _loaded: false,
 
   async load(force = false) {
     if (this._loaded && !force) return;
+    let rows = [];
     try {
-      const res = await API.get('hidden_items', { limit: 5000 });
-      this.cats = new Set(); this.subs = new Set(); this.assets = new Set();
-      (res.rows || []).forEach(r => {
-        const ref = String(r.ref);
-        if (r.kind === 'category')         this.cats.add(ref);
-        else if (r.kind === 'subcategory') this.subs.add(ref);
-        else if (r.kind === 'asset')       this.assets.add(ref);
-      });
-    } catch (_) { /* sheet may not exist yet — treat as nothing hidden */ }
+      const res = await API.get('accounts', { limit: 200 });
+      rows = res.rows || [];
+    } catch (_) {}
+    this.loadFrom(rows);
+  },
+
+  // Populate from already-fetched rows (used by the single boot batchGet)
+  loadFrom(rows) {
+    this.list = (rows || []).filter(a => String(a.is_active).toUpperCase() === 'TRUE');
+    // If the stored current account no longer exists, fall back to All
+    if (this.current !== 'all' && !this.list.some(a => String(a.id) === String(this.current))) {
+      this.current = 'all';
+    }
     this._loaded = true;
   },
 
-  assetKey(table, id) { return `${table}|${id}`; },
-  isCat(id)           { return this.cats.has(String(id)); },
-  isSub(id)           { return this.subs.has(String(id)); },
-  isAsset(table, id)  { return this.assets.has(`${table}|${id}`); },
-  isHidden(kind, ref) {
-    return kind === 'category' ? this.isCat(ref) : kind === 'subcategory' ? this.isSub(ref) : this.assets.has(String(ref));
+  isAll()               { return this.current === 'all'; },
+  matches(accountId)    { return this.isAll() || String(accountId) === String(this.current); },
+  name(id)              { const a = this.list.find(x => String(x.id) === String(id)); return a ? a.name : ''; },
+  currentName()         { return this.isAll() ? 'All Accounts' : (this.name(this.current) || 'Account'); },
+  // Account to write new assets into (falls back to the first account when on 'All')
+  writeAccountId()      { return this.isAll() ? (this.list[0] ? String(this.list[0].id) : '') : String(this.current); },
+
+  setCurrent(id) {
+    this.current = String(id);
+    localStorage.setItem('vz_account', this.current);
+    this._clearCaches();
   },
+
+  async add(name) {
+    const r = await API.insert('accounts', { name, is_active: true });
+    await this.load(true);
+    return r.id;
+  },
+
+  _clearCaches() {
+    if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
+    if (typeof _insightsCache  !== 'undefined') _insightsCache  = null;
+    try { CACHE._store = {}; } catch (_) {}
+    try { LSC.clear('insights', 'holdings'); } catch (_) {}
+  },
+};
+
+// ── Visibility (show/hide) — hidden categories, subcategories, assets ──────────
+// Hidden items are excluded from Log, History, Holdings, Insights and all sums.
+// Asset ref format: "assetTable|assetId". Category/subcategory ref = the id.
+// Account-aware: a hide has a scope — '' = global (applies to every account and
+// the All view), or an account id = applies only when viewing that account.
+const HIDDEN = {
+  rows: [],   // { kind, ref, account }  (account '' = global)
+  _loaded: false,
+
+  async load(force = false) {
+    if (this._loaded && !force) return;
+    let rows = [];
+    try {
+      const res = await API.get('hidden_items', { limit: 5000 });
+      rows = res.rows || [];
+    } catch (_) {}
+    this.loadFrom(rows);
+  },
+
+  // Populate from already-fetched rows (used by the single boot batchGet)
+  loadFrom(rows) {
+    this.rows = (rows || []).map(r => ({ kind: r.kind, ref: String(r.ref), account: String(r.account_id || '') }));
+    this._loaded = true;
+  },
+
+  _scope() { return (typeof ACCOUNTS !== 'undefined' && !ACCOUNTS.isAll()) ? String(ACCOUNTS.current) : ''; },
+
+  // Hidden now if a global hide exists, or an account-scoped hide for the current account.
+  _hit(kind, ref) {
+    ref = String(ref);
+    const cur = (typeof ACCOUNTS !== 'undefined') ? String(ACCOUNTS.current) : 'all';
+    return this.rows.some(r => r.kind === kind && r.ref === ref &&
+      (r.account === '' || (cur !== 'all' && r.account === cur)));
+  },
+
+  assetKey(table, id) { return `${table}|${id}`; },
+  isCat(id)           { return this._hit('category', id); },
+  isSub(id)           { return this._hit('subcategory', id); },
+  isAsset(table, id)  { return this._hit('asset', `${table}|${id}`); },
 
   async hide(kind, ref, name) {
     ref = String(ref);
-    await API.insert('hidden_items', { kind, ref, name: name || '' });
-    (kind === 'category' ? this.cats : kind === 'subcategory' ? this.subs : this.assets).add(ref);
+    const account = this._scope();
+    await API.insert('hidden_items', { account_id: account, kind, ref, name: name || '' });
+    this.rows.push({ kind, ref, account });
     this._clearCaches();
   },
 
   async unhide(kind, ref) {
     ref = String(ref);
+    const account = this._scope();
     try {
       const res = await API.get('hidden_items', { limit: 5000, filters: { kind, ref } });
-      for (const row of (res.rows || [])) await API.delete('hidden_items', row.id);
+      for (const row of (res.rows || [])) {
+        if (String(row.account_id || '') === account) await API.delete('hidden_items', row.id);
+      }
     } catch (_) {}
-    (kind === 'category' ? this.cats : kind === 'subcategory' ? this.subs : this.assets).delete(ref);
+    this.rows = this.rows.filter(r => !(r.kind === kind && r.ref === ref && r.account === account));
     this._clearCaches();
   },
 

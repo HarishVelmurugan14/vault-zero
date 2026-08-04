@@ -1,6 +1,8 @@
 // VaultZero — Holdings page
 
 let _holdingsAllRows = null;
+// All-Accounts view: merge the same fund held in multiple accounts into one row.
+let _holdingsCombine = (() => { try { return localStorage.getItem('vz_holdings_combine') === '1'; } catch (_) { return false; } })();
 
 // ── US Equity (IBKR) shared helpers (used by holdings.js + insights.js) ───────
 
@@ -149,7 +151,29 @@ function renderHoldingsUI(container, allRows) {
   });
   const subcatMS = makeMultiSelect('All Subcategories', subcatOptionsFor([]), () => applyFilter());
 
-  const tableWrap = document.createElement('div');
+  filterBar.appendChild(catMS.wrapper);
+  filterBar.appendChild(subcatMS.wrapper);
+
+  // "Combine same fund across accounts" — only meaningful in the All-Accounts view
+  const multiAcct = (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1);
+  if (multiAcct) {
+    const lbl = document.createElement('label');
+    lbl.className = 'holdings-combine-toggle';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = _holdingsCombine;
+    cb.addEventListener('change', () => {
+      _holdingsCombine = cb.checked;
+      try { localStorage.setItem('vz_holdings_combine', cb.checked ? '1' : '0'); } catch (_) {}
+      applyFilter();
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(' Combine same fund across accounts'));
+    filterBar.appendChild(lbl);
+  }
+
+  const breakdownWrap = document.createElement('div');
+  const tableWrap     = document.createElement('div');
 
   function applyFilter() {
     const cats = catMS.getSelected();
@@ -158,18 +182,81 @@ function renderHoldingsUI(container, allRows) {
       (!cats.length || cats.includes(r.catName)) &&
       (!subs.length || subs.includes(r.subcategory))
     );
-    renderHoldingsTable(tableWrap, filtered, {
+
+    // Per-account breakdown uses the per-account rows (before any combine)
+    breakdownWrap.innerHTML = '';
+    const bd = buildAccountBreakdown(filtered);
+    if (bd) breakdownWrap.appendChild(bd);
+
+    const rowsForTable = (_holdingsCombine && multiAcct) ? combineRowsByFund(filtered) : filtered;
+    renderHoldingsTable(tableWrap, rowsForTable, {
       singleCat:    cats.length === 1,
       singleSubcat: subs.length === 1,
     });
   }
 
-  filterBar.appendChild(catMS.wrapper);
-  filterBar.appendChild(subcatMS.wrapper);
   container.appendChild(filterBar);
+  container.appendChild(breakdownWrap);
   container.appendChild(tableWrap);
 
   applyFilter();
+}
+
+// Merge rows with the same fund identity (category + subcategory + name) across
+// accounts into one row: invested/current summed. Keeps a single account id when
+// the fund lives in only one account, else marks it combined with a count.
+function combineRowsByFund(rows) {
+  const map = {}, order = [];
+  rows.forEach(r => {
+    const key = `${r.catId}|${r.subcategory}|${r.name}`;
+    if (!map[key]) { map[key] = { ...r, _accts: new Set() }; order.push(key); }
+    else { map[key].invested += r.invested; map[key].currentValue += r.currentValue; }
+    if (r.account) map[key]._accts.add(String(r.account));
+  });
+  return order.map(k => {
+    const m = map[k];
+    m.combinedCount = m._accts.size;
+    m.account = m._accts.size === 1 ? [...m._accts][0] : null;
+    delete m._accts;
+    return m;
+  });
+}
+
+// A compact "by account" panel (net worth split per account) for the All view.
+function buildAccountBreakdown(rows) {
+  if (!(typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1)) return null;
+  const byAcct = {};
+  rows.forEach(r => {
+    const val = r.currentValue > 0 ? r.currentValue : r.invested;
+    const key = r.account ? String(r.account) : '';
+    byAcct[key] = (byAcct[key] || 0) + val;
+  });
+  const total = Object.values(byAcct).reduce((s, v) => s + v, 0);
+  if (total <= 0) return null;
+
+  const entries = Object.entries(byAcct)
+    .map(([k, v]) => ({ name: k ? (ACCOUNTS.name(k) || 'Account') : 'Shared / Unattributed', value: v, pct: v / total * 100 }))
+    .sort((a, b) => b.value - a.value);
+
+  const card = document.createElement('div');
+  card.className = 'holdings-acct-breakdown';
+  let html = '<div class="hab-title">By account</div>';
+  entries.forEach(e => {
+    html += `<div class="hab-row">
+      <span class="hab-name">${e.name}</span>
+      <span class="hab-bar"><span class="hab-fill" style="width:${e.pct.toFixed(1)}%"></span></span>
+      <span class="hab-val">₹${formatINR(e.value)}</span>
+      <span class="hab-pct">${e.pct.toFixed(1)}%</span>
+    </div>`;
+  });
+  html += `<div class="hab-row hab-total">
+      <span class="hab-name">Total</span>
+      <span class="hab-bar"></span>
+      <span class="hab-val">₹${formatINR(total)}</span>
+      <span class="hab-pct">100%</span>
+    </div>`;
+  card.innerHTML = html;
+  return card;
 }
 
 async function buildHoldingsRows() {
@@ -190,6 +277,7 @@ async function buildHoldingsRows() {
   ];
 
   await HIDDEN.load();
+  await ACCOUNTS.load();
 
   const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable, ...(e.stream.auxTables || [])]).filter(Boolean)), 'manual_prices'];
   let res = {};
@@ -214,7 +302,8 @@ async function buildHoldingsRows() {
     const { cat, stream, subcatName } = entry;
     if (HIDDEN.isCat(cat.id)) continue;   // hidden category — excluded everywhere
     const assets = (res[stream.assetTable]?.rows || [])
-      .filter(a => !HIDDEN.isAsset(stream.assetTable, a.id) && !HIDDEN.isSub(a.subcategory_id));
+      .filter(a => ACCOUNTS.matches(a.account_id)
+                && !HIDDEN.isAsset(stream.assetTable, a.id) && !HIDDEN.isSub(a.subcategory_id));
     // US equity may have cash (from a wire) before any asset exists — don't skip it.
     if (!assets.length && !stream.usEquity) continue;
 
@@ -226,7 +315,7 @@ async function buildHoldingsRows() {
           const balance = parseFloat(a[stream.currentBalanceCol] || 0);
           if (!balance) return;
           rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
-                      subcategory: '', name: a[stream.assetNameCol],
+                      subcategory: '', name: a[stream.assetNameCol], account: a.account_id,
                       invested: balance, currentValue: balance });
         });
       continue;
@@ -234,7 +323,8 @@ async function buildHoldingsRows() {
 
     // ── US Equity (IBKR) — INR cost basis from wires; current value via INR price ──
     if (stream.usEquity) {
-      const usTxns = res[stream.txnTable]?.rows || [];
+      const visibleIds = new Set(assets.map(a => String(a.id)));   // account+hidden filtered
+      const usTxns = (res[stream.txnTable]?.rows || []).filter(t => visibleIds.has(String(t[stream.assetIdCol])));
       const buyUnits = {}, buyCostINR = {}, netQty = {};
       usTxns.forEach(t => {
         const aid = String(t[stream.assetIdCol]);
@@ -257,14 +347,14 @@ async function buildHoldingsRows() {
           const price = parseFloat(a[stream.currentPriceCol] || 0);   // INR/share (GOOGLEFINANCE)
           const currentValue = price > 0 ? nq * price : 0;
           rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
-                      subcategory: SUBCAT_NAMES[a.subcategory_id] || '',
+                      subcategory: SUBCAT_NAMES[a.subcategory_id] || '', account: a.account_id,
                       name: a[stream.assetNameCol], invested, currentValue });
         });
 
       // ── Derived US cash line (wires − buys + sells − repats + income) ──
-      const wires   = res[stream.wireTable]?.rows   || [];
-      const repats  = res[stream.repatTable]?.rows  || [];
-      const income  = res[stream.incomeTable]?.rows || [];
+      const wires   = (res[stream.wireTable]?.rows   || []).filter(w => ACCOUNTS.matches(w.account_id));
+      const repats  = (res[stream.repatTable]?.rows  || []).filter(r => ACCOUNTS.matches(r.account_id));
+      const income  = (res[stream.incomeTable]?.rows || []).filter(i => ACCOUNTS.matches(i.account_id));
       const cashUsd = usEquityCashUsd(usTxns, wires, repats, income);
       if (Math.abs(cashUsd) > 0.01) {
         const rate = usEquityLiveRate(assets, wires, stream);
@@ -336,7 +426,7 @@ async function buildHoldingsRows() {
           if (price > 0) currentValue = netQty * price;
         }
 
-        rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol], invested, currentValue });
+        rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol], account: a.account_id, invested, currentValue });
       });
   }
 
@@ -346,7 +436,8 @@ async function buildHoldingsRows() {
     bucketOrder[a.bucketId] - bucketOrder[b.bucketId] ||
     catOrder[a.catId]       - catOrder[b.catId] ||
     a.subcategory.localeCompare(b.subcategory) ||
-    a.name.localeCompare(b.name)
+    a.name.localeCompare(b.name) ||
+    String(a.account || '').localeCompare(String(b.account || ''))
   );
 
   LSC.set('holdings', rows);
@@ -533,8 +624,20 @@ function makeAssetRow(r) {
   const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
   const row    = document.createElement('div');
   row.className = 'ht-asset';
+  // In the All-Accounts view, tag each holding with its owner so the same fund
+  // held in two accounts is distinguishable. When rows are combined, show the
+  // number of accounts instead of a single owner.
+  let tag = '';
+  if (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1) {
+    if (r.combinedCount > 1) {
+      tag = ` <span class="ht-acct-tag">👪 ${r.combinedCount} accounts</span>`;
+    } else if (r.account) {
+      const an = ACCOUNTS.name(r.account);
+      if (an) tag = ` <span class="ht-acct-tag">${an}</span>`;
+    }
+  }
   row.innerHTML = `
-    <div class="ht-asset-name">${r.name}</div>
+    <div class="ht-asset-name">${r.name}${tag}</div>
     <div class="ht-asset-num">₹${formatINR(r.invested)}</div>
     <div class="ht-asset-num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</div>
     <div class="ht-asset-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>

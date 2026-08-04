@@ -312,8 +312,9 @@ function applyFilters(rawData) {
       // Asset filter restricts to entries whose assets were picked
       if (hasAssetFilter && !(String(idx) in assetByEntry)) return null;
 
-      // Filter assets — drop hidden assets / hidden subcategories
+      // Filter assets — by account, then drop hidden assets / hidden subcategories
       let assets = entry.assets.filter(a =>
+        ACCOUNTS.matches(a.account_id) &&
         !HIDDEN.isAsset(entry.stream.assetTable, a.id) && !HIDDEN.isSub(a.subcategory_id));
       if (subcatNames.length) {
         assets = assets.filter(a => subcatNames.includes(SUBCAT_NAMES[a.subcategory_id] || ''));
@@ -527,6 +528,7 @@ const ENTRIES = [
 
 async function fetchAllInsightsData() {
   await HIDDEN.load();
+  await ACCOUNTS.load();
   const cached = LSC.get('insights');
   if (cached) {
     _manualPricesMap = cached.manualPrices || {};
@@ -713,7 +715,7 @@ function aggregateInsights(filteredData) {
         totalUnrealizedPnL += unrealPnL;
 
         if (netCost > 100 && asset) {
-          topHoldings.push({ name: asset[stream.assetNameCol], catName, netCost, currentValue: curVal });
+          topHoldings.push({ name: asset[stream.assetNameCol], catName, account: asset.account_id, netCost, currentValue: curVal });
         }
 
         // INR cashflows for XIRR + monthly/yearly invested (buys only; USD stays in broker)
@@ -735,8 +737,12 @@ function aggregateInsights(filteredData) {
         });
       });
 
-      // ── Derived US cash line (snapshot, no P&L) ──
-      const cashUsd = usEquityCashUsd(txns, _usAux.wires, _usAux.repats, _usAux.income);
+      // ── Derived US cash line (snapshot, no P&L) — account-filtered ──
+      const cashUsd = usEquityCashUsd(
+        txns,
+        (_usAux.wires  || []).filter(w => ACCOUNTS.matches(w.account_id)),
+        (_usAux.repats || []).filter(r => ACCOUNTS.matches(r.account_id)),
+        (_usAux.income || []).filter(i => ACCOUNTS.matches(i.account_id)));
       if (Math.abs(cashUsd) > 0.01) {
         const cashInr = cashUsd * usEquityLiveRate(assets, _usAux.wires, stream);
         byCategory[catName].netCost      += cashInr;
@@ -798,7 +804,7 @@ function aggregateInsights(filteredData) {
       totalUnrealizedPnL += unrealPnL;
 
       if (m.netCost > 100 && asset) {
-        topHoldings.push({ name: asset[stream.assetNameCol], catName, netCost: m.netCost, currentValue: curVal });
+        topHoldings.push({ name: asset[stream.assetNameCol], catName, account: asset.account_id, netCost: m.netCost, currentValue: curVal });
       }
 
       // Collect cashflows for XIRR
@@ -1574,7 +1580,11 @@ function drawYearlyChart(byYear) {
 
 function drawTopHoldingsChart(topHoldings) {
   if (!topHoldings.length) return emptyCard('chart-top-holdings', 'No holdings for selected filters.');
-  const labels = topHoldings.map(h => h.name.length > 22 ? h.name.substring(0, 20) + '…' : h.name);
+  // In All-Accounts view, suffix each bar with its owner so the same fund held in
+  // two accounts reads as two distinct bars.
+  const tagAcct = (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1);
+  const fullName = h => tagAcct && h.account && ACCOUNTS.name(h.account) ? `${h.name} · ${ACCOUNTS.name(h.account)}` : h.name;
+  const labels = topHoldings.map(h => { const n = fullName(h); return n.length > 22 ? n.substring(0, 20) + '…' : n; });
   const GRID = 'rgba(255,255,255,0.05)';
   const TICK = '#525252';
   const barColors = topHoldings.map((_, i) => CAT_COLORS[i % CAT_COLORS.length] + 'cc');
@@ -1593,7 +1603,7 @@ function drawTopHoldingsChart(topHoldings) {
       plugins: {
         datalabels: { display: false },
         legend: { display: false },
-        tooltip: { callbacks: { title: ctx => topHoldings[ctx[0].dataIndex].name, label: ctx => ` ${fmtCurrency(ctx.raw)}` } },
+        tooltip: { callbacks: { title: ctx => fullName(topHoldings[ctx[0].dataIndex]), label: ctx => ` ${fmtCurrency(ctx.raw)}` } },
       },
       scales: {
         x: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
@@ -1781,7 +1791,7 @@ function buildMFReport(rawData) {
     if (!asset) return;
     const currentNAV = parseFloat(asset[stream.currentPriceCol] || 0);
     const m          = computeFIFOMFMetrics(stream, assetTxns, currentNAV);
-    funds.push({ assetId, name: asset[stream.assetNameCol] || 'Unknown', ...m });
+    funds.push({ assetId, name: asset[stream.assetNameCol] || 'Unknown', account: asset.account_id, ...m });
   });
 
   funds.sort((a, b) => {
@@ -1842,10 +1852,13 @@ function drawMFReport(divId, rawData) {
     </tr></thead>
     <tbody>`;
 
+  const showAcct = (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1);
   funds.forEach(f => {
     const badge = f.isActive
       ? `<span class="mf-badge mf-badge-active">Active</span>`
       : `<span class="mf-badge mf-badge-inactive">Inactive</span>`;
+    const acctTag = (showAcct && f.account && ACCOUNTS.name(f.account))
+      ? ` <span class="ht-acct-tag">${ACCOUNTS.name(f.account)}</span>` : '';
 
     const investedDisp = f.isActive
       ? fmtCurrency(f.remainingCost)
@@ -1867,7 +1880,7 @@ function drawMFReport(divId, rawData) {
       : `<span style="color:var(--text-muted)">—</span>`;
 
     html += `<tr class="mf-fund-row" data-fund-id="${f.assetId}">
-      <td title="${f.name}"><span class="mf-caret">▸</span>${f.name}</td>
+      <td title="${f.name}"><span class="mf-caret">▸</span>${f.name}${acctTag}</td>
       <td style="text-align:center">${badge}</td>
       <td>${investedDisp}</td>
       <td>${cvDisp}</td>

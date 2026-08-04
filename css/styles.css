@@ -740,7 +740,70 @@ body::before {
   gap: 10px;
   padding: 16px 0 12px;
   flex-wrap: wrap;
+  align-items: center;
 }
+
+/* Combine-same-fund toggle (All-Accounts view) */
+.holdings-combine-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-sub);
+  cursor: pointer;
+  user-select: none;
+  margin-left: auto;
+}
+.holdings-combine-toggle input { accent-color: #4f46e5; cursor: pointer; }
+
+/* Per-account breakdown panel (All-Accounts view) */
+.holdings-acct-breakdown {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.holdings-acct-breakdown .hab-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.holdings-acct-breakdown .hab-row {
+  display: grid;
+  grid-template-columns: minmax(90px,1.2fr) 3fr minmax(80px,auto) 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--text-sub);
+}
+.holdings-acct-breakdown .hab-name { font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.holdings-acct-breakdown .hab-bar {
+  height: 7px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.holdings-acct-breakdown .hab-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg,#4f46e5,#7c3aed);
+  border-radius: 4px;
+}
+.holdings-acct-breakdown .hab-val { text-align: right; font-variant-numeric: tabular-nums; }
+.holdings-acct-breakdown .hab-pct { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.holdings-acct-breakdown .hab-total {
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  padding-top: 8px;
+  font-weight: 700;
+}
+.holdings-acct-breakdown .hab-total .hab-name,
+.holdings-acct-breakdown .hab-total .hab-val { color: var(--text); }
 
 .holdings-filter-select {
   background: var(--surface);
@@ -972,6 +1035,20 @@ body::before {
   text-align: right;
   font-size: 13px;
   color: var(--text-sub);
+}
+
+/* Account tag on a holding (shown only in the All-Accounts view) */
+.ht-acct-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 /* P&L color must win over the .ht-*-num text color (same specificity, defined later) */
@@ -1421,6 +1498,21 @@ body::before {
   font-size: 11px; font-weight: 700; text-transform: uppercase;
   color: var(--text-muted);
 }
+
+/* ── Account switcher (family view) ──────────────────────────────────────────── */
+
+.account-switcher {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 170px;
+}
+.account-switcher:focus { outline: none; border-color: var(--accent); }
 
 /* ── Manage visibility ───────────────────────────────────────────────────────── */
 
