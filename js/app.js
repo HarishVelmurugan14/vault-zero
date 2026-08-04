@@ -104,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   loadSubcatNames(); // fire-and-forget — populates SUBCAT_NAMES before user reaches Holdings/Insights
+  HIDDEN.load();     // fire-and-forget — populates the hidden set before Holdings/Insights render
   renderNav();
   showPage('log');
   // Warm insights + holdings cache in the background so first tab click is instant
@@ -139,11 +140,13 @@ function showPage(page) {
   document.getElementById('page-history').style.display = page === 'history' ? 'block' : 'none';
   document.getElementById('page-holdings').style.display = page === 'holdings' ? 'block' : 'none';
   document.getElementById('page-insights').style.display = page === 'insights' ? 'block' : 'none';
+  document.getElementById('page-manage').style.display = page === 'manage' ? 'block' : 'none';
 
   if (page === 'log') renderBuckets('log');
   if (page === 'history') renderHistoryPage();
   if (page === 'holdings') renderHoldings();
   if (page === 'insights') renderInsights();
+  if (page === 'manage') renderManage();
 }
 
 // ─── LOG PAGE ──────────────────────────────────────────────────────────────────
@@ -178,7 +181,7 @@ function renderCategories(page) {
   const container = document.getElementById(containerId);
   container.innerHTML = '';
 
-  const cats = CATEGORIES.filter(c => c.bucket_id === STATE.bucket.id);
+  const cats = CATEGORIES.filter(c => c.bucket_id === STATE.bucket.id && !HIDDEN.isCat(c.id));
   const list = document.createElement('div');
   list.className = 'list';
 
@@ -212,7 +215,7 @@ function renderSubcategories(page) {
     const list = document.createElement('div');
     list.className = 'list';
 
-    (data.rows || []).forEach(s => {
+    (data.rows || []).filter(s => !HIDDEN.isSub(s.id)).forEach(s => {
       const item = document.createElement('div');
       item.className = 'list-item';
       item.textContent = s.name;
@@ -329,7 +332,7 @@ async function renderHistoryPage() {
   const catSelect = document.createElement('select');
   catSelect.className = 'holdings-filter-select';
   catSelect.innerHTML = '<option value="">Select Category…</option>';
-  CATEGORIES.forEach(c => {
+  CATEGORIES.filter(c => !HIDDEN.isCat(c.id)).forEach(c => {
     const o = document.createElement('option');
     o.value = c.id;
     o.textContent = c.name;
@@ -361,7 +364,7 @@ async function renderHistoryPage() {
       subcatSelect.style.display = 'block';
       try {
         const data = await API.getSubcategories(cat.id);
-        (data.rows || []).forEach(s => {
+        (data.rows || []).filter(s => !HIDDEN.isSub(s.id)).forEach(s => {
           const o = document.createElement('option');
           o.value = s.id;
           o.dataset.name = s.name;
@@ -513,6 +516,7 @@ async function loadTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
   data.rows.forEach(txn => {
     const assetId = String(txn[stream.assetIdCol]);
     if (subcatAssetIds && !subcatAssetIds.has(assetId)) return;
+    if (HIDDEN.isAsset(stream.assetTable, assetId)) return;   // hidden asset — excluded
     txn._assetName = STATE.assetMap[txn[stream.assetIdCol]]?.[stream.assetNameCol] || '';
     STATE.historyRows.push(txn);
   });

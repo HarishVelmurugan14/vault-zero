@@ -364,6 +364,8 @@ function setupAllSheets() {
 
     epf_assets:  ['id', 'account_name', 'uan', 'current_balance', 'is_active', 'created_at'],
     bank_assets: ['id', 'account_name', 'bank_name', 'account_type', 'current_balance', 'is_active', 'created_at'],
+
+    hidden_items: ['id', 'kind', 'ref', 'name', 'created_at'],
   };
 
   Object.entries(sheets).forEach(([name, headers]) => {

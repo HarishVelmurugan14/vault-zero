@@ -303,14 +303,18 @@ function applyFilters(rawData) {
 
   return rawData
     .map((entry, idx) => {
+      // Hidden category — excluded everywhere
+      if (HIDDEN.isCat(entry.catId)) return null;
+
       // Category filter (multi)
       if (catNames.length && !catNames.includes(entry.catName)) return null;
 
       // Asset filter restricts to entries whose assets were picked
       if (hasAssetFilter && !(String(idx) in assetByEntry)) return null;
 
-      // Filter assets
-      let assets = entry.assets;
+      // Filter assets — drop hidden assets / hidden subcategories
+      let assets = entry.assets.filter(a =>
+        !HIDDEN.isAsset(entry.stream.assetTable, a.id) && !HIDDEN.isSub(a.subcategory_id));
       if (subcatNames.length) {
         assets = assets.filter(a => subcatNames.includes(SUBCAT_NAMES[a.subcategory_id] || ''));
       }
@@ -522,6 +526,7 @@ const ENTRIES = [
 ];
 
 async function fetchAllInsightsData() {
+  await HIDDEN.load();
   const cached = LSC.get('insights');
   if (cached) {
     _manualPricesMap = cached.manualPrices || {};

@@ -72,14 +72,16 @@ function renderAssetDropdown(assets, stream, selectedId = '') {
   blank.textContent = 'Select or add...';
   select.appendChild(blank);
 
-  assets.forEach(a => {
-    const o = document.createElement('option');
-    o.value = a.id;
-    o.textContent = a[stream.assetNameCol];
-    o.dataset.asset = JSON.stringify(a);
-    if (String(a.id) === String(selectedId)) o.selected = true;
-    select.appendChild(o);
-  });
+  assets
+    .filter(a => !(typeof HIDDEN !== 'undefined' && HIDDEN.isAsset(stream.assetTable, a.id)))
+    .forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.id;
+      o.textContent = a[stream.assetNameCol];
+      o.dataset.asset = JSON.stringify(a);
+      if (String(a.id) === String(selectedId)) o.selected = true;
+      select.appendChild(o);
+    });
 
   const addOpt = document.createElement('option');
   addOpt.value = '__new__';

@@ -189,6 +189,8 @@ async function buildHoldingsRows() {
     { cat: CATEGORIES.find(c => c.id === 12), stream: STREAMS.us_equity_ibkr,          subcatName: null },
   ];
 
+  await HIDDEN.load();
+
   const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable, ...(e.stream.auxTables || [])]).filter(Boolean)), 'manual_prices'];
   let res = {};
   try {
@@ -210,7 +212,9 @@ async function buildHoldingsRows() {
   const rows = [];
   for (const entry of streamEntries) {
     const { cat, stream, subcatName } = entry;
-    const assets = res[stream.assetTable]?.rows || [];
+    if (HIDDEN.isCat(cat.id)) continue;   // hidden category — excluded everywhere
+    const assets = (res[stream.assetTable]?.rows || [])
+      .filter(a => !HIDDEN.isAsset(stream.assetTable, a.id) && !HIDDEN.isSub(a.subcategory_id));
     // US equity may have cash (from a wire) before any asset exists — don't skip it.
     if (!assets.length && !stream.usEquity) continue;
 

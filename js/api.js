@@ -108,6 +108,62 @@ async function fetchAssetsCached(stream) {
   return data.rows;
 }
 
+// ── Visibility (show/hide) — hidden categories, subcategories, assets ──────────
+// Hidden items are excluded from Log, History, Holdings, Insights and all sums.
+// Asset ref format: "assetTable|assetId". Category/subcategory ref = the id.
+const HIDDEN = {
+  cats:   new Set(),
+  subs:   new Set(),
+  assets: new Set(),
+  _loaded: false,
+
+  async load(force = false) {
+    if (this._loaded && !force) return;
+    try {
+      const res = await API.get('hidden_items', { limit: 5000 });
+      this.cats = new Set(); this.subs = new Set(); this.assets = new Set();
+      (res.rows || []).forEach(r => {
+        const ref = String(r.ref);
+        if (r.kind === 'category')         this.cats.add(ref);
+        else if (r.kind === 'subcategory') this.subs.add(ref);
+        else if (r.kind === 'asset')       this.assets.add(ref);
+      });
+    } catch (_) { /* sheet may not exist yet — treat as nothing hidden */ }
+    this._loaded = true;
+  },
+
+  assetKey(table, id) { return `${table}|${id}`; },
+  isCat(id)           { return this.cats.has(String(id)); },
+  isSub(id)           { return this.subs.has(String(id)); },
+  isAsset(table, id)  { return this.assets.has(`${table}|${id}`); },
+  isHidden(kind, ref) {
+    return kind === 'category' ? this.isCat(ref) : kind === 'subcategory' ? this.isSub(ref) : this.assets.has(String(ref));
+  },
+
+  async hide(kind, ref, name) {
+    ref = String(ref);
+    await API.insert('hidden_items', { kind, ref, name: name || '' });
+    (kind === 'category' ? this.cats : kind === 'subcategory' ? this.subs : this.assets).add(ref);
+    this._clearCaches();
+  },
+
+  async unhide(kind, ref) {
+    ref = String(ref);
+    try {
+      const res = await API.get('hidden_items', { limit: 5000, filters: { kind, ref } });
+      for (const row of (res.rows || [])) await API.delete('hidden_items', row.id);
+    } catch (_) {}
+    (kind === 'category' ? this.cats : kind === 'subcategory' ? this.subs : this.assets).delete(ref);
+    this._clearCaches();
+  },
+
+  _clearCaches() {
+    if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
+    if (typeof _insightsCache  !== 'undefined') _insightsCache  = null;
+    try { LSC.clear('insights', 'holdings'); } catch (_) {}
+  },
+};
+
 // ── Batch read (single request for Insights / Holdings) ────────────────────────
 API.batchGet = async function(sheets, limit = 5000) {
   const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), limit, token: AUTH.get() });
