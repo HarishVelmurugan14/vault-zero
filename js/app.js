@@ -122,14 +122,19 @@ document.addEventListener('DOMContentLoaded', () => {
   bootstrapMeta();   // one batched round-trip: subcategories + hidden_items + accounts
   renderNav();
   showPage('log');
-  // Warm insights + holdings cache in the background so first tab click is instant
-  setTimeout(() => {
-    if (!LSC.get('insights')) {
-      fetchAllInsightsData().then(d => { _insightsCache = d; }).catch(() => {});
-    }
-    if (!LSC.get('holdings') && !_holdingsAllRows) {
-      buildHoldingsRows().then(r => { _holdingsAllRows = r; }).catch(() => {});
-    }
+  // Warm insights + holdings cache in the background so first tab click is instant.
+  // Sequential (not parallel): Apps Script serialises per-user requests, so running
+  // these one at a time means a tab the user opens waits behind at most one heavy
+  // call instead of two.
+  setTimeout(async () => {
+    try {
+      if (!LSC.get('insights') && !_insightsCache) {
+        _insightsCache = await fetchAllInsightsData();
+      }
+      if (!LSC.get('holdings') && !_holdingsAllRows) {
+        _holdingsAllRows = await buildHoldingsRows();
+      }
+    } catch (_) {}
   }, 3000);
 });
 

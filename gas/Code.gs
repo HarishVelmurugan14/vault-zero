@@ -321,6 +321,31 @@ function migrateAddAccounts() {
   Logger.log('Accounts migration complete.');
 }
 
+// Surgical: create/repair ONLY the hidden_items sheet (nothing else). Use this
+// instead of setupAllSheets() so no unwanted tabs get created.
+function ensureHiddenItemsSheet() {
+  const ss = getSpreadsheet();
+  const HEADERS = ['id', 'account_id', 'kind', 'ref', 'name', 'created_at'];
+  let sh = ss.getSheetByName('hidden_items');
+  if (!sh) {
+    sh = ss.insertSheet('hidden_items');
+    sh.appendRow(HEADERS);
+    Logger.log('hidden_items: created');
+    return;
+  }
+  if (sh.getLastRow() === 0) {            // exists but blank (no header row)
+    sh.appendRow(HEADERS);
+    Logger.log('hidden_items: header row added');
+    return;
+  }
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  if (headers.indexOf('account_id') < 0) {
+    addAccountIdColumn_(ss, 'hidden_items', '');   // existing hides → global scope
+  } else {
+    Logger.log('hidden_items: already OK — nothing to do');
+  }
+}
+
 // Insert an account_id column at position 2 (after id) and backfill existing rows.
 function addAccountIdColumn_(ss, name, defaultVal) {
   const sh = ss.getSheetByName(name);
