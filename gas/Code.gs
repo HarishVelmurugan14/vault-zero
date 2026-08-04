@@ -307,7 +307,16 @@ function migrateAddAccounts() {
     'epf_assets', 'bank_assets', 'us_equity_assets', 'us_wires', 'us_repatriations', 'us_income',
   ];
   tables.forEach(name => addAccountIdColumn_(ss, name, 1));
-  addAccountIdColumn_(ss, 'hidden_items', '');   // existing hides → global scope
+
+  // Ensure hidden_items exists (inserts need a pre-existing sheet) with account_id
+  let hid = ss.getSheetByName('hidden_items');
+  if (!hid) {
+    hid = ss.insertSheet('hidden_items');
+    hid.appendRow(['id', 'account_id', 'kind', 'ref', 'name', 'created_at']);
+    Logger.log('hidden_items: created with account_id');
+  } else {
+    addAccountIdColumn_(ss, 'hidden_items', '');   // existing hides → global scope
+  }
 
   Logger.log('Accounts migration complete.');
 }
