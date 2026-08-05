@@ -1,19 +1,19 @@
 <!DOCTYPE html>
 <!--
   Tool:      AlphaRevert  (formerly opportunityExplorer / "Explorer Split")
-  Version:   v6
+  Version:   v6.1
   Purpose:   Quarterly valuation-tilt of a ₹10k "explorer" SIP across Indian MF market-cap
              segments (Index / Flexi / Mid / Small); the fixed ₹20k core stays at base weights.
-  Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Cur_i) ÷ Σ base·(5Yr/Cur) )
-             base weights — Index 18 / Flexi 32 / Mid 36 / Small 14
-  Changelog: v6 — continuous scoring, Current÷5Yr only, ₹10k explorer, Flexi Fixed/Tilt toggle.
-             v6.1 — renamed "Explorer Split" → "AlphaRevert" (display only; logic unchanged).
+  Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Med_i) ÷ Σ base·(5Yr/Med) )
+             where Med_i = 1-month median PE; base weights — Index 18 / Flexi 32 / Mid 36 / Small 14
+  Changelog: v6 — continuous scoring, numerator÷5Yr only, ₹10k explorer, Flexi Fixed/Tilt toggle.
+             v6.1 — renamed "Explorer Split" → "AlphaRevert"; input relabeled to 1-month median PE (noise fix); display-only, no math change.
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaRevert · v6</title>
+<title>AlphaRevert · v6.1</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
   :root{
@@ -107,9 +107,9 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="eyebrow">Valuation-tilt SIP · v6</div>
+    <div class="eyebrow">Valuation-tilt SIP · v6.1</div>
     <h1>AlphaRevert</h1>
-    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = current PE ÷ 5-Yr median. Score = base × (5Yr ÷ current)<sup>k</sup>.</p>
+    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = 1-month median PE ÷ 5-Yr median. Score = base × (5Yr ÷ 1-mo median)<sup>k</sup>.</p>
   </header>
 
   <div class="settings">
@@ -133,6 +133,8 @@
 
   <div id="cards"></div>
 
+  <p class="foot" style="margin-top:12px">Use the <b>1-month median</b> PE (not spot / today's PE) — it ignores single-day swings, so the 90-day allocation isn't decided by which day you happened to run it.</p>
+
   <div class="exec">
     <h3>Execution</h3>
     <div class="sub">Set the TOTAL on Coin. Core is fixed; only the Explorer column changes each quarter.</div>
@@ -146,13 +148,13 @@
     <div class="prot-body">
       <h4>The 90-day ritual (under 15 min)</h4>
       <ol>
-        <li>Pull <b>Current + 5-Yr median PE</b> for Nifty 50, 100, Midcap 150, Smallcap 250 — one source (Trendlyne/NSE), consolidated, same type, every quarter.</li>
+        <li>Pull the <b>1-month median PE</b> (from the source's 1M PE chart) and the <b>5-Yr median PE</b> for Nifty 50 / 100 / Midcap 150 / Smallcap 250 — one source, consolidated, same PE type. Read on a fixed quarter-end date.</li>
         <li>For any cheap segment, glance at whether earnings are <b>collapsing</b> (value trap). The one check the tool can't make.</li>
         <li>Enter the numbers. Read the Explorer column, add fixed Core = Total to set on Coin.</li>
         <li>Edit SIPs → close → forget 90 days.</li>
       </ol>
-      <h4>The engine (continuous — v6)</h4>
-      <p>Score = base × (5-Yr median ÷ current PE)<sup>k</sup>, normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. <b>k</b> = tilt strength: 1.0 gentle, 2.0 punchy. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
+      <h4>The engine (continuous — v6.1)</h4>
+      <p>Score = base × (5-Yr median ÷ 1-month median PE)<sup>k</sup>, normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. <b>k</b> = tilt strength: 1.0 gentle, 2.0 punchy. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
       <h4 class="kill">Pre-committed kill criteria</h4>
       <ul>
         <li><b class="kill">K1 — Whipsaw:</b> now near-impossible (continuous). If the split still lurches on tiny PE moves → investigate the data feed.</li>
@@ -165,7 +167,7 @@
   </details>
 
   <p class="foot">
-    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ current)<sup>k</sup>, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Edge ~0.30%/yr — discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
+    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ 1-mo median)<sup>k</sup>, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Edge ~0.30%/yr — discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
   </p>
 </div>
 
@@ -198,7 +200,7 @@ function buildCards(){
       </div>
       <div class="inputs-row">
         <div class="mini"><label>Base %</label><input type="number" data-k="${s.key}" data-f="base" value="${s.base}" step="1" min="0"></div>
-        <div class="mini"><label>Current PE</label><input type="number" data-k="${s.key}" data-f="pe0" value="${s.pe0}" step="0.1" min="0"></div>
+        <div class="mini"><label>1-Mo Median PE</label><input type="number" data-k="${s.key}" data-f="pe0" value="${s.pe0}" step="0.1" min="0"></div>
         <div class="mini"><label>5-Yr PE</label><input type="number" data-k="${s.key}" data-f="pe5" value="${s.pe5}" step="0.1" min="0"></div>
       </div>
       <div class="gauge-col">
@@ -244,7 +246,7 @@ function compute(){
     const base=readVal(s.key,'base'), pe0=readVal(s.key,'pe0'), pe5=readVal(s.key,'pe5');
     const isAnchor=(s.key==='flexi'&&flexiFixed);
     const num = pe0;
-    const vpr = num>0 ? num/pe5 : 0;   // current/5yr; if 0, treated as neutral below
+    const vpr = num>0 ? num/pe5 : 0;   // 1-mo median/5yr; if 0, treated as neutral below
     const ratio = (num>0 && pe5>0) ? pe5/num : 1;   // cheapness ratio = 1/vpr
     const score = isAnchor ? 0 : base*Math.pow(ratio, k);
     return {...s, base, pe0, pe5, vpr:(pe5>0?num/pe5:0), score, isAnchor};
