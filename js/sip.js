@@ -510,25 +510,34 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
   const fundSel = document.createElement('select');
   fundSel.className = 'form-input'; fundSel.name = 'fund_id'; fundSel.required = true;
   fundSel.innerHTML = '<option value="">Select fund…</option>';
-  // Group funds by their type (subcategory) so the long list is scannable —
-  // Small / Mid / Flexi / Index / ELSS clusters instead of one flat A–Z list.
+  // Active funds grouped by type (subcategory) so the list is scannable — Small /
+  // Mid / Flexi / Index / ELSS clusters; inactive funds are corralled in one
+  // trailing "Inactive" group instead of cluttering each type.
+  const byName = (a, b) => (a[stream.assetNameCol] || '').localeCompare(b[stream.assetNameCol] || '');
+  const isActive = f => String(f.is_active).toUpperCase() === 'TRUE';
+  const addOpt = (og, f) => {
+    const o = document.createElement('option');
+    o.value = f.id; o.textContent = f[stream.assetNameCol] || String(f.id);
+    og.appendChild(o);
+  };
   const fundsByType = {};
-  data.funds.forEach(f => {
+  data.funds.filter(isActive).forEach(f => {
     const type = (typeof SUBCAT_NAMES !== 'undefined' && SUBCAT_NAMES[f.subcategory_id]) || 'Other';
     (fundsByType[type] = fundsByType[type] || []).push(f);
   });
   Object.keys(fundsByType).sort((a, b) => a.localeCompare(b)).forEach(type => {
     const og = document.createElement('optgroup');
     og.label = type;
-    fundsByType[type]
-      .sort((a, b) => (a[stream.assetNameCol] || '').localeCompare(b[stream.assetNameCol] || ''))
-      .forEach(f => {
-        const o = document.createElement('option');
-        o.value = f.id; o.textContent = f[stream.assetNameCol] || String(f.id);
-        og.appendChild(o);
-      });
+    fundsByType[type].sort(byName).forEach(f => addOpt(og, f));
     fundSel.appendChild(og);
   });
+  const inactive = data.funds.filter(f => !isActive(f)).sort(byName);
+  if (inactive.length) {
+    const og = document.createElement('optgroup');
+    og.label = `Inactive (${inactive.length})`;
+    inactive.forEach(f => addOpt(og, f));
+    fundSel.appendChild(og);
+  }
   fundGroup.appendChild(fundSel);
   form.appendChild(fundGroup);
 

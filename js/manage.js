@@ -47,7 +47,15 @@ function manageCategoryTables(cat) {
 
 async function fetchManageData() {
   const tables = [...new Set(CATEGORIES.flatMap(manageCategoryTables))];
-  const sipReasonsTable = (typeof STREAMS !== 'undefined' && STREAMS.equity_sip && STREAMS.equity_sip.sipReasonsTable) || 'equity_sip_reasons';
+  // Every SIP stream's reasons table (equity + debt + any future), deduped by name.
+  const sipSources = [];
+  const seenTbl = new Set();
+  Object.values(typeof STREAMS !== 'undefined' ? STREAMS : {}).forEach(s => {
+    if (s && s.sipReasonsTable && !seenTbl.has(s.sipReasonsTable)) {
+      seenTbl.add(s.sipReasonsTable);
+      sipSources.push({ table: s.sipReasonsTable, label: s.label || s.sipReasonsTable });
+    }
+  });
   const res = {};
 
   // Reuse asset rows already fetched by Insights (its background warm-up). Manage
@@ -62,7 +70,7 @@ async function fetchManageData() {
     });
   }
 
-  const need = [...tables.filter(t => !res[t]), 'subcategories', sipReasonsTable];
+  const need = [...tables.filter(t => !res[t]), 'subcategories', ...sipSources.map(s => s.table)];
   try {
     Object.assign(res, await API.batchGet(need));
   } catch (_) {
@@ -72,8 +80,11 @@ async function fetchManageData() {
   return {
     res,
     subcats: res['subcategories']?.rows || [],
-    sipReasons: (res[sipReasonsTable]?.rows || []).filter(r => r && r.name),
-    sipReasonsTable,
+    sipReasonGroups: sipSources.map(s => ({
+      table: s.table,
+      label: s.label,
+      reasons: (res[s.table]?.rows || []).filter(r => r && r.name),
+    })),
   };
 }
 
@@ -121,28 +132,28 @@ function buildManageTree(container, data) {
 // SIP reasons (from the sheet) + the fixed SIP type list. Both are shared config,
 // so their hides are always global (every account). Reasons can also be deleted.
 function buildSipManageSection(container, data) {
-  const redraw  = () => buildManageTree(container, data);
-  const reasons = data.sipReasons || [];
-  const table   = data.sipReasonsTable || 'equity_sip_reasons';
+  const redraw = () => buildManageTree(container, data);
 
-  // ── SIP Reasons ──
-  const rBox = document.createElement('div');
-  rBox.className = 'manage-cat';
-  rBox.appendChild(makeManageHeader('SIP Reasons'));
-  rBox.appendChild(makeManageNote('Shared across all accounts. Hiding drops a reason from the budget cards, dropdowns and history filter. Delete removes the row — past budgets/events keep pointing at it but lose their label.'));
-  if (!reasons.length) {
-    rBox.appendChild(makeManageNote('No reasons configured yet.'));
-  } else {
-    reasons.forEach(r => {
-      const ref = `${table}|${r.id}`;
-      rBox.appendChild(makeManageRow(r.name || ('#' + r.id), 'asset', HIDDEN.isReason(table, r.id),
-        async () => { await toggleHiddenGlobal('sip_reason', ref, r.name, !HIDDEN.isReason(table, r.id)); redraw(); },
-        () => deleteSipReason(table, r, redraw)));
-    });
-  }
-  container.appendChild(rBox);
+  // ── One "… — Reasons" box per SIP stream (equity, debt, …) ──
+  (data.sipReasonGroups || []).forEach(group => {
+    const rBox = document.createElement('div');
+    rBox.className = 'manage-cat';
+    rBox.appendChild(makeManageHeader(`${group.label} — Reasons`));
+    rBox.appendChild(makeManageNote('Shared across all accounts. Hiding drops a reason from the budget cards, dropdowns and history filter. Delete removes the row — past budgets/events keep pointing at it but lose their label.'));
+    if (!group.reasons.length) {
+      rBox.appendChild(makeManageNote('No reasons configured yet.'));
+    } else {
+      group.reasons.forEach(r => {
+        const ref = `${group.table}|${r.id}`;
+        rBox.appendChild(makeManageRow(r.name || ('#' + r.id), 'asset', HIDDEN.isReason(group.table, r.id),
+          async () => { await toggleHiddenGlobal('sip_reason', ref, r.name, !HIDDEN.isReason(group.table, r.id)); redraw(); },
+          () => deleteSipReason(group.table, r, redraw)));
+      });
+    }
+    container.appendChild(rBox);
+  });
 
-  // ── SIP Types (fixed list) ──
+  // ── SIP Types (fixed list, shared across all SIP streams) ──
   const tBox = document.createElement('div');
   tBox.className = 'manage-cat';
   tBox.appendChild(makeManageHeader('SIP Types'));
@@ -176,8 +187,9 @@ async function deleteSipReason(table, reason, redraw) {
   if (!ok) return;
   try {
     await API.delete(table, reason.id);
-    if (_manageData && Array.isArray(_manageData.sipReasons)) {
-      _manageData.sipReasons = _manageData.sipReasons.filter(r => String(r.id) !== String(reason.id));
+    if (_manageData && Array.isArray(_manageData.sipReasonGroups)) {
+      const g = _manageData.sipReasonGroups.find(x => x.table === table);
+      if (g) g.reasons = g.reasons.filter(r => String(r.id) !== String(reason.id));
     }
     LSC.clear('insights', 'holdings');
     showToast('Reason deleted');
