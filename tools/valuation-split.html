@@ -1,19 +1,20 @@
 <!DOCTYPE html>
 <!--
   Tool:      AlphaRevert  (formerly opportunityExplorer / "Explorer Split")
-  Version:   v6.1
+  Version:   v6.2
   Purpose:   Quarterly valuation-tilt of a ₹10k "explorer" SIP across Indian MF market-cap
              segments (Index / Flexi / Mid / Small); the fixed ₹20k core stays at base weights.
   Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Med_i) ÷ Σ base·(5Yr/Med) )
              where Med_i = 1-month median PE; base weights — Index 18 / Flexi 32 / Mid 36 / Small 14
   Changelog: v6 — continuous scoring, numerator÷5Yr only, ₹10k explorer, Flexi Fixed/Tilt toggle.
              v6.1 — renamed "Explorer Split" → "AlphaRevert"; input relabeled to 1-month median PE (noise fix); display-only, no math change.
+             v6.2 — removed sensitivity slider; k hardcoded to 1.0 (locked, no live lever); no other math change.
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaRevert · v6.1</title>
+<title>AlphaRevert · v6.2</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
   :root{
@@ -47,9 +48,6 @@
   .sumchip{font-family:var(--mono);font-size:12px;padding:3px 8px;border-radius:6px;font-weight:600}
   .sum-ok{color:var(--cheap);background:rgba(87,184,148,.12)}
   .sum-bad{color:var(--rich);background:rgba(208,106,106,.14)}
-  .kwrap{display:flex;align-items:center;gap:10px}
-  input[type=range]{width:120px;accent-color:var(--mint)}
-  .kval{font-family:var(--mono);font-size:14px;color:var(--hi);min-width:60px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:12px;display:grid;grid-template-columns:1fr;gap:12px}
   .card.anchored{opacity:.9;border-style:dashed}
   .seg-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
@@ -107,16 +105,12 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="eyebrow">Valuation-tilt SIP · v6.1</div>
+    <div class="eyebrow">Valuation-tilt SIP · v6.2</div>
     <h1>AlphaRevert</h1>
-    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = 1-month median PE ÷ 5-Yr median. Score = base × (5Yr ÷ 1-mo median)<sup>k</sup>.</p>
+    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = 1-month median PE ÷ 5-Yr median. Score = base × (5Yr ÷ 1-mo median). k locked at 1.</p>
   </header>
 
   <div class="settings">
-    <div class="set-item">
-      <label>Sensitivity k</label>
-      <div class="kwrap"><input type="range" id="k" min="0.5" max="2.5" step="0.1" value="1"><span class="kval" id="kval">1.0 · gentle</span></div>
-    </div>
     <div class="set-item">
       <label>Explorer budget</label>
       <div class="field-wrap"><span class="unit">₹</span><input type="number" id="budget" value="10000" step="500" min="0" style="width:88px"></div>
@@ -154,7 +148,7 @@
         <li>Edit SIPs → close → forget 90 days.</li>
       </ol>
       <h4>The engine (continuous — v6.1)</h4>
-      <p>Score = base × (5-Yr median ÷ 1-month median PE)<sup>k</sup>, normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. <b>k</b> = tilt strength: 1.0 gentle, 2.0 punchy. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
+      <p>Score = base × (5-Yr median ÷ 1-month median PE), normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. The tilt strength <b>k is locked at 1.0</b> (weight scales 1:1 with cheapness) — a deliberate design constant, not a live knob. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
       <h4 class="kill">Pre-committed kill criteria</h4>
       <ul>
         <li><b class="kill">K1 — Whipsaw:</b> now near-impossible (continuous). If the split still lurches on tiny PE moves → investigate the data feed.</li>
@@ -167,7 +161,7 @@
   </details>
 
   <p class="foot">
-    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ 1-mo median)<sup>k</sup>, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Edge ~0.30%/yr — discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
+    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ 1-mo median), k locked at 1, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Edge ~0.30%/yr — discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
   </p>
 </div>
 
@@ -218,7 +212,7 @@ function buildCards(){
     host.appendChild(el);
   });
   host.addEventListener('input', compute);
-  ['k','budget','core'].forEach(id=>{const e=document.getElementById(id); if(e) e.addEventListener('input',compute);});
+  ['budget','core'].forEach(id=>{const e=document.getElementById(id); if(e) e.addEventListener('input',compute);});
   document.querySelectorAll('#flexiMode button').forEach(btn=>btn.addEventListener('click',()=>{
     document.querySelectorAll('#flexiMode button').forEach(b=>b.classList.remove('on'));
     btn.classList.add('on'); flexiMode=btn.dataset.m; compute();
@@ -234,10 +228,9 @@ function allocRupees(pcts, total){
   const out=fl.slice(); for(let j=0;j<rem;j++) out[order[j%order.length].i]++; return out;
 }
 function compute(){
-  const k=parseFloat(document.getElementById('k').value)||1;
+  const k=1;  // locked design constant (v6.2)
   const budget=parseFloat(document.getElementById('budget').value)||0;
   const coreBudget=parseFloat(document.getElementById('core').value)||0;
-  document.getElementById('kval').textContent = k.toFixed(1)+(k<=0.9?' · very gentle':k<=1.2?' · gentle':k<=1.8?' · medium':' · punchy');
   const flexiFixed=(flexiMode==='fixed');
   ['pe0','pe5'].forEach(f=>{const el=document.querySelector('input[data-k="flexi"][data-f="'+f+'"]'); if(el) el.disabled=flexiFixed;});
   document.getElementById('card-flexi').classList.toggle('anchored', flexiFixed);
