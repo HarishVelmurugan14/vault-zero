@@ -270,7 +270,7 @@ function buildBudgetHistory(container, budgets, reasons, reasonMap) {
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${rName || '—'}</span></td>
-        <td style="text-align:left">${b.effective_date}</td>
+        <td style="text-align:left">${fmtSipDate(b.effective_date)}</td>
         <td>₹${fmt(parseFloat(b.monthly_budget) || 0)}</td>
         <td style="text-align:left">${b.notes || '—'}</td>
       `;
@@ -429,8 +429,8 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
         <td>₹${fmt(amount)}</td>
         <td>${pct}</td>
         <td>${ev.sip_date || '—'}</td>
-        <td style="text-align:left">${ev.effective_date || '—'}</td>
-        <td style="text-align:right"><button type="button" class="sip-stop-btn" data-fund="${ev.fund_id}" data-reason="${ev.reason_id}">⏸ Stop</button></td>
+        <td style="text-align:left">${fmtSipDate(ev.effective_date)}</td>
+        <td style="text-align:right;white-space:nowrap"><button type="button" class="sip-edit-btn" data-fund="${ev.fund_id}" data-reason="${ev.reason_id}">✎ Edit</button> <button type="button" class="sip-stop-btn" data-fund="${ev.fund_id}" data-reason="${ev.reason_id}">⏸ Stop</button></td>
       `;
       tbody.appendChild(tr);
     });
@@ -474,7 +474,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
         const reason   = reasonMap[String(s.reason_id)] || '';
         html += `<div class="sip-stopped-row">
           <span class="sip-stopped-fund">${fundName}</span>
-          <span class="sip-stopped-meta">${reason}${s.stoppedSince ? ' · stopped ' + s.stoppedSince : ''}</span>
+          <span class="sip-stopped-meta">${reason}${s.stoppedSince ? ' · stopped ' + fmtSipDate(s.stoppedSince) : ''}</span>
           <button type="button" class="sip-resume-btn" data-fund="${s.fund_id}" data-reason="${s.reason_id}">▶ Resume</button>
         </div>`;
       });
@@ -486,8 +486,15 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
     renderSIPEventForm(section, data, stream, fundMap, reasons);
   });
 
-  // Stop / Resume (delegated — buttons are rendered above)
+  // Edit / Stop / Resume (delegated — buttons are rendered above)
   section.addEventListener('click', async e => {
+    const editBtn = e.target.closest('.sip-edit-btn');
+    if (editBtn) {
+      const ev = activeAllocations.find(a =>
+        String(a.fund_id) === editBtn.dataset.fund && String(a.reason_id) === editBtn.dataset.reason);
+      if (ev) renderSIPEventForm(section, data, stream, fundMap, reasons, ev);
+      return;
+    }
     const stopBtn = e.target.closest('.sip-stop-btn');
     if (stopBtn) { await stopSip(stream, stopBtn.dataset.fund, stopBtn.dataset.reason); return; }
     const resumeBtn = e.target.closest('.sip-resume-btn');
@@ -598,7 +605,7 @@ function buildHistorySection(events, fundMap, reasons, reasonMap) {
           <td style="text-align:left"><span class="sip-type-badge" style="background:${color}22;color:${color}">${rName || '—'}</span></td>
           <td>${ev.amount ? '₹' + fmt(parseFloat(ev.amount) || 0) : '—'}</td>
           <td>${ev.sip_date || '—'}</td>
-          <td style="text-align:left">${ev.effective_date || '—'}</td>
+          <td style="text-align:left">${fmtSipDate(ev.effective_date)}</td>
         `;
         tbody.appendChild(tr);
       });
@@ -615,7 +622,7 @@ function buildHistorySection(events, fundMap, reasons, reasonMap) {
 
 // ─── SIP Event form overlay ────────────────────────────────────────────────────
 
-function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
+function renderSIPEventForm(parentSection, data, stream, fundMap, reasons, prefill) {
   document.querySelector('.asset-form-overlay')?.remove();
 
   const overlay = document.createElement('div');
@@ -625,7 +632,7 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
 
   const title = document.createElement('h3');
   title.className = 'asset-form-title';
-  title.textContent = 'Add / Change Fund Allocation';
+  title.textContent = prefill ? 'Edit SIP Allocation' : 'Add / Change Fund Allocation';
   box.appendChild(title);
 
   const form = document.createElement('form');
@@ -721,6 +728,37 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
   effGroup.appendChild(effInput);
   form.appendChild(effGroup);
 
+  // Editing an existing allocation: pre-fill fund / type / reason / amount / day.
+  // (Saving writes a new event dated today that supersedes the old one — the SIP
+  //  log is append-only, so History keeps the full trail.)
+  if (prefill) {
+    // Fund — add a fallback option if it isn't in the account-scoped list
+    if (prefill.fund_id != null && !Array.from(fundSel.options).some(o => o.value === String(prefill.fund_id))) {
+      const o = document.createElement('option');
+      o.value = String(prefill.fund_id);
+      o.textContent = (fundMap[String(prefill.fund_id)] || String(prefill.fund_id)) + ' (current)';
+      fundSel.appendChild(o);
+    }
+    fundSel.value = String(prefill.fund_id);
+    // Type — keep the current type even if it's an older/hidden one
+    if (prefill.event_type && !Array.from(typeSel.options).some(o => o.value === prefill.event_type)) {
+      const o = document.createElement('option');
+      o.value = prefill.event_type; o.textContent = prefill.event_type + ' (current)';
+      typeSel.appendChild(o);
+    }
+    typeSel.value = prefill.event_type || '';
+    // Reason — fallback if hidden/missing
+    if (prefill.reason_id != null && !Array.from(reasonSel.options).some(o => o.value === String(prefill.reason_id))) {
+      const nm = (data.reasonMap && data.reasonMap[String(prefill.reason_id)]) || ('#' + prefill.reason_id);
+      const o = document.createElement('option');
+      o.value = String(prefill.reason_id); o.textContent = nm + ' (current)';
+      reasonSel.appendChild(o);
+    }
+    reasonSel.value = String(prefill.reason_id);
+    amountInput.value = (prefill.amount != null && prefill.amount !== '') ? prefill.amount : '';
+    sipDayInput.value = (prefill.sip_date != null && prefill.sip_date !== '') ? prefill.sip_date : '';
+  }
+
   // All SIP types (Core / Temporary / Purpose-driven) are contributions — amount
   // and SIP day always apply. Stopping is a separate action (the Stop button).
 
@@ -793,4 +831,17 @@ function mkGroup(labelText, required) {
 
 function fmt(n) {
   return typeof formatINR === 'function' ? formatINR(n) : n.toLocaleString('en-IN');
+}
+
+// Show a stored date as a clean YYYY-MM-DD. Google Sheets serialises date cells as
+// IST-midnight UTC timestamps (e.g. 2026-06-24T18:30:00.000Z) — use the LOCAL date
+// so it reads back as the day the user actually picked.
+function fmtSipDate(d) {
+  if (!d) return '—';
+  const s = String(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;   // already a plain date
+  const dt = new Date(s);
+  if (isNaN(dt)) return s;
+  const y = dt.getFullYear(), m = String(dt.getMonth() + 1).padStart(2, '0'), day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }

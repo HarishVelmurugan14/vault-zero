@@ -619,25 +619,35 @@ function makeSubcatRow(subcatName, totals) {
   return row;
 }
 
+// Distinct, subtle colour per account for the owner chip (indexed by list order).
+const ACCT_TAG_COLORS = ['#7fa8d9', '#dcae5e', '#7fc99a', '#c58fd6', '#e0a878', '#79c2ce'];
+function accountTagColor(accountId) {
+  if (typeof ACCOUNTS === 'undefined' || !ACCOUNTS.list) return '#9ca3af';
+  const idx = ACCOUNTS.list.findIndex(a => String(a.id) === String(accountId));
+  return ACCT_TAG_COLORS[(idx < 0 ? 0 : idx) % ACCT_TAG_COLORS.length];
+}
+
 function makeAssetRow(r) {
   const pnl    = r.currentValue > 0 ? r.currentValue - r.invested : null;
   const pnlCls = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
   const row    = document.createElement('div');
   row.className = 'ht-asset';
-  // In the All-Accounts view, tag each holding with its owner so the same fund
-  // held in two accounts is distinguishable. When rows are combined, show the
-  // number of accounts instead of a single owner.
+  // In the All-Accounts view, a colour-coded owner chip at the START of the row,
+  // so a truncated fund name never hides it. Combined rows show the count.
   let tag = '';
   if (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1) {
     if (r.combinedCount > 1) {
-      tag = ` <span class="ht-acct-tag">👪 ${r.combinedCount} accounts</span>`;
+      tag = `<span class="ht-acct-tag" style="color:var(--text-sub);margin:0 7px 0 0">👪 ${r.combinedCount}</span>`;
     } else if (r.account) {
       const an = ACCOUNTS.name(r.account);
-      if (an) tag = ` <span class="ht-acct-tag">${an}</span>`;
+      if (an) {
+        const c = accountTagColor(r.account);
+        tag = `<span class="ht-acct-tag" style="color:${c};background:${c}22;border-color:${c}66;margin:0 7px 0 0">${an}</span>`;
+      }
     }
   }
   row.innerHTML = `
-    <div class="ht-asset-name">${r.name}${tag}</div>
+    <div class="ht-asset-name">${tag}${r.name}</div>
     <div class="ht-asset-num">₹${formatINR(r.invested)}</div>
     <div class="ht-asset-num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</div>
     <div class="ht-asset-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
