@@ -1,18 +1,19 @@
 <!DOCTYPE html>
 <!--
-  Tool:      opportunityExplorer
+  Tool:      AlphaRevert  (formerly opportunityExplorer / "Explorer Split")
   Version:   v6
   Purpose:   Quarterly valuation-tilt of a ₹10k "explorer" SIP across Indian MF market-cap
              segments (Index / Flexi / Mid / Small); the fixed ₹20k core stays at base weights.
   Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Cur_i) ÷ Σ base·(5Yr/Cur) )
              base weights — Index 18 / Flexi 32 / Mid 36 / Small 14
   Changelog: v6 — continuous scoring, Current÷5Yr only, ₹10k explorer, Flexi Fixed/Tilt toggle.
+             v6.1 — renamed "Explorer Split" → "AlphaRevert" (display only; logic unchanged).
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Explorer Split · v6</title>
+<title>AlphaRevert · v6</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
   :root{
@@ -106,8 +107,8 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="eyebrow">Opportunity Explorer · v6</div>
-    <h1>Explorer Split</h1>
+    <div class="eyebrow">Valuation-tilt SIP · v6</div>
+    <h1>AlphaRevert</h1>
     <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = current PE ÷ 5-Yr median. Score = base × (5Yr ÷ current)<sup>k</sup>.</p>
   </header>
 

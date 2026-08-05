@@ -1,16 +1,29 @@
 /**
- * VaultZero — Import equity/debt transactions from Zerodha Tradebook CSV (one at a time)
+ * VaultZero — Import equity/debt transactions from a Zerodha Tradebook CSV into a
+ * chosen VaultZero account (the same demat can feed more than one account).
  *
  * HOW TO USE:
  *   1. Paste one tradebook CSV into the "Tradebook" (or "Sheet1") tab (A1, incl. header)
- *   2. Run importFromTradebook()
- *   3. Clear the tab, paste the next CSV, run again
+ *   2. Run importTradebook()  → prompts which account (1 = Self, 2 = Oppurtunity),
+ *      or run importTradebook_Self() / importTradebook_Oppurtunity() directly.
+ *   3. Clear the tab, paste the next CSV, run again.
  *
- * Unique key: order_id. Existing → row updated (financial fields only, preserving
- * goal_id/notes/created_at); new → inserted. Header-aware: rows are written by
- * matching each sheet's actual header names, so adding columns never misaligns data.
+ * WHY per-account: a transaction's account is derived from its fund_id
+ * (fund → fund.account_id). So the SAME Zerodha order can be tracked under two
+ * accounts — e.g. your real "Self" strategy and a parallel "Oppurtunity" what-if —
+ * by mapping its ISIN to each account's own fund. To keep the two rows distinct
+ * (the `id` column IS the order_id and must be unique), account 1 uses the raw
+ * order_id (preserving existing data) and other accounts use `order_id-a<accountId>`.
+ *
+ * ⚠️ Mirroring the same trades into two accounts DOUBLE-COUNTS those holdings in the
+ * "All Accounts" total. View Self and Oppurtunity separately via the account switcher.
+ *
+ * Header-aware upsert keyed on the (account-scoped) id: existing → updated
+ * (financial fields only, preserving notes/created_at); new → inserted.
  */
 
+// ── Per-account ISIN → fund maps ──────────────────────────────────────────────
+// Account 1 (Self). These names are ALSO reused by import_from_coin.gs — keep them.
 const ISIN_TO_FUND = {
   'INF966L01986': { id: 1,  name: 'Quant ELSS Tax Saver' },
   'INF200K01UM9': { id: 2,  name: 'SBI ELSS Tax Saver' },
@@ -25,7 +38,6 @@ const ISIN_TO_FUND = {
   'INF959L01FP2': { id: 11, name: 'Navi Nifty 50 Index' },
   'INF204K01K15': { id: 12, name: 'Nippon India Small Cap' },
 };
-
 const DEBT_ISIN_TO_FUND = {
   'INF109K01T04': { id: 1, name: 'ICICI Prudential Ultra Short Term' },
   'INF204K01YH3': { id: 2, name: 'Nippon India Ultra Short Duration' },
@@ -36,7 +48,44 @@ const DEBT_ISIN_TO_FUND = {
   'INF205K01KR8': { id: 7, name: 'Invesco India Arbitrage' },
 };
 
-function importFromTradebook() {
+// Account 2 (Oppurtunity) — same funds, their own fund rows/ids.
+const ISIN_TO_FUND_A2 = {
+  'INF959L01FP2': { id: 22, name: 'Navi Nifty 50 Index' },
+  'INF879O01027': { id: 23, name: 'Parag Parikh Flexi Cap' },
+  'INF843K01AO4': { id: 24, name: 'Edelweiss Mid Cap' },
+  'INF204K01K15': { id: 25, name: 'Nippon India Small Cap' },
+};
+const DEBT_ISIN_TO_FUND_A2 = {};
+
+// Registry: account id → { name, equity, debt }. Add a row per account you track.
+const ACCOUNT_MAPS = {
+  1: { name: 'Self',        equity: ISIN_TO_FUND,    debt: DEBT_ISIN_TO_FUND },
+  2: { name: 'Oppurtunity', equity: ISIN_TO_FUND_A2, debt: DEBT_ISIN_TO_FUND_A2 },
+};
+
+// ── Run these ─────────────────────────────────────────────────────────────────
+function importTradebook_Self()        { importTradebookForAccount(1); }
+function importTradebook_Oppurtunity() { importTradebookForAccount(2); }
+function importFromTradebook()         { importTradebookForAccount(1); }  // back-compat alias
+
+// Asks which account (when a UI is available), else defaults to Self.
+function importTradebook() {
+  var accountId = 1;
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var opts = Object.keys(ACCOUNT_MAPS).map(function (k) { return k + ' = ' + ACCOUNT_MAPS[k].name; }).join(',  ');
+    var res = ui.prompt('Import Tradebook', 'Which account?   ' + opts, ui.ButtonSet.OK_CANCEL);
+    if (res.getSelectedButton() !== ui.Button.OK) return;
+    accountId = parseInt(res.getResponseText().trim(), 10);
+  } catch (e) { /* headless — default to Self */ }
+  importTradebookForAccount(accountId);
+}
+
+// Core importer for a given VaultZero account.
+function importTradebookForAccount(accountId) {
+  const acct = ACCOUNT_MAPS[accountId];
+  if (!acct) { notify_('No ISIN map for account ' + accountId + '. Add it to ACCOUNT_MAPS in import_from_tradebook.gs.'); return; }
+
   const dataSS      = vaultDataSpreadsheet_();
   const srcSS       = vaultSpreadsheet_();
   const tradebookSh = srcSS.getSheetByName('Tradebook') || srcSS.getSheetByName('Sheet1');
@@ -72,6 +121,10 @@ function importFromTradebook() {
     return;
   }
 
+  // Account-scoped row id so the same order can live under multiple accounts.
+  // Account 1 keeps the raw order_id (preserves existing Self rows).
+  const idFor = oid => (String(accountId) === '1' ? oid : oid + '-a' + accountId);
+
   const eq   = { toInsert: [], toUpdate: [] };
   const debt = { toInsert: [], toUpdate: [] };
   const skipped = [];
@@ -97,22 +150,22 @@ function importFromTradebook() {
     const txnType = type === 'sell' ? 'Sell' : 'Buy';
     const amount  = Math.round(qty * price * 100) / 100;
     const dateMs  = new Date(dateStr).getTime();
-    const managed = { id: orderId, txn_type: txnType, txn_date: dateStr, units: qty, nav: price, amount };
+    const rowId   = idFor(orderId);
+    const managed = { id: rowId, txn_type: txnType, txn_date: dateStr, units: qty, nav: price, amount };
 
-    const eqFund = ISIN_TO_FUND[isin];
+    const eqFund = acct.equity[isin];
     if (eqFund) {
       managed.fund_id = eqFund.id;
-      pushUpsert(eq, eqIdToRow, orderId, eqFund.id, managed, dateMs);
+      pushUpsert(eq, eqIdToRow, rowId, eqFund.id, managed, dateMs);
       continue;
     }
-    if (isin in DEBT_ISIN_TO_FUND) {
-      const debtFund = DEBT_ISIN_TO_FUND[isin];
-      if (!debtFund) { skipped.push({ line: i + 1, symbol, isin, reason: 'Not in debt_hybrid_funds — skipped' }); continue; }
+    const debtFund = acct.debt[isin];
+    if (debtFund) {
       managed.fund_id = debtFund.id;
-      pushUpsert(debt, debtIdToRow, orderId, debtFund.id, managed, dateMs);
+      pushUpsert(debt, debtIdToRow, rowId, debtFund.id, managed, dateMs);
       continue;
     }
-    skipped.push({ line: i + 1, symbol, isin, reason: 'ISIN not mapped — fund may predate VaultZero tracking' });
+    skipped.push({ line: i + 1, symbol, isin, reason: 'ISIN not mapped for ' + acct.name });
   }
 
   upsertRows(eqSheet, eq.toUpdate, eq.toInsert);
@@ -123,7 +176,7 @@ function importFromTradebook() {
       (skipped.length > 8 ? `\n… and ${skipped.length - 8} more` : '')
     : '';
   notify_(
-    `✅  Done\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
+    `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
     `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
   );
 }
@@ -132,9 +185,9 @@ function importFromTradebook() {
 
 // Build an upsert entry. Inserts add notes/created_at defaults; updates carry only
 // the managed (financial) fields so any other columns are preserved.
-function pushUpsert(bucket, idToRow, orderId, fundId, managed, dateMs, notes) {
-  if (idToRow[orderId]) {
-    bucket.toUpdate.push({ sheetRow: idToRow[orderId], fields: managed });
+function pushUpsert(bucket, idToRow, rowId, fundId, managed, dateMs, notes) {
+  if (idToRow[rowId]) {
+    bucket.toUpdate.push({ sheetRow: idToRow[rowId], fields: managed });
   } else {
     bucket.toInsert.push({
       dateMs, fundId,
