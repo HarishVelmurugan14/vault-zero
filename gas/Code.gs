@@ -361,6 +361,15 @@ function addAccountIdColumn_(ss, name, defaultVal) {
   Logger.log(name + ': added account_id');
 }
 
+// Run once: make SIP budgets account-specific. Adds account_id to the SIP budget
+// tables and backfills existing budgets to account 1 (Self). Safe to re-run.
+// (SIP events already carry account via their fund; only budgets needed a column.)
+function migrateAddSipBudgetAccounts() {
+  const ss = getSpreadsheet();
+  ['equity_sip_budget', 'debt_sip_budget'].forEach(name => addAccountIdColumn_(ss, name, 1));
+  Logger.log('SIP budget account migration complete.');
+}
+
 // Run once in GAS editor to add price column + formulas to existing asset rows
 function migrateAddPriceColumns() {
   const ss = getSpreadsheet();

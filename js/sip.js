@@ -45,13 +45,27 @@ async function fetchSIPData(stream) {
   return { budgets, events, funds, reasons, reasonObjs, reasonMap, today };
 }
 
-// Latest budget per reason where effective_date ≤ today (matches on reason_id FK)
+// Latest budget per reason where effective_date ≤ today, scoped to the selected
+// account (budgets are pre-sorted desc by date, so .find() = the latest one).
+// On "All Accounts", sum each account's latest active budget for that reason.
+// Legacy rows with no account_id are treated as global (match any account).
 function getActiveBudgets(budgets, today, reasons, reasonMap) {
   const result = {};
-  reasons.forEach(r => { result[r] = 0; });
+  const isAll     = (typeof ACCOUNTS === 'undefined') || ACCOUNTS.isAll();
+  const matchAcct = b => (typeof ACCOUNTS === 'undefined') || !b.account_id || ACCOUNTS.matches(b.account_id);
   reasons.forEach(r => {
-    const match = budgets.find(b => reasonMap[String(b.reason_id)] === r && b.effective_date <= today);
-    if (match) result[r] = parseFloat(match.monthly_budget) || 0;
+    const forReason = budgets.filter(b => reasonMap[String(b.reason_id)] === r && b.effective_date <= today);
+    if (!isAll) {
+      const match = forReason.find(matchAcct);
+      result[r] = match ? (parseFloat(match.monthly_budget) || 0) : 0;
+    } else {
+      const seen = new Set(); let sum = 0;
+      forReason.forEach(b => {
+        const k = String(b.account_id || '');
+        if (!seen.has(k)) { seen.add(k); sum += parseFloat(b.monthly_budget) || 0; }
+      });
+      result[r] = sum;
+    }
   });
   return result;
 }
@@ -89,6 +103,7 @@ async function renderSIPPage(container, stream) {
   container.innerHTML = '<div class="loading-spinner"></div>';
   try {
     if (typeof HIDDEN !== 'undefined') await HIDDEN.load();
+    if (typeof ACCOUNTS !== 'undefined') await ACCOUNTS.load();
     const data = await fetchSIPData(stream);
     container.innerHTML = '';
     if (!data.reasons.length) {
@@ -105,10 +120,18 @@ async function renderSIPPage(container, stream) {
 
 function buildSIPDashboard(container, data, stream) {
   const { budgets, events, funds, reasons, reasonMap, today } = data;
+
+  // A SIP event belongs to the account of its fund (event.fund_id → fund.account_id),
+  // exactly like a transaction. Scope allocations + history to the selected account.
+  const fundAcct = {};
+  funds.forEach(f => { fundAcct[String(f.id)] = f.account_id; });
+  const inAcct = ev => (typeof ACCOUNTS === 'undefined') || ACCOUNTS.matches(fundAcct[String(ev.fund_id)]);
+  const acctEvents = events.filter(inAcct);
+
   const activeBudgets     = getActiveBudgets(budgets, today, reasons, reasonMap);
   // Drop allocations whose reason no longer resolves (hidden or deleted reason)
   // so the live table doesn't show a blank group; budget-card sums already exclude them.
-  const activeAllocations = getActiveAllocations(events, today)
+  const activeAllocations = getActiveAllocations(acctEvents, today)
     .filter(ev => reasonMap[String(ev.reason_id)]);
   const allocatedByReason = getAllocatedByReason(activeAllocations, reasons, reasonMap);
 
@@ -117,7 +140,7 @@ function buildSIPDashboard(container, data, stream) {
 
   container.appendChild(buildBudgetCard(activeBudgets, allocatedByReason, reasons, stream, data));
   container.appendChild(buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data));
-  container.appendChild(buildHistorySection(events, fundMap, reasons, reasonMap));
+  container.appendChild(buildHistorySection(acctEvents, fundMap, reasons, reasonMap));
 }
 
 // ─── Budget card ───────────────────────────────────────────────────────────────
@@ -197,7 +220,9 @@ function buildBudgetCard(activeBudgets, allocatedByReason, reasons, stream, data
 }
 
 function buildBudgetHistory(container, budgets, reasons, reasonMap) {
-  if (!budgets.length) {
+  // Scope to the selected account (legacy rows with no account_id show everywhere).
+  const scoped = budgets.filter(b => (typeof ACCOUNTS === 'undefined') || ACCOUNTS.isAll() || !b.account_id || ACCOUNTS.matches(b.account_id));
+  if (!scoped.length) {
     container.innerHTML = '<div class="sip-empty">No budget records yet.</div>';
     return;
   }
@@ -214,7 +239,7 @@ function buildBudgetHistory(container, budgets, reasons, reasonMap) {
     </tr></thead>
   `;
   const tbody = document.createElement('tbody');
-  [...budgets]
+  [...scoped]
     .sort((a, b) => b.effective_date.localeCompare(a.effective_date))
     .forEach(b => {
       const rName = reasonMap[String(b.reason_id)] || '';
@@ -240,7 +265,12 @@ function renderBudgetForm(container, stream, reasonObjs) {
 
   const reasonOptions = reasonObjs.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
 
+  const targetId   = (typeof ACCOUNTS !== 'undefined') ? ACCOUNTS.writeAccountId() : '';
+  const targetName = (typeof ACCOUNTS !== 'undefined') ? (ACCOUNTS.name(targetId) || ACCOUNTS.currentName()) : '';
+  const acctHint   = targetName ? `<div class="sip-form-acct-hint">Setting budget for account: <b>${targetName}</b></div>` : '';
+
   form.innerHTML = `
+    ${acctHint}
     <div class="sip-inline-form-fields">
       <div class="form-group">
         <label>Reason <span class="required">*</span></label>
@@ -279,6 +309,7 @@ function renderBudgetForm(container, stream, reasonObjs) {
       return;
     }
     const row = {
+      account_id:     (typeof ACCOUNTS !== 'undefined') ? ACCOUNTS.writeAccountId() : '',
       reason_id:      parseInt(fd.get('reason_id')),
       monthly_budget: parseFloat(fd.get('monthly_budget')),
       effective_date: fd.get('effective_date'),
@@ -520,8 +551,10 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
     o.value = f.id; o.textContent = f[stream.assetNameCol] || String(f.id);
     og.appendChild(o);
   };
+  // Only funds belonging to the selected account (all funds on "All Accounts").
+  const acctFunds = data.funds.filter(f => (typeof ACCOUNTS === 'undefined') || ACCOUNTS.matches(f.account_id));
   const fundsByType = {};
-  data.funds.filter(isActive).forEach(f => {
+  acctFunds.filter(isActive).forEach(f => {
     const type = (typeof SUBCAT_NAMES !== 'undefined' && SUBCAT_NAMES[f.subcategory_id]) || 'Other';
     (fundsByType[type] = fundsByType[type] || []).push(f);
   });
@@ -531,7 +564,7 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
     fundsByType[type].sort(byName).forEach(f => addOpt(og, f));
     fundSel.appendChild(og);
   });
-  const inactive = data.funds.filter(f => !isActive(f)).sort(byName);
+  const inactive = acctFunds.filter(f => !isActive(f)).sort(byName);
   if (inactive.length) {
     const og = document.createElement('optgroup');
     og.label = `Inactive (${inactive.length})`;

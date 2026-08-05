@@ -1923,6 +1923,14 @@ body::before {
   margin-top: 12px;
 }
 
+.sip-form-acct-hint {
+  font-size: 12px; color: var(--text-sub);
+  margin-bottom: 12px; padding: 7px 11px;
+  background: rgba(79,70,229,0.08); border: 1px solid rgba(79,70,229,0.2);
+  border-radius: 8px;
+}
+.sip-form-acct-hint b { color: var(--text); }
+
 .sip-inline-form-fields { display: grid; gap: 12px; }
 
 @media (min-width: 520px) {
