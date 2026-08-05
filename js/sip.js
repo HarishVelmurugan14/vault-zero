@@ -11,10 +11,10 @@ function reasonColor(reason, reasons) {
   return REASON_PALETTE[idx >= 0 ? idx % REASON_PALETTE.length : 0];
 }
 
-// Canonical SIP event types. Some carry behaviour (STOP clears a fund+reason slot;
-// the SWPs hide the SIP-day field), so this list is fixed — the Manage screen can
-// hide the ones you don't use, but they aren't user-defined.
-const SIP_EVENT_TYPES = ['Monthly SIP', 'Rebalance SIP', 'Rebalance SWP', 'Redeem SWP', 'STOP'];
+// SIP types describe a SIP's *nature*. Stopping is a separate action — a Stop
+// button writes an internal STOP event — so STOP is NOT a user-facing type.
+const SIP_EVENT_TYPES = ['Core', 'Temporary', 'Purpose driven'];
+const SIP_STOP = 'STOP';   // internal marker: latest STOP event = that SIP is stopped
 
 // ─── Data helpers ──────────────────────────────────────────────────────────────
 
@@ -82,8 +82,29 @@ function getActiveAllocations(events, today) {
     if (!seen.has(key)) seen.set(key, ev);
   }
   const active = [];
-  seen.forEach(ev => { if (ev.event_type !== 'STOP') active.push(ev); });
+  seen.forEach(ev => { if (ev.event_type !== SIP_STOP) active.push(ev); });
   return active;
+}
+
+// SIPs whose latest event is a STOP — with the config that was active before it
+// (for one-click Resume). Same "latest event per fund+reason" rule as above.
+function getStoppedAllocations(events, today) {
+  const seen = new Map(); // key -> { latest, lastActive }
+  for (const ev of events) {
+    if (ev.effective_date > today) continue;
+    const key = `${ev.fund_id}|${ev.reason_id}`;
+    if (!seen.has(key)) seen.set(key, { latest: ev, lastActive: null });
+    const entry = seen.get(key);
+    if (!entry.lastActive && ev.event_type !== SIP_STOP) entry.lastActive = ev;
+  }
+  const stopped = [];
+  seen.forEach((entry, key) => {
+    if (entry.latest.event_type === SIP_STOP) {
+      const parts = key.split('|');
+      stopped.push({ fund_id: parts[0], reason_id: parts[1], stoppedSince: entry.latest.effective_date, lastActive: entry.lastActive });
+    }
+  });
+  return stopped;
 }
 
 // Tally by reason name (resolved from reason_id via reasonMap).
@@ -133,13 +154,15 @@ function buildSIPDashboard(container, data, stream) {
   // so the live table doesn't show a blank group; budget-card sums already exclude them.
   const activeAllocations = getActiveAllocations(acctEvents, today)
     .filter(ev => reasonMap[String(ev.reason_id)]);
+  const stoppedAllocations = getStoppedAllocations(acctEvents, today)
+    .filter(s => reasonMap[String(s.reason_id)]);
   const allocatedByReason = getAllocatedByReason(activeAllocations, reasons, reasonMap);
 
   const fundMap = {};
   funds.forEach(f => { fundMap[String(f.id)] = f[stream.assetNameCol] || f.fund_name || String(f.id); });
 
   container.appendChild(buildBudgetCard(activeBudgets, allocatedByReason, reasons, stream, data));
-  container.appendChild(buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data));
+  container.appendChild(buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data, stoppedAllocations));
   container.appendChild(buildHistorySection(acctEvents, fundMap, reasons, reasonMap));
 }
 
@@ -333,7 +356,7 @@ function renderBudgetForm(container, stream, reasonObjs) {
 
 // ─── Current allocations section ───────────────────────────────────────────────
 
-function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data) {
+function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap, fundMap, stream, data, stoppedAllocations) {
   const section = document.createElement('div');
   section.className = 'sip-section';
 
@@ -364,6 +387,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
         <th>% of Budget</th>
         <th>SIP Day</th>
         <th style="text-align:left">Since</th>
+        <th></th>
       </tr></thead>
     `;
     const tbody = document.createElement('tbody');
@@ -393,7 +417,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
         lastReason = reason;
         const sepTr = document.createElement('tr');
         sepTr.className = 'sip-reason-sep-row';
-        sepTr.innerHTML = `<td colspan="7" style="text-align:left;padding:10px 14px 4px"><span class="sip-type-badge" style="background:${color}22;color:${color}">${reason}</span></td>`;
+        sepTr.innerHTML = `<td colspan="8" style="text-align:left;padding:10px 14px 4px"><span class="sip-type-badge" style="background:${color}22;color:${color}">${reason}</span></td>`;
         tbody.appendChild(sepTr);
       }
 
@@ -406,6 +430,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
         <td>${pct}</td>
         <td>${ev.sip_date || '—'}</td>
         <td style="text-align:left">${ev.effective_date || '—'}</td>
+        <td style="text-align:right"><button type="button" class="sip-stop-btn" data-fund="${ev.fund_id}" data-reason="${ev.reason_id}">⏸ Stop</button></td>
       `;
       tbody.appendChild(tr);
     });
@@ -424,7 +449,7 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
         <td style="text-align:left" colspan="3"><span style="color:${color};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px">${reason} subtotal</span></td>
         <td>₹${fmt(total)}</td>
         <td>${budget > 0 ? ((total / budget) * 100).toFixed(1) + '%' : '—'}</td>
-        <td colspan="2" style="text-align:left;color:${over ? 'var(--negative)' : 'var(--positive)'}">
+        <td colspan="3" style="text-align:left;color:${over ? 'var(--negative)' : 'var(--positive)'}">
           ${budget > 0 ? (over ? 'Over by ₹' + fmt(Math.abs(unalloc)) : 'Free ₹' + fmt(unalloc)) : ''}
         </td>
       `;
@@ -436,11 +461,81 @@ function buildAllocSection(activeAllocations, activeBudgets, reasons, reasonMap,
     section.appendChild(wrap);
   }
 
+  // ── Stopped SIPs (latest event is a STOP) — with one-click Resume ──
+  if (stoppedAllocations && stoppedAllocations.length) {
+    const sWrap = document.createElement('div');
+    sWrap.className = 'sip-stopped-wrap';
+    let html = `<div class="sip-stopped-title">Stopped (${stoppedAllocations.length})</div>`;
+    stoppedAllocations
+      .slice()
+      .sort((a, b) => (fundMap[String(a.fund_id)] || '').localeCompare(fundMap[String(b.fund_id)] || ''))
+      .forEach(s => {
+        const fundName = fundMap[String(s.fund_id)] || s.fund_id;
+        const reason   = reasonMap[String(s.reason_id)] || '';
+        html += `<div class="sip-stopped-row">
+          <span class="sip-stopped-fund">${fundName}</span>
+          <span class="sip-stopped-meta">${reason}${s.stoppedSince ? ' · stopped ' + s.stoppedSince : ''}</span>
+          <button type="button" class="sip-resume-btn" data-fund="${s.fund_id}" data-reason="${s.reason_id}">▶ Resume</button>
+        </div>`;
+      });
+    sWrap.innerHTML = html;
+    section.appendChild(sWrap);
+  }
+
   section.querySelector('#sip-add-fund-btn').addEventListener('click', () => {
     renderSIPEventForm(section, data, stream, fundMap, reasons);
   });
 
+  // Stop / Resume (delegated — buttons are rendered above)
+  section.addEventListener('click', async e => {
+    const stopBtn = e.target.closest('.sip-stop-btn');
+    if (stopBtn) { await stopSip(stream, stopBtn.dataset.fund, stopBtn.dataset.reason); return; }
+    const resumeBtn = e.target.closest('.sip-resume-btn');
+    if (resumeBtn) {
+      const entry = (stoppedAllocations || []).find(s =>
+        String(s.fund_id) === resumeBtn.dataset.fund && String(s.reason_id) === resumeBtn.dataset.reason);
+      await resumeSip(stream, entry, data, fundMap, reasons, section);
+    }
+  });
+
   return section;
+}
+
+// Stop an active SIP: write an internal STOP event (latest event wins, so it drops
+// out of Current Allocations). Nothing is deleted — it moves to "Stopped".
+async function stopSip(stream, fundId, reasonId) {
+  if (!confirm('Stop this SIP?\n\nIt moves to "Stopped" and leaves your active budget. Nothing is deleted — you can Resume it anytime.')) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    await API.insert(stream.sipEventsTable, {
+      fund_id: fundId, event_type: SIP_STOP, reason_id: parseInt(reasonId),
+      amount: 0, sip_date: null, effective_date: today,
+    });
+    LSC.clear('insights', 'holdings');
+    location.reload();
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Stop failed: ' + e.message, 'error'); else alert('Stop failed: ' + e.message);
+  }
+}
+
+// Resume a stopped SIP by re-adding its previous config, dated today. If there's
+// no prior config to restore, open the Add form scoped to that fund+reason.
+async function resumeSip(stream, entry, data, fundMap, reasons, section) {
+  if (!entry) return;
+  if (!entry.lastActive) { renderSIPEventForm(section, data, stream, fundMap, reasons); return; }
+  const la = entry.lastActive;
+  if (!confirm(`Resume this SIP with its previous amount (₹${fmt(parseFloat(la.amount) || 0)}) and schedule?`)) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    await API.insert(stream.sipEventsTable, {
+      fund_id: la.fund_id, event_type: la.event_type, reason_id: la.reason_id,
+      amount: la.amount, sip_date: la.sip_date || null, effective_date: today,
+    });
+    LSC.clear('insights', 'holdings');
+    location.reload();
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Resume failed: ' + e.message, 'error'); else alert('Resume failed: ' + e.message);
+  }
 }
 
 // ─── History section ───────────────────────────────────────────────────────────
@@ -626,16 +721,8 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
   effGroup.appendChild(effInput);
   form.appendChild(effGroup);
 
-  // Dynamic visibility on type change
-  typeSel.addEventListener('change', () => {
-    const val   = typeSel.value;
-    const isStop = val === 'STOP';
-    const isSWP  = val === 'Rebalance SWP' || val === 'Redeem SWP';
-    amountGroup.style.display  = isStop ? 'none' : 'block';
-    amountInput.required       = !isStop;
-    if (isStop) amountInput.value = '0';
-    sipDayGroup.style.display  = (isSWP || isStop) ? 'none' : 'block';
-  });
+  // All SIP types (Core / Temporary / Purpose-driven) are contributions — amount
+  // and SIP day always apply. Stopping is a separate action (the Stop button).
 
   const errDiv = document.createElement('div');
   errDiv.className = 'form-error'; errDiv.style.display = 'none';

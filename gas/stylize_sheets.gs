@@ -80,6 +80,14 @@ function stylizeSheets() {
       banding.setFirstRowColor('#ffffff').setSecondRowColor(style.band);
     }
 
+    // Tidy, uniform layout — clip (no wrap), middle-aligned, even row heights.
+    // (This is what fixes the ragged row sizes; forced height wins over auto-size.)
+    sh.getRange(1, 1, lastRow, lastCol)
+      .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP)
+      .setVerticalAlignment('middle');
+    sh.setRowHeightsForced(1, 1, 30);                              // header
+    if (lastRow >= 2) sh.setRowHeightsForced(2, lastRow - 1, 25);  // data rows
+
     count++;
   });
 
@@ -92,11 +100,16 @@ function resetVaultZeroStyles() {
   ss.getSheets().forEach(function (sh) {
     sh.setTabColor(null);
     sh.getBandings().forEach(function (b) { b.remove(); });
-    var lastCol = sh.getLastColumn();
-    if (lastCol >= 1 && sh.getLastRow() >= 1) {
+    sh.setFrozenRows(0);
+    var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+    if (lastCol >= 1 && lastRow >= 1) {
       var header = sh.getRange(1, 1, 1, lastCol);
       header.setBackground(null).setFontWeight('normal').setFontColor(null);
       header.setBorder(false, false, false, false, false, false);
+      sh.getRange(1, 1, lastRow, lastCol)
+        .setWrapStrategy(SpreadsheetApp.WrapStrategy.OVERFLOW)
+        .setVerticalAlignment('bottom');
+      sh.setRowHeights(1, lastRow, 21);   // Sheets default height
     }
   });
   ss.toast('VaultZero styles removed.', 'VaultZero', 5);
