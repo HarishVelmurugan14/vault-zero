@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<!--
+  Tool:      opportunityExplorer
+  Version:   v6
+  Purpose:   Quarterly valuation-tilt of a ₹10k "explorer" SIP across Indian MF market-cap
+             segments (Index / Flexi / Mid / Small); the fixed ₹20k core stays at base weights.
+  Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Cur_i) ÷ Σ base·(5Yr/Cur) )
+             base weights — Index 18 / Flexi 32 / Mid 36 / Small 14
+  Changelog: v6 — continuous scoring, Current÷5Yr only, ₹10k explorer, Flexi Fixed/Tilt toggle.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Explorer Split · v6</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+  :root{
+    --bg:#0d1311; --panel:#141b18; --field:#1b2420; --line:#26332d;
+    --hi:#e9efe9; --mid:#9fb0a6; --dim:#6b7d73;
+    --cheap:#57b894; --neutral:#cf9a48; --rich:#d06a6a; --mint:#6fd8b0;
+    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --sans:'Space Grotesk',ui-sans-serif,system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--hi);font-family:var(--sans);padding:22px 16px 60px;line-height:1.4;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:780px;margin:0 auto}
+  header{margin-bottom:20px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--mint);opacity:.85}
+  h1{font-size:30px;font-weight:700;letter-spacing:-.02em;margin:6px 0 4px}
+  .tag{color:var(--mid);font-size:13.5px}
+  .tag b{color:var(--hi);font-weight:500}
+  .settings{display:flex;flex-wrap:wrap;gap:14px 24px;align-items:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:16px 0}
+  .set-item{display:flex;flex-direction:column;gap:5px}
+  .set-item label{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .field-wrap{display:flex;align-items:center;gap:5px}
+  input[type=number]{background:var(--field);border:1px solid var(--line);border-radius:8px;color:var(--hi);font-family:var(--mono);font-size:15px;font-weight:500;padding:8px 9px;width:74px;text-align:right}
+  input[type=number]:focus{outline:none;border-color:var(--mint);box-shadow:0 0 0 2px rgba(111,216,176,.14)}
+  input:disabled{opacity:.4;cursor:not-allowed}
+  .unit{font-family:var(--mono);font-size:13px;color:var(--dim)}
+  .toggle{display:inline-flex;background:var(--field);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .toggle button{background:transparent;border:none;color:var(--mid);font-family:var(--mono);font-size:12px;font-weight:500;padding:8px 11px;cursor:pointer;border-right:1px solid var(--line)}
+  .toggle button:last-child{border-right:none}
+  .toggle button.on{background:var(--mint);color:#08110d}
+  .toggle.sm button{padding:5px 9px;font-size:11px}
+  .sumchip{font-family:var(--mono);font-size:12px;padding:3px 8px;border-radius:6px;font-weight:600}
+  .sum-ok{color:var(--cheap);background:rgba(87,184,148,.12)}
+  .sum-bad{color:var(--rich);background:rgba(208,106,106,.14)}
+  .kwrap{display:flex;align-items:center;gap:10px}
+  input[type=range]{width:120px;accent-color:var(--mint)}
+  .kval{font-family:var(--mono);font-size:14px;color:var(--hi);min-width:60px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:12px;display:grid;grid-template-columns:1fr;gap:12px}
+  .card.anchored{opacity:.9;border-style:dashed}
+  .seg-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .seg-name{font-size:17px;font-weight:600;letter-spacing:-.01em}
+  .seg-name .maps{font-family:var(--mono);font-size:11px;color:var(--dim);font-weight:400;margin-left:8px}
+  .head-right{display:flex;align-items:center;gap:10px}
+  .zone-pill{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:20px}
+  .inputs-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+  .mini{display:flex;flex-direction:column;gap:4px}
+  .mini label{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+  .mini input{width:70px;font-size:14px;padding:6px 8px}
+  .gauge-col{display:flex;align-items:center;gap:14px}
+  .gauge{position:relative;height:22px;border-radius:6px;flex:1;overflow:hidden;border:1px solid var(--line);
+    background:linear-gradient(90deg,color-mix(in srgb,var(--cheap) 42%,transparent),color-mix(in srgb,var(--neutral) 42%,transparent) 50%,color-mix(in srgb,var(--rich) 42%,transparent))}
+  .gauge .center{position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(233,239,233,.4);z-index:2}
+  .needle{position:absolute;top:-3px;bottom:-3px;width:3px;border-radius:2px;background:var(--hi);z-index:3;transform:translateX(-50%);box-shadow:0 0 0 2px var(--panel)}
+  .vpr-num{font-family:var(--mono);font-size:15px;font-weight:600;min-width:52px;text-align:right}
+  .result-col{display:flex;align-items:baseline;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding-top:12px}
+  .final-lab{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .final-right{display:flex;align-items:baseline;gap:12px}
+  .final-pct{font-family:var(--mono);font-size:24px;font-weight:700}
+  .final-rupee{font-family:var(--mono);font-size:13.5px;color:var(--mid)}
+  .delta{font-family:var(--mono);font-size:12.5px;font-weight:600}
+  .up{color:var(--cheap)} .down{color:var(--rich)} .flat{color:var(--dim)}
+  .exec{background:linear-gradient(180deg,#16201c,#131a17);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-top:16px}
+  .exec h3{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--mint);margin-bottom:4px}
+  .exec .sub{font-family:var(--mono);font-size:11px;color:var(--dim);margin-bottom:12px}
+  .exec table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
+  .exec th{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);text-align:right;padding:0 0 8px;font-weight:500}
+  .exec th:first-child{text-align:left}
+  .exec td{padding:6px 0;border-bottom:1px solid rgba(38,51,45,.6);text-align:right}
+  .exec td:first-child{text-align:left}
+  .exec tr:last-child td{border-bottom:none;padding-top:10px;font-weight:600}
+  .exec .fundname{font-family:var(--sans);font-weight:500}
+  .exec .core{color:var(--dim)} .exec .expl{color:var(--mint)}
+  .status{margin-top:12px;font-size:13.5px;line-height:1.5;color:var(--mid)}
+  .status b{color:var(--hi);font-weight:600}
+  .dupwarn{display:none;margin-top:12px;background:rgba(111,216,176,.08);border:1px solid rgba(111,216,176,.3);border-radius:10px;padding:11px 14px;font-size:12.5px;color:#a9dcc9}
+  details.protocol{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  details.protocol summary{cursor:pointer;padding:15px 18px;font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mint);list-style:none}
+  details.protocol summary::-webkit-details-marker{display:none}
+  details.protocol summary::before{content:'▸ ';color:var(--dim)}
+  details.protocol[open] summary::before{content:'▾ '}
+  .prot-body{padding:0 18px 18px;font-size:13.5px;line-height:1.6;color:var(--mid)}
+  .prot-body h4{font-family:var(--sans);color:var(--hi);font-size:14px;margin:14px 0 6px;font-weight:600}
+  .prot-body ol,.prot-body ul{margin:0 0 4px 18px}
+  .prot-body li{margin-bottom:5px}
+  .prot-body b{color:var(--hi);font-weight:600}
+  .kill{color:#e09b9b}
+  .foot{margin-top:18px;font-size:11.5px;color:var(--dim);line-height:1.6;font-family:var(--mono)}
+  .foot b{color:var(--mid);font-weight:500}
+  @media(max-width:460px){h1{font-size:25px}.final-pct{font-size:21px}.exec table{font-size:12px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Opportunity Explorer · v6</div>
+    <h1>Explorer Split</h1>
+    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = current PE ÷ 5-Yr median. Score = base × (5Yr ÷ current)<sup>k</sup>.</p>
+  </header>
+
+  <div class="settings">
+    <div class="set-item">
+      <label>Sensitivity k</label>
+      <div class="kwrap"><input type="range" id="k" min="0.5" max="2.5" step="0.1" value="1"><span class="kval" id="kval">1.0 · gentle</span></div>
+    </div>
+    <div class="set-item">
+      <label>Explorer budget</label>
+      <div class="field-wrap"><span class="unit">₹</span><input type="number" id="budget" value="10000" step="500" min="0" style="width:88px"></div>
+    </div>
+    <div class="set-item">
+      <label>Core (fixed)</label>
+      <div class="field-wrap"><span class="unit">₹</span><input type="number" id="core" value="20000" step="500" min="0" style="width:88px"></div>
+    </div>
+    <div class="set-item">
+      <label>Base sums to</label>
+      <div class="field-wrap"><span class="sumchip" id="sumchip">100%</span></div>
+    </div>
+  </div>
+
+  <div id="cards"></div>
+
+  <div class="exec">
+    <h3>Execution</h3>
+    <div class="sub">Set the TOTAL on Coin. Core is fixed; only the Explorer column changes each quarter.</div>
+    <table id="execTable"></table>
+    <div class="dupwarn" id="dupwarn">Flexi tilts on Nifty 100 while Index tilts on Nifty 50 — near-identical signals, so large-cap is double-weighted by design.</div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <details class="protocol">
+    <summary>Quarterly Protocol &amp; Kill Criteria</summary>
+    <div class="prot-body">
+      <h4>The 90-day ritual (under 15 min)</h4>
+      <ol>
+        <li>Pull <b>Current + 5-Yr median PE</b> for Nifty 50, 100, Midcap 150, Smallcap 250 — one source (Trendlyne/NSE), consolidated, same type, every quarter.</li>
+        <li>For any cheap segment, glance at whether earnings are <b>collapsing</b> (value trap). The one check the tool can't make.</li>
+        <li>Enter the numbers. Read the Explorer column, add fixed Core = Total to set on Coin.</li>
+        <li>Edit SIPs → close → forget 90 days.</li>
+      </ol>
+      <h4>The engine (continuous — v6)</h4>
+      <p>Score = base × (5-Yr median ÷ current PE)<sup>k</sup>, normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. <b>k</b> = tilt strength: 1.0 gentle, 2.0 punchy. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
+      <h4 class="kill">Pre-committed kill criteria</h4>
+      <ul>
+        <li><b class="kill">K1 — Whipsaw:</b> now near-impossible (continuous). If the split still lurches on tiny PE moves → investigate the data feed.</li>
+        <li><b class="kill">K3 — Friction:</b> quarterly run &gt;15 min or makes you hesitate → kill.</li>
+        <li><b class="kill">K4 — No edge:</b> judged at <b>8 quarters (2 yrs)</b>. If explorer doesn't beat fixed 18/32/36/14 + rebalance by ≥0.25%/yr → kill. One quarter is pure noise.</li>
+      </ul>
+      <h4>The Flexi question</h4>
+      <p>PPFAS holds ~30-35% US + cash Nifty 100 can't see. At ₹10k the leak is small. Toggle Fixed vs Tilt across the paper run; let outputs decide.</p>
+    </div>
+  </details>
+
+  <p class="foot">
+    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ current)<sup>k</sup>, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Edge ~0.30%/yr — discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
+  </p>
+</div>
+
+<script>
+const SEGMENTS = [
+  {key:'index', name:'Index', maps:'Nifty 50',           base:18, pe0:21,   pe5:22.1},
+  {key:'flexi', name:'Flexi', maps:'Nifty 100',          base:32, pe0:20.8, pe5:22.3, toggle:true},
+  {key:'mid',   name:'Mid',   maps:'Nifty Midcap 150',   base:36, pe0:30.7, pe5:29.7},
+  {key:'small', name:'Small', maps:'Nifty Smallcap 250', base:14, pe0:34.6, pe5:28.2},
+];
+const FUNDMAP = {index:['Navi Nifty 50'], flexi:['PPFAS Flexi Cap'], mid:['Edelweiss Mid Cap'], small:['Tata Small Cap','Nippon Small Cap']};
+const GMIN=0.85, GMAX=1.15;
+let flexiMode='tilt';
+
+function zoneMeta(vpr){
+  // purely for the readout label + colour; not used in math
+  if(vpr < 0.97) return {c:'var(--cheap)', label:'cheaper'};
+  if(vpr > 1.03) return {c:'var(--rich)', label:'richer'};
+  return {c:'var(--neutral)', label:'~fair'};
+}
+function buildCards(){
+  const host=document.getElementById('cards'); host.innerHTML='';
+  SEGMENTS.forEach(s=>{
+    const el=document.createElement('div'); el.className='card'; el.id='card-'+s.key;
+    const toggleHtml = s.toggle ? `<div class="toggle sm" id="flexiMode"><button data-m="fixed">Fixed</button><button data-m="tilt" class="on">Tilt</button></div>` : '';
+    el.innerHTML=`
+      <div class="seg-head">
+        <div class="seg-name">${s.name}<span class="maps">${s.maps}</span></div>
+        <div class="head-right">${toggleHtml}<div class="zone-pill" id="pill-${s.key}"></div></div>
+      </div>
+      <div class="inputs-row">
+        <div class="mini"><label>Base %</label><input type="number" data-k="${s.key}" data-f="base" value="${s.base}" step="1" min="0"></div>
+        <div class="mini"><label>Current PE</label><input type="number" data-k="${s.key}" data-f="pe0" value="${s.pe0}" step="0.1" min="0"></div>
+        <div class="mini"><label>5-Yr PE</label><input type="number" data-k="${s.key}" data-f="pe5" value="${s.pe5}" step="0.1" min="0"></div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge" id="gauge-${s.key}"><div class="center"></div><div class="needle" id="needle-${s.key}"></div></div>
+        <div class="vpr-num" id="vpr-${s.key}">—</div>
+      </div>
+      <div class="result-col">
+        <span class="final-lab" id="lab-${s.key}">Explorer share</span>
+        <div class="final-right">
+          <span class="delta" id="delta-${s.key}"></span>
+          <span class="final-rupee" id="rupee-${s.key}"></span>
+          <span class="final-pct" id="pct-${s.key}">—</span>
+        </div>
+      </div>`;
+    host.appendChild(el);
+  });
+  host.addEventListener('input', compute);
+  ['k','budget','core'].forEach(id=>{const e=document.getElementById(id); if(e) e.addEventListener('input',compute);});
+  document.querySelectorAll('#flexiMode button').forEach(btn=>btn.addEventListener('click',()=>{
+    document.querySelectorAll('#flexiMode button').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on'); flexiMode=btn.dataset.m; compute();
+  }));
+}
+function readVal(k,f){const el=document.querySelector('input[data-k="'+k+'"][data-f="'+f+'"]'); const v=parseFloat(el.value); return isNaN(v)?0:v;}
+function allocRupees(pcts, total){
+  if(total<=0) return pcts.map(()=>0);
+  const sum=pcts.reduce((a,b)=>a+b,0); if(sum<=0) return pcts.map(()=>0);
+  const raw=pcts.map(p=>p/sum*total), fl=raw.map(Math.floor);
+  let rem=Math.round(total-fl.reduce((a,b)=>a+b,0));
+  const order=raw.map((r,i)=>({i,frac:r-fl[i]})).sort((a,b)=>b.frac-a.frac);
+  const out=fl.slice(); for(let j=0;j<rem;j++) out[order[j%order.length].i]++; return out;
+}
+function compute(){
+  const k=parseFloat(document.getElementById('k').value)||1;
+  const budget=parseFloat(document.getElementById('budget').value)||0;
+  const coreBudget=parseFloat(document.getElementById('core').value)||0;
+  document.getElementById('kval').textContent = k.toFixed(1)+(k<=0.9?' · very gentle':k<=1.2?' · gentle':k<=1.8?' · medium':' · punchy');
+  const flexiFixed=(flexiMode==='fixed');
+  ['pe0','pe5'].forEach(f=>{const el=document.querySelector('input[data-k="flexi"][data-f="'+f+'"]'); if(el) el.disabled=flexiFixed;});
+  document.getElementById('card-flexi').classList.toggle('anchored', flexiFixed);
+
+  const data=SEGMENTS.map(s=>{
+    const base=readVal(s.key,'base'), pe0=readVal(s.key,'pe0'), pe5=readVal(s.key,'pe5');
+    const isAnchor=(s.key==='flexi'&&flexiFixed);
+    const num = pe0;
+    const vpr = num>0 ? num/pe5 : 0;   // current/5yr; if 0, treated as neutral below
+    const ratio = (num>0 && pe5>0) ? pe5/num : 1;   // cheapness ratio = 1/vpr
+    const score = isAnchor ? 0 : base*Math.pow(ratio, k);
+    return {...s, base, pe0, pe5, vpr:(pe5>0?num/pe5:0), score, isAnchor};
+  });
+
+  const baseSum=data.reduce((a,d)=>a+d.base,0);
+  const chip=document.getElementById('sumchip');
+  chip.textContent=Math.round(baseSum*10)/10+'%';
+  chip.className='sumchip '+(Math.abs(baseSum-100)<0.05?'sum-ok':'sum-bad');
+
+  const anchors=data.filter(d=>d.isAnchor), tilts=data.filter(d=>!d.isAnchor);
+  const anchorAmt=anchors.reduce((a,d)=>a+(baseSum>0?budget*(d.base/baseSum):0),0);
+  const tiltAmt=budget-anchorAmt;
+  const scoreSum=tilts.reduce((a,d)=>a+d.score,0);
+  data.forEach(d=>{
+    if(d.isAnchor) d.expl=baseSum>0?budget*(d.base/baseSum):0;
+    else d.expl=scoreSum>0?tiltAmt*(d.score/scoreSum):0;
+    d.explPct=budget>0?d.expl/budget*100:0;
+    d.baselinePct=baseSum>0?(100/baseSum)*d.base:0;
+    d.core=baseSum>0?coreBudget*(d.base/baseSum):0;
+  });
+
+  data.forEach(d=>{
+    const z=zoneMeta(d.vpr||1), pill=document.getElementById('pill-'+d.key);
+    if(d.isAnchor){pill.textContent='fixed';pill.style.color='var(--dim)';pill.style.background='rgba(107,125,115,.15)';}
+    else{pill.textContent=(d.vpr?d.vpr.toFixed(3):'—')+' · '+z.label;pill.style.color=z.c;pill.style.background='color-mix(in srgb,'+z.c+' 15%, transparent)';}
+    const vn=document.getElementById('vpr-'+d.key); vn.textContent=(d.isAnchor||!d.vpr)?'—':d.vpr.toFixed(3); vn.style.color=d.isAnchor?'var(--dim)':z.c;
+    const g=document.getElementById('gauge-'+d.key); g.style.opacity=d.isAnchor?0.3:1;
+    document.getElementById('needle-'+d.key).style.left=Math.max(0,Math.min(1,((d.vpr||1)-GMIN)/(GMAX-GMIN)))*100+'%';
+    document.getElementById('pct-'+d.key).textContent=d.explPct.toFixed(1)+'%';
+    document.getElementById('rupee-'+d.key).textContent='₹'+Math.round(d.expl).toLocaleString('en-IN');
+    const dl=document.getElementById('delta-'+d.key), diff=d.explPct-d.baselinePct;
+    if(d.isAnchor){dl.textContent='fixed';dl.className='delta flat';}
+    else if(Math.abs(diff)<0.05){dl.textContent='±0';dl.className='delta flat';}
+    else if(diff>0){dl.textContent='▲ '+diff.toFixed(1);dl.className='delta up';}
+    else{dl.textContent='▼ '+Math.abs(diff).toFixed(1);dl.className='delta down';}
+    document.getElementById('lab-'+d.key).textContent=d.isAnchor?'Explorer share (fixed)':'Explorer share';
+  });
+
+  const funds=[];
+  data.forEach(d=>{const names=FUNDMAP[d.key],n=names.length;names.forEach(nm=>funds.push({name:nm,core:d.core/n,expl:d.expl/n}));});
+  const coreR=allocRupees(funds.map(f=>f.core),coreBudget);
+  const explR=allocRupees(funds.map(f=>f.expl),budget);
+  let html='<tr><th>Fund</th><th>Core (fixed)</th><th>Explorer</th><th>Total</th></tr>'; let tc=0,te=0;
+  funds.forEach((f,i)=>{const tot=coreR[i]+explR[i];tc+=coreR[i];te+=explR[i];
+    html+='<tr><td class="fundname">'+f.name+'</td><td class="core">₹'+coreR[i].toLocaleString('en-IN')+'</td><td class="expl">₹'+explR[i].toLocaleString('en-IN')+'</td><td>₹'+tot.toLocaleString('en-IN')+'</td></tr>';});
+  html+='<tr><td>Total</td><td class="core">₹'+tc.toLocaleString('en-IN')+'</td><td class="expl">₹'+te.toLocaleString('en-IN')+'</td><td>₹'+(tc+te).toLocaleString('en-IN')+'</td></tr>';
+  document.getElementById('execTable').innerHTML=html;
+  document.getElementById('dupwarn').style.display=(!flexiFixed)?'block':'none';
+
+  const st=document.getElementById('status');
+  const sorted=[...tilts].sort((a,b)=>a.vpr-b.vpr);
+  const cheapest=sorted[0], richest=sorted[sorted.length-1];
+  let msg=[];
+  if(cheapest && cheapest.vpr<0.97) msg.push('<b>'+cheapest.name+'</b> cheapest ('+cheapest.vpr.toFixed(3)+') → most weight');
+  if(richest && richest.vpr>1.03) msg.push('<b>'+richest.name+'</b> richest ('+richest.vpr.toFixed(3)+') → trimmed');
+  if(flexiFixed) msg.push('Flexi held fixed');
+  st.innerHTML = msg.length?msg.join('. ')+'.':'All segments near fair — explorer deploys close to base weights.';
+}
+buildCards();
+compute();
+</script>
+</body>
+</html>
