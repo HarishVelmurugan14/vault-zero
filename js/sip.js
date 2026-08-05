@@ -11,6 +11,11 @@ function reasonColor(reason, reasons) {
   return REASON_PALETTE[idx >= 0 ? idx % REASON_PALETTE.length : 0];
 }
 
+// Canonical SIP event types. Some carry behaviour (STOP clears a fund+reason slot;
+// the SWPs hide the SIP-day field), so this list is fixed — the Manage screen can
+// hide the ones you don't use, but they aren't user-defined.
+const SIP_EVENT_TYPES = ['Monthly SIP', 'Rebalance SIP', 'Rebalance SWP', 'Redeem SWP', 'STOP'];
+
 // ─── Data helpers ──────────────────────────────────────────────────────────────
 
 async function fetchSIPData(stream) {
@@ -29,9 +34,10 @@ async function fetchSIPData(stream) {
     .sort((a, b) => b.effective_date.localeCompare(a.effective_date));
   const funds = fundsRes.status === 'fulfilled' ? fundsRes.value.rows || [] : [];
 
-  // reasonObjs: full rows [{id, name}]; reasons: name strings for UI; reasonMap: id→name
+  // reasonObjs: full rows [{id, name}]; reasons: name strings for UI; reasonMap: id→name.
+  // Hidden reasons (Manage screen) drop out of the whole SIP UI.
   const reasonObjs = (reasonsRes.status === 'fulfilled' ? reasonsRes.value.rows || [] : [])
-    .filter(r => r.name);
+    .filter(r => r.name && !(typeof HIDDEN !== 'undefined' && HIDDEN.isReason(stream.sipReasonsTable, r.id)));
   const reasons   = reasonObjs.map(r => r.name);
   const reasonMap = {};
   reasonObjs.forEach(r => { reasonMap[String(r.id)] = r.name; });
@@ -82,6 +88,7 @@ function getAllocatedByReason(activeAllocations, reasons, reasonMap) {
 async function renderSIPPage(container, stream) {
   container.innerHTML = '<div class="loading-spinner"></div>';
   try {
+    if (typeof HIDDEN !== 'undefined') await HIDDEN.load();
     const data = await fetchSIPData(stream);
     container.innerHTML = '';
     if (!data.reasons.length) {
@@ -99,7 +106,10 @@ async function renderSIPPage(container, stream) {
 function buildSIPDashboard(container, data, stream) {
   const { budgets, events, funds, reasons, reasonMap, today } = data;
   const activeBudgets     = getActiveBudgets(budgets, today, reasons, reasonMap);
-  const activeAllocations = getActiveAllocations(events, today);
+  // Drop allocations whose reason no longer resolves (hidden or deleted reason)
+  // so the live table doesn't show a blank group; budget-card sums already exclude them.
+  const activeAllocations = getActiveAllocations(events, today)
+    .filter(ev => reasonMap[String(ev.reason_id)]);
   const allocatedByReason = getAllocatedByReason(activeAllocations, reasons, reasonMap);
 
   const fundMap = {};
@@ -500,13 +510,25 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
   const fundSel = document.createElement('select');
   fundSel.className = 'form-input'; fundSel.name = 'fund_id'; fundSel.required = true;
   fundSel.innerHTML = '<option value="">Select fund…</option>';
-  data.funds
-    .sort((a, b) => (a[stream.assetNameCol] || '').localeCompare(b[stream.assetNameCol] || ''))
-    .forEach(f => {
-      const o = document.createElement('option');
-      o.value = f.id; o.textContent = f[stream.assetNameCol] || String(f.id);
-      fundSel.appendChild(o);
-    });
+  // Group funds by their type (subcategory) so the long list is scannable —
+  // Small / Mid / Flexi / Index / ELSS clusters instead of one flat A–Z list.
+  const fundsByType = {};
+  data.funds.forEach(f => {
+    const type = (typeof SUBCAT_NAMES !== 'undefined' && SUBCAT_NAMES[f.subcategory_id]) || 'Other';
+    (fundsByType[type] = fundsByType[type] || []).push(f);
+  });
+  Object.keys(fundsByType).sort((a, b) => a.localeCompare(b)).forEach(type => {
+    const og = document.createElement('optgroup');
+    og.label = type;
+    fundsByType[type]
+      .sort((a, b) => (a[stream.assetNameCol] || '').localeCompare(b[stream.assetNameCol] || ''))
+      .forEach(f => {
+        const o = document.createElement('option');
+        o.value = f.id; o.textContent = f[stream.assetNameCol] || String(f.id);
+        og.appendChild(o);
+      });
+    fundSel.appendChild(og);
+  });
   fundGroup.appendChild(fundSel);
   form.appendChild(fundGroup);
 
@@ -515,10 +537,12 @@ function renderSIPEventForm(parentSection, data, stream, fundMap, reasons) {
   const typeSel = document.createElement('select');
   typeSel.className = 'form-input'; typeSel.name = 'event_type'; typeSel.required = true;
   typeSel.innerHTML = '<option value="">Select type…</option>';
-  ['Monthly SIP', 'Rebalance SIP', 'Rebalance SWP', 'Redeem SWP', 'STOP'].forEach(opt => {
-    const o = document.createElement('option'); o.value = opt; o.textContent = opt;
-    typeSel.appendChild(o);
-  });
+  SIP_EVENT_TYPES
+    .filter(opt => !(typeof HIDDEN !== 'undefined' && HIDDEN.isType(opt)))
+    .forEach(opt => {
+      const o = document.createElement('option'); o.value = opt; o.textContent = opt;
+      typeSel.appendChild(o);
+    });
   typeGroup.appendChild(typeSel);
   form.appendChild(typeGroup);
 

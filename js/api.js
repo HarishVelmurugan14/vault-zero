@@ -203,18 +203,23 @@ const HIDDEN = {
   isCat(id)           { return this._hit('category', id); },
   isSub(id)           { return this._hit('subcategory', id); },
   isAsset(table, id)  { return this._hit('asset', `${table}|${id}`); },
+  // SIP reasons/types are shared config (not per-account) — always hidden globally.
+  isReason(table, id) { return this._hit('sip_reason', `${table}|${id}`); },
+  isType(name)        { return this._hit('sip_type', name); },
 
-  async hide(kind, ref, name) {
+  // forceGlobal=true stores the hide with an empty account (applies to every view),
+  // used for shared config like SIP reasons/types.
+  async hide(kind, ref, name, forceGlobal = false) {
     ref = String(ref);
-    const account = this._scope();
+    const account = forceGlobal ? '' : this._scope();
     await API.insert('hidden_items', { account_id: account, kind, ref, name: name || '' });
     this.rows.push({ kind, ref, account });
     this._clearCaches();
   },
 
-  async unhide(kind, ref) {
+  async unhide(kind, ref, forceGlobal = false) {
     ref = String(ref);
-    const account = this._scope();
+    const account = forceGlobal ? '' : this._scope();
     try {
       const res = await API.get('hidden_items', { limit: 5000, filters: { kind, ref } });
       for (const row of (res.rows || [])) {

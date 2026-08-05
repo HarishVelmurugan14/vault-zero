@@ -47,6 +47,7 @@ function manageCategoryTables(cat) {
 
 async function fetchManageData() {
   const tables = [...new Set(CATEGORIES.flatMap(manageCategoryTables))];
+  const sipReasonsTable = (typeof STREAMS !== 'undefined' && STREAMS.equity_sip && STREAMS.equity_sip.sipReasonsTable) || 'equity_sip_reasons';
   const res = {};
 
   // Reuse asset rows already fetched by Insights (its background warm-up). Manage
@@ -61,14 +62,19 @@ async function fetchManageData() {
     });
   }
 
-  const need = [...tables.filter(t => !res[t]), 'subcategories'];
+  const need = [...tables.filter(t => !res[t]), 'subcategories', sipReasonsTable];
   try {
     Object.assign(res, await API.batchGet(need));
   } catch (_) {
     const results = await Promise.allSettled(need.map(async s => [s, await API.get(s, { limit: 1000 })]));
     results.forEach(r => { if (r.status === 'fulfilled') res[r.value[0]] = r.value[1]; });
   }
-  return { res, subcats: res['subcategories']?.rows || [] };
+  return {
+    res,
+    subcats: res['subcategories']?.rows || [],
+    sipReasons: (res[sipReasonsTable]?.rows || []).filter(r => r && r.name),
+    sipReasonsTable,
+  };
 }
 
 function buildManageTree(container, data) {
@@ -108,6 +114,88 @@ function buildManageTree(container, data) {
 
     container.appendChild(box);
   });
+
+  buildSipManageSection(container, data);
+}
+
+// SIP reasons (from the sheet) + the fixed SIP type list. Both are shared config,
+// so their hides are always global (every account). Reasons can also be deleted.
+function buildSipManageSection(container, data) {
+  const redraw  = () => buildManageTree(container, data);
+  const reasons = data.sipReasons || [];
+  const table   = data.sipReasonsTable || 'equity_sip_reasons';
+
+  // ── SIP Reasons ──
+  const rBox = document.createElement('div');
+  rBox.className = 'manage-cat';
+  rBox.appendChild(makeManageHeader('SIP Reasons'));
+  rBox.appendChild(makeManageNote('Shared across all accounts. Hiding drops a reason from the budget cards, dropdowns and history filter. Delete removes the row — past budgets/events keep pointing at it but lose their label.'));
+  if (!reasons.length) {
+    rBox.appendChild(makeManageNote('No reasons configured yet.'));
+  } else {
+    reasons.forEach(r => {
+      const ref = `${table}|${r.id}`;
+      rBox.appendChild(makeManageRow(r.name || ('#' + r.id), 'asset', HIDDEN.isReason(table, r.id),
+        async () => { await toggleHiddenGlobal('sip_reason', ref, r.name, !HIDDEN.isReason(table, r.id)); redraw(); },
+        () => deleteSipReason(table, r, redraw)));
+    });
+  }
+  container.appendChild(rBox);
+
+  // ── SIP Types (fixed list) ──
+  const tBox = document.createElement('div');
+  tBox.className = 'manage-cat';
+  tBox.appendChild(makeManageHeader('SIP Types'));
+  tBox.appendChild(makeManageNote('Fixed set — some carry behaviour (STOP clears a slot, SWPs skip the SIP-day). Hide the ones you don\'t use so they drop from the Type dropdown.'));
+  (typeof SIP_EVENT_TYPES !== 'undefined' ? SIP_EVENT_TYPES : []).forEach(t => {
+    tBox.appendChild(makeManageRow(t, 'asset', HIDDEN.isType(t),
+      async () => { await toggleHiddenGlobal('sip_type', t, t, !HIDDEN.isType(t)); redraw(); }));
+  });
+  container.appendChild(tBox);
+}
+
+function makeManageHeader(title) {
+  const row = document.createElement('div');
+  row.className = 'manage-row manage-cat';
+  const name = document.createElement('span');
+  name.className = 'manage-label';
+  name.textContent = title;
+  row.appendChild(name);
+  return row;
+}
+
+function makeManageNote(text) {
+  const el = document.createElement('div');
+  el.className = 'manage-section-note';
+  el.textContent = text;
+  return el;
+}
+
+async function deleteSipReason(table, reason, redraw) {
+  const ok = confirm(`Delete reason "${reason.name}"?\n\nHistorical budgets and events tagged to it will lose their label (they are not deleted). This can't be undone.`);
+  if (!ok) return;
+  try {
+    await API.delete(table, reason.id);
+    if (_manageData && Array.isArray(_manageData.sipReasons)) {
+      _manageData.sipReasons = _manageData.sipReasons.filter(r => String(r.id) !== String(reason.id));
+    }
+    LSC.clear('insights', 'holdings');
+    showToast('Reason deleted');
+    redraw();
+  } catch (e) {
+    showToast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+async function toggleHiddenGlobal(kind, ref, name, hide) {
+  try {
+    if (hide) await HIDDEN.hide(kind, ref, name, true);
+    else      await HIDDEN.unhide(kind, ref, true);
+    CACHE._store = {};
+    showToast(hide ? 'Hidden (all accounts)' : 'Shown again');
+  } catch (e) {
+    showToast('Failed: ' + e.message, 'error');
+  }
 }
 
 function appendAssetRow(box, cat, a, redraw) {
@@ -122,19 +210,32 @@ function appendAssetRow(box, cat, a, redraw) {
     async () => { await toggleHidden('asset', key, name, !HIDDEN.isAsset(a._table, a.id)); redraw(); }));
 }
 
-function makeManageRow(label, level, hidden, onToggle) {
+function makeManageRow(label, level, hidden, onToggle, onDelete) {
   const row = document.createElement('div');
   row.className = `manage-row manage-${level}` + (hidden ? ' manage-hidden' : '');
   const name = document.createElement('span');
   name.className = 'manage-label';
   name.textContent = label;
+  row.appendChild(name);
+
+  const actions = document.createElement('div');
+  actions.className = 'manage-actions';
+  if (onDelete) {
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'manage-delete';
+    del.textContent = '🗑 Delete';
+    del.addEventListener('click', () => onDelete());
+    actions.appendChild(del);
+  }
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'manage-toggle' + (hidden ? ' is-hidden' : '');
   btn.textContent = hidden ? '🙈 Hidden' : '👁 Shown';
   btn.addEventListener('click', () => onToggle());
-  row.appendChild(name);
-  row.appendChild(btn);
+  actions.appendChild(btn);
+
+  row.appendChild(actions);
   return row;
 }
 
