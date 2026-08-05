@@ -13,7 +13,7 @@ function reasonColor(reason, reasons) {
 
 // SIP types describe a SIP's *nature*. Stopping is a separate action — a Stop
 // button writes an internal STOP event — so STOP is NOT a user-facing type.
-const SIP_EVENT_TYPES = ['Core', 'Temporary', 'Purpose driven'];
+const SIP_EVENT_TYPES = ['Core', 'Alpha Revert', 'Temporary', 'Purpose driven'];
 const SIP_STOP = 'STOP';   // internal marker: latest STOP event = that SIP is stopped
 
 // ─── Data helpers ──────────────────────────────────────────────────────────────
