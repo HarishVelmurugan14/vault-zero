@@ -1,22 +1,27 @@
 <!DOCTYPE html>
 <!--
   Tool:      AlphaRevert  (formerly opportunityExplorer / "Explorer Split")
-  Version:   v6.4
+  Version:   v6.5
   Purpose:   Quarterly valuation-tilt of a ₹10k "explorer" SIP across Indian MF market-cap
              segments (Index / Flexi / Mid / Small); the fixed ₹20k core stays at base weights.
-  Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Med_i)^1.5 ÷ Σ base·(5Yr/Med)^1.5 )
+  Formula:   explorer_i = round( 10000 × base_i·(5Yr_i / Med_i)^1.0 ÷ Σ base·(5Yr/Med)^1.0 )
              where Med_i = 1-month median PE; base weights — Index 18 / Flexi 32 / Mid 36 / Small 14
   Changelog: v6 — continuous scoring, numerator÷5Yr only, ₹10k explorer, Flexi Fixed/Tilt toggle.
              v6.1 — renamed "Explorer Split" → "AlphaRevert"; input relabeled to 1-month median PE (noise fix); display-only, no math change.
              v6.2 — removed sensitivity slider; k hardcoded to 1.0 (locked, no live lever); no other math change.
              v6.3 — Execution table adds Base (base-weight split) + Δ vs base columns; explorer math unchanged.
              v6.4 — k changed 1.0 → 1.5 (locked, convex tilt); value-trap check made mandatory (convex curve requires it).
+             v6.5 — k REVERTED 1.5 → 1.0 (linear tilt). A full no-lookahead backtest (niftyindices 2021–2026,
+                    the only usable 4-sleeve window) found NO salvageable risk-adjusted edge: Sharpe flat 0.61–0.62
+                    across k=0..2.0; k=1.5 failed both pre-committed gates (XIRR edge +0.17%<0.25%, win-rate 50%<55%)
+                    and only beat k=1.0 by +0.06%/yr (noise) while adding drawdown. P/B, 3-yr anchor and a cash
+                    side-car all failed to help. k=1.0 kept ONLY as a gentle buy-low discipline, not for alpha.
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaRevert · v6.4</title>
+<title>AlphaRevert · v6.5</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -109,9 +114,9 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="eyebrow">Valuation-tilt SIP · v6.4</div>
+    <div class="eyebrow">Valuation-tilt SIP · v6.5</div>
     <h1>AlphaRevert</h1>
-    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = 1-month median PE ÷ 5-Yr median. Score = base × (5Yr ÷ 1-mo median)^1.5. k locked at 1.5 (convex).</p>
+    <p class="tag">The <b>₹10k explorer only</b>. Weight scales <b>smoothly</b> with cheapness — no bands, no cliffs. VPR = 1-month median PE ÷ 5-Yr median. Score = base × (5Yr ÷ 1-mo median)^1.0. k locked at 1.0 (linear — discipline, not alpha).</p>
   </header>
 
   <div class="settings">
@@ -147,12 +152,12 @@
       <h4>The 90-day ritual (under 15 min)</h4>
       <ol>
         <li>Pull the <b>1-month median PE</b> (from the source's 1M PE chart) and the <b>5-Yr median PE</b> for Nifty 50 / 100 / Midcap 150 / Smallcap 250 — one source, consolidated, same PE type. Read on a fixed quarter-end date.</li>
-        <li><b>MANDATORY value-trap check</b> — for every cheap segment, confirm earnings are NOT collapsing (a falling E makes PE look cheap right before a crash). With k=1.5 the tilt bets harder into discounts, so this is the safety that stops it doubling into a trap. Not optional.</li>
+        <li><b>Value-trap check (recommended)</b> — for every cheap segment, confirm earnings are NOT collapsing (a falling E makes PE look cheap right before a crash). At k=1.0 the tilt is gentle (a 10% discount earns ~10% more weight), so a trap can't double your position — but it's still worth a 30-second sanity check before overweighting a sinking segment.</li>
         <li>Enter the numbers. Read the Explorer column, add fixed Core = Total to set on Coin.</li>
         <li>Edit SIPs → close → forget 90 days.</li>
       </ol>
       <h4>The engine (continuous — v6.1)</h4>
-      <p>Score = base × (5-Yr median ÷ 1-month median PE), normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. The tilt strength <b>k is locked at 1.5</b> (convex: a 10% discount earns ~15% more weight, rewarding deep discounts harder) — a deliberate design constant, not a live knob. The convexity is why the value-trap check above is mandatory. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
+      <p>Score = base × (5-Yr median ÷ 1-month median PE), normalized over tilted segments. Cheaper → smoothly higher weight; richer → smoothly lower. <b>No 0.95/1.05 bands, no discrete steps, no cliffs</b> — a 0.6% PE wobble moves the split by rupees, not thousands. The tilt strength <b>k is locked at 1.0</b> (linear: a 10% discount earns ~10% more weight) — a deliberate design constant, not a live knob. It was briefly set to 1.5 (v6.4) but reverted after a full backtest found the extra convexity added drawdown without a reliable edge; k=1.0 exists for buy-low discipline, not alpha. When all segments are equally (over/under)valued, it deploys at base weights. No cash parking — market-top protection lives in your ₹52k opportunity fund.</p>
       <h4 class="kill">Pre-committed kill criteria</h4>
       <ul>
         <li><b class="kill">K1 — Whipsaw:</b> now near-impossible (continuous). If the split still lurches on tiny PE moves → investigate the data feed.</li>
@@ -165,7 +170,7 @@
   </details>
 
   <p class="foot">
-    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ 1-mo median)^1.5, k locked at 1.5, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Edge ~0.30%/yr — discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
+    <b>Model:</b> Explorer (₹10k) score = base × (5Yr ÷ 1-mo median)^1.0, k locked at 1.0, normalized. Core (₹20k) fixed base weights, set once. Total per fund = core + explorer = your Coin number. Continuous scoring removes the boundary cliff entirely. Backtest edge was statistically indistinguishable from zero (Sharpe flat ~0.61 across all k) — this is discipline, not alpha. Real dip-capture = ₹52k opportunity fund.
   </p>
 </div>
 
@@ -232,7 +237,7 @@ function allocRupees(pcts, total){
   const out=fl.slice(); for(let j=0;j<rem;j++) out[order[j%order.length].i]++; return out;
 }
 function compute(){
-  const k=1.5;  // locked design constant (v6.4) — convex tilt
+  const k=1.0;  // locked design constant (v6.5) — linear tilt; reverted from 1.5 (v6.4) after backtest showed no salvageable edge
   const budget=parseFloat(document.getElementById('budget').value)||0;
   const coreBudget=parseFloat(document.getElementById('core').value)||0;
   const flexiFixed=(flexiMode==='fixed');
