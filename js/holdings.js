@@ -351,18 +351,32 @@ async function buildHoldingsRows() {
                       name: a[stream.assetNameCol], invested, currentValue });
         });
 
-      // ── Derived US cash line (wires − buys + sells − repats + income) ──
-      const wires   = (res[stream.wireTable]?.rows   || []).filter(w => ACCOUNTS.matches(w.account_id));
-      const repats  = (res[stream.repatTable]?.rows  || []).filter(r => ACCOUNTS.matches(r.account_id));
-      const income  = (res[stream.incomeTable]?.rows || []).filter(i => ACCOUNTS.matches(i.account_id));
-      const cashUsd = usEquityCashUsd(usTxns, wires, repats, income);
-      if (Math.abs(cashUsd) > 0.01) {
-        const rate = usEquityLiveRate(assets, wires, stream);
+      // ── Derived US cash, PER ACCOUNT (wires − buys + sells − repats + income) ──
+      // Attribute the uninvested cash to the account it belongs to (like the ETFs),
+      // so it carries an owner chip and counts toward that account's total.
+      const allWires  = (res[stream.wireTable]?.rows   || []).filter(w => ACCOUNTS.matches(w.account_id));
+      const allRepats = (res[stream.repatTable]?.rows  || []).filter(r => ACCOUNTS.matches(r.account_id));
+      const allIncome = (res[stream.incomeTable]?.rows || []).filter(i => ACCOUNTS.matches(i.account_id));
+      const rate = usEquityLiveRate(assets, allWires, stream);
+      const acctOf = x => String((x && x.account_id) || '');
+      const cashAccts = new Set();
+      allWires.forEach(w => cashAccts.add(acctOf(w)));
+      allRepats.forEach(r => cashAccts.add(acctOf(r)));
+      allIncome.forEach(i => cashAccts.add(acctOf(i)));
+      assets.forEach(a => cashAccts.add(String(a.account_id || '')));   // a txn's account = its asset's
+      cashAccts.forEach(acctId => {
+        const acctAssetIds = new Set(assets.filter(a => String(a.account_id || '') === acctId).map(a => String(a.id)));
+        const cashUsd = usEquityCashUsd(
+          usTxns.filter(t => acctAssetIds.has(String(t[stream.assetIdCol]))),
+          allWires.filter(x => acctOf(x) === acctId),
+          allRepats.filter(x => acctOf(x) === acctId),
+          allIncome.filter(x => acctOf(x) === acctId));
+        if (Math.abs(cashUsd) <= 0.01) return;
         const cashInr = cashUsd * rate;
         rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
-                    subcategory: 'Cash', name: 'Uninvested Cash (USD)',
+                    subcategory: 'Cash', name: 'Uninvested Cash (USD)', account: acctId || undefined,
                     invested: cashInr, currentValue: cashInr });
-      }
+      });
       continue;
     }
 
