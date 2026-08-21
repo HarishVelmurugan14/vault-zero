@@ -366,6 +366,7 @@ const INSIGHT_TABS = [
   { id: 'overview',    label: 'Overview' },
   { id: 'allocation',  label: 'Allocation' },
   { id: 'performance', label: 'Performance' },
+  { id: 'plan',        label: 'Plan' },
   { id: 'funds',       label: 'Funds' },
   { id: 'risk',        label: 'Risk' },
   { id: 'tax',         label: 'Tax' },
@@ -426,6 +427,7 @@ function renderInsightsTab(container, agg, filtered, rawData) {
 
   const row2 = () => { const d = document.createElement('div'); d.className = 'insights-grid-2'; return d; };
   const tab  = _insightsActiveTab;
+  if (tab === 'plan') { renderPlanTab(container, agg, filtered, rawData); return; }
 
   if (tab === 'overview') {
     container.appendChild(buildHealthCheck(agg, filtered, rawData));
@@ -2454,4 +2456,184 @@ function drawXirrTrend(canvasId, filteredData) {
       },
     },
   });
+}
+
+// ══ Plan tab ══════════════════════════════════════════════════════════════════
+
+function renderPlanTab(container, agg, filtered, rawData) {
+  container.appendChild(buildContribGrowthCard(agg));
+  const proj = buildCorpusProjectionCard(agg);
+  container.appendChild(proj.card);
+  const sipCard = document.createElement('div');
+  sipCard.className = 'chart-card chart-card-full';
+  sipCard.innerHTML = '<div class="chart-card-title">SIP Plan &amp; Cashflow</div><div id="plan-sip"><p class="chart-empty">Loading SIP plan…</p></div>';
+  container.appendChild(sipCard);
+  requestAnimationFrame(() => {
+    drawContribGrowthChart(agg);
+    proj.init();
+    buildSipPlan(document.getElementById('plan-sip'));
+  });
+}
+
+// ── Contribution vs Growth ────────────────────────────────────────────────────
+function _cgRows(agg) {
+  return Object.entries(agg.byCategory || {})
+    .map(([name, c]) => ({ name, contrib: c.netCost || 0, cur: c.currentValue || 0, growth: (c.currentValue || 0) - (c.netCost || 0) }))
+    .filter(r => r.cur > 0)
+    .sort((a, b) => b.cur - a.cur);
+}
+function buildContribGrowthCard(agg) {
+  const rows = _cgRows(agg);
+  const contrib = rows.reduce((s, r) => s + r.contrib, 0);
+  const cur     = rows.reduce((s, r) => s + r.cur, 0);
+  const growth  = cur - contrib;
+  const gPct = cur > 0 ? growth / cur * 100 : 0;
+  const gc = growth >= 0 ? 'positive' : 'negative';
+  const card = document.createElement('div');
+  card.className = 'chart-card chart-card-full';
+  card.innerHTML =
+    '<div class="chart-card-title">Contribution vs Growth</div>' +
+    '<div class="cg-summary">' +
+      '<div class="cg-stat"><span class="cg-lbl">You invested</span><span class="cg-val">' + fmtCurrency(contrib) + '</span></div>' +
+      '<div class="cg-stat"><span class="cg-lbl">Market growth</span><span class="cg-val ' + gc + '">' + (growth >= 0 ? '+' : '') + fmtCurrency(growth) + '</span></div>' +
+      '<div class="cg-stat"><span class="cg-lbl">Current value</span><span class="cg-val">' + fmtCurrency(cur) + '</span></div>' +
+      '<div class="cg-stat"><span class="cg-lbl">Growth = share of corpus</span><span class="cg-val ' + gc + '">' + gPct.toFixed(1) + '%</span></div>' +
+    '</div>' +
+    '<div class="chart-canvas-wrap"><canvas id="plan-cg-chart"></canvas></div>';
+  return card;
+}
+function drawContribGrowthChart(agg) {
+  const rows = _cgRows(agg);
+  if (!rows.length) return emptyCard('plan-cg-chart', 'No holdings.');
+  newChart('plan-cg-chart', {
+    type: 'bar',
+    data: { labels: rows.map(r => r.name), datasets: [
+      { label: 'Contributed', data: rows.map(r => Math.round(r.contrib)), backgroundColor: '#6366f1cc', stack: 's' },
+      { label: 'Growth',      data: rows.map(r => Math.round(r.growth)),  backgroundColor: '#22c55ecc', stack: 's' },
+    ] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#9fb0a6', font: { size: 11 } } }, datalabels: { display: false },
+        tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + fmtCurrency(ctx.raw) } } },
+      scales: { x: { stacked: true, ticks: { color: '#525252', callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { stacked: true, ticks: { color: '#9fb0a6', font: { size: 11 } }, grid: { display: false } } } },
+  });
+}
+
+// ── Corpus projection ─────────────────────────────────────────────────────────
+function projectCorpus(current, monthly, annualPct, years) {
+  const rm = Math.pow(1 + annualPct / 100, 1 / 12) - 1;
+  const months = Math.round(years * 12);
+  const gf = Math.pow(1 + rm, months);
+  const fvCur = current * gf;
+  const fvSip = rm !== 0 ? monthly * ((gf - 1) / rm) : monthly * months;
+  return fvCur + fvSip;
+}
+function buildCorpusProjectionCard(agg) {
+  const card = document.createElement('div');
+  card.className = 'chart-card chart-card-full';
+  const cur0 = Math.round(agg.totalCurrentValue || 0);
+  card.innerHTML =
+    '<div class="chart-card-title">Corpus Projection</div>' +
+    '<div class="proj-inputs">' +
+      '<label>Current corpus <span class="proj-unit">₹</span><input type="number" id="proj-cur" value="' + cur0 + '" step="1000"></label>' +
+      '<label>Monthly SIP <span class="proj-unit">₹</span><input type="number" id="proj-sip" value="50000" step="1000"></label>' +
+      '<label>Return <input type="number" id="proj-ret" value="12" step="0.5"><span class="proj-unit">%/yr</span></label>' +
+      '<label>Target <span class="proj-unit">₹</span><input type="number" id="proj-tgt" value="10000000" step="100000"></label>' +
+    '</div>' +
+    '<div class="proj-milestones" id="proj-miles"></div>' +
+    '<div class="chart-canvas-wrap"><canvas id="plan-proj-chart"></canvas></div>';
+  let chart = null;
+  function recompute() {
+    const cur = parseFloat(document.getElementById('proj-cur').value) || 0;
+    const sip = parseFloat(document.getElementById('proj-sip').value) || 0;
+    const ret = parseFloat(document.getElementById('proj-ret').value) || 0;
+    const tgt = parseFloat(document.getElementById('proj-tgt').value) || 0;
+    let ytt = null;
+    if (tgt > cur) { for (let m = 1; m <= 600; m++) { if (projectCorpus(cur, sip, ret, m / 12) >= tgt) { ytt = m / 12; break; } } }
+    const maxYr = Math.max(20, ytt ? Math.ceil(ytt) + 2 : 20);
+    let mh = [5, 10, 15, 20].map(y => '<div class="proj-mile"><span class="proj-mile-y">' + y + ' yr</span><span class="proj-mile-v">' + fmtCurrency(projectCorpus(cur, sip, ret, y)) + '</span></div>').join('');
+    mh += '<div class="proj-mile proj-mile-tgt"><span class="proj-mile-y">Reach ' + fmtCurrency(tgt) + '</span><span class="proj-mile-v">' + (tgt <= cur ? 'reached' : (ytt ? ytt.toFixed(1) + ' yrs' : '30+ yrs')) + '</span></div>';
+    document.getElementById('proj-miles').innerHTML = mh;
+    const labels = [], corpus = [], contrib = [];
+    for (let y = 0; y <= maxYr; y++) { labels.push('Yr ' + y); corpus.push(Math.round(projectCorpus(cur, sip, ret, y))); contrib.push(Math.round(cur + sip * 12 * y)); }
+    if (chart) { chart.data.labels = labels; chart.data.datasets[0].data = corpus; chart.data.datasets[1].data = contrib; chart.update(); return; }
+    chart = newChart('plan-proj-chart', {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: 'Projected corpus',   data: corpus,  borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.12)', fill: true,  tension: 0.25, pointRadius: 0 },
+        { label: 'Contributions only', data: contrib, borderColor: '#818cf8', borderDash: [5, 4], fill: false, tension: 0, pointRadius: 0 },
+      ] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#9fb0a6', font: { size: 11 } } }, datalabels: { display: false },
+          tooltip: { callbacks: { title: c => c[0].label, label: ctx => ' ' + ctx.dataset.label + ': ' + fmtCurrency(ctx.raw) } } },
+        scales: { x: { ticks: { color: '#525252', maxTicksLimit: 12, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                  y: { ticks: { color: '#525252', callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } } } },
+    });
+  }
+  card.querySelectorAll('.proj-inputs input').forEach(el => el.addEventListener('input', recompute));
+  return { card, init: recompute };
+}
+
+// ── SIP Plan & Cashflow ───────────────────────────────────────────────────────
+async function buildSipPlan(host) {
+  if (!host) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const sources = [];
+  if (typeof STREAMS !== 'undefined') {
+    if (STREAMS.equity_sip)      sources.push({ label: 'EQ MF', stream: STREAMS.equity_sip });
+    if (STREAMS.debt_hybrid_sip) sources.push({ label: 'Debt',  stream: STREAMS.debt_hybrid_sip });
+  }
+  if (!sources.length) { host.innerHTML = '<p class="chart-empty">No SIP streams configured.</p>'; return; }
+  try {
+    const tables = [...new Set(sources.flatMap(s => [s.stream.sipEventsTable, s.stream.assetTable]))];
+    let res = {};
+    try { res = await API.batchGet(tables); }
+    catch (_) { const rr = await Promise.allSettled(tables.map(async t => [t, await API.get(t, { limit: 3000 })])); rr.forEach(x => { if (x.status === 'fulfilled') res[x.value[0]] = x.value[1]; }); }
+
+    const active = [];
+    sources.forEach(src => {
+      const st = src.stream;
+      const events = (res[st.sipEventsTable]?.rows || []).slice().sort((a, b) => String(b.effective_date).localeCompare(String(a.effective_date)));
+      const funds = res[st.assetTable]?.rows || [];
+      const fmap = {}, amap = {};
+      funds.forEach(f => { fmap[String(f.id)] = f[st.assetNameCol] || f.fund_name || String(f.id); amap[String(f.id)] = f.account_id; });
+      const seen = new Set();
+      events.forEach(ev => {
+        if (String(ev.effective_date).slice(0, 10) > today) return;      // future — ignore
+        const key = String(ev.fund_id) + '|' + String(ev.reason_id);
+        if (seen.has(key)) return; seen.add(key);                        // only the latest per fund+reason
+        if (String(ev.event_type) === 'STOP') return;                    // latest is a STOP → not active
+        const acct = amap[String(ev.fund_id)];
+        if (typeof ACCOUNTS !== 'undefined' && !ACCOUNTS.matches(acct)) return;
+        active.push({ amount: parseFloat(ev.amount) || 0, sip_date: ev.sip_date, event_type: ev.event_type || '—',
+                      account: acct, fundName: fmap[String(ev.fund_id)] || ('#' + ev.fund_id) });
+      });
+    });
+
+    if (!active.length) { host.innerHTML = '<p class="chart-empty">No active SIPs for this view.</p>'; return; }
+
+    const total = active.reduce((s, a) => s + a.amount, 0);
+    const byType = {}, byAcct = {}, byDay = {};
+    active.forEach(a => {
+      byType[a.event_type] = (byType[a.event_type] || 0) + a.amount;
+      const an = (typeof ACCOUNTS !== 'undefined') ? (ACCOUNTS.name(a.account) || 'Unassigned') : 'All';
+      byAcct[an] = (byAcct[an] || 0) + a.amount;
+      const d = a.sip_date ? String(a.sip_date) : '—';
+      byDay[d] = (byDay[d] || 0) + a.amount;
+    });
+    const chip = (label, val, color) => '<span class="sipplan-chip" style="border-color:' + color + '55;color:' + color + '"><b>' + label + '</b> ' + fmtCurrency(val) + '</span>';
+    const typeHtml = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, v], i) => chip(t, v, CAT_COLORS[i % CAT_COLORS.length])).join('');
+    const acctHtml = Object.entries(byAcct).sort((a, b) => b[1] - a[1]).map(([t, v], i) => chip(t, v, ['#7fa8d9', '#dcae5e', '#7fc99a', '#c58fd6'][i % 4])).join('');
+    const days = Object.keys(byDay).sort((a, b) => (a === '—' ? 99 : parseInt(a)) - (b === '—' ? 99 : parseInt(b)));
+    const dayHtml = days.map(d => '<div class="sipplan-day"><span class="sipplan-day-n">' + (d === '—' ? 'No day' : d) + '</span><span class="sipplan-day-v">' + fmtCurrency(byDay[d]) + '</span></div>').join('');
+
+    host.innerHTML =
+      '<div class="sipplan-total">Total monthly SIP: <b>' + fmtCurrency(total) + '</b> <span>· ' + active.length + ' active</span></div>' +
+      '<div class="sipplan-row"><span class="sipplan-lbl">By type</span><div class="sipplan-chips">' + typeHtml + '</div></div>' +
+      '<div class="sipplan-row"><span class="sipplan-lbl">By account</span><div class="sipplan-chips">' + acctHtml + '</div></div>' +
+      '<div class="sipplan-cal-title">Monthly cashflow (by SIP day)</div>' +
+      '<div class="sipplan-cal">' + dayHtml + '</div>';
+  } catch (e) {
+    host.innerHTML = '<p class="chart-empty">Couldn\'t load SIP plan: ' + (e && e.message ? e.message : e) + '</p>';
+  }
 }
