@@ -1,30 +1,30 @@
 /**
  * VaultZero — Import equity/debt transactions from a Coin Order History CSV into a
- * chosen VaultZero account (Self, Oppurtunity, Mother, Future Wife, …).
+ * chosen VaultZero account (Self, Thulasi, Harini, …).
+ *
+ * ⚠️ LIVES IN THE TRADEBOOK APPS SCRIPT PROJECT, next to import_from_tradebook.gs — NOT in the
+ * VaultZero project. Writes go through the VaultZero web app (see vzApiUpsert_), so every row
+ * passes VaultZero's constraints. One-time setup: setVaultZeroApiToken('<app API key>').
  *
  * HOW TO USE:
  *   1. coin.zerodha.com → Orders → Download order history CSV
- *   2. Paste the CSV into the "Sheet1" tab of the VaultZero spreadsheet (A1, incl. header)
+ *   2. Paste the CSV into the "Sheet1" tab (A1, incl. header)
  *   3. Run importFromCoin()  → prompts which account,
- *      or run importFromCoin_Self() / _Oppurtunity() / _Mother() / _FutureWife().
+ *      or run importFromCoin_Self() / _Thulasi() / _Harini().
  *   4. Clear Sheet1, paste the next CSV, run again.
  *
- * Only COMPLETE orders imported. Unique key: exchange_order_id.
+ * Only COMPLETE orders imported. Unique key: source_ref = exchange_order_id
+ * (account 1 raw; other accounts `exchange_order_id-a<accountId>`).
  *
  * Fund lists are shared with the tradebook importer: each person's ISIN → fund map
- * lives in import_from_tradebook.gs (ISIN_TO_FUND_A3 = Mother, _A4 = Future Wife).
+ * lives in import_from_tradebook.gs (ISIN_TO_FUND_A3 = Thulasi, _A4 = Harini).
  * Same rules apply — an id must belong to that account (safety check), and funds
  * Self also holds are matched automatically by scheme `code`.
  *
- * Row ids: account 1 uses the raw exchange_order_id (preserves existing data); every
- * other account uses `exchange_order_id-a<accountId>`.
+ * ⚠️ Never import the same trades into two accounts — they'd DOUBLE-COUNT in "All Accounts".
  *
- * ⚠️ Mirroring the same trades into two accounts (Self + Oppurtunity) DOUBLE-COUNTS
- * them in "All Accounts". Separate demats (Mother, Future Wife) don't have this issue.
- *
- * Reuses resolveAccountMaps_, accountOptions_, pushUpsert, ensureHeader, buildIdMap,
- * getHeaders, upsertRows, notify_, vaultSpreadsheet_, vaultDataSpreadsheet_ from
- * import_from_tradebook.gs (project-wide scope).
+ * Reuses resolveAccountMaps_, accountOptions_, pushUpsert, vzApiUpsert_, cellDateISO_,
+ * notify_, vaultSpreadsheet_, vaultDataSpreadsheet_ from import_from_tradebook.gs.
  *
  * Coin CSV columns: client_id, isin, scheme_name, plan, transaction_mode,
  * settlement_id, trade_date (DD/MM/YYYY), ordered_at, folio_number, amount,
@@ -32,10 +32,9 @@
  */
 
 // ── Run these ─────────────────────────────────────────────────────────────────
-function importFromCoin_Self()        { importFromCoinForAccount(1); }
-function importFromCoin_Oppurtunity() { importFromCoinForAccount(2); }
-function importFromCoin_Mother()      { importFromCoinForAccount(3); }
-function importFromCoin_FutureWife()  { importFromCoinForAccount(4); }
+function importFromCoin_Self()    { importFromCoinForAccount(1); }
+function importFromCoin_Thulasi() { importFromCoinForAccount(3); }
+function importFromCoin_Harini()  { importFromCoinForAccount(4); }
 
 // Asks which account (when a UI is available), else defaults to Self.
 function importFromCoin() {
@@ -55,21 +54,13 @@ function importFromCoinForAccount(accountId) {
   const acct   = resolveAccountMaps_(accountId, dataSS);
   if (!acct) { notify_('Unknown account ' + accountId + '. Choose one of: ' + accountOptions_() + '\n(Add new accounts to ACCOUNT_MAPS in import_from_tradebook.gs.)'); return; }
 
-  const sourceSh  = vaultSpreadsheet_().getSheetByName('Sheet1');
-  const eqSheet   = dataSS.getSheetByName('equity_transactions');
-  const debtSheet = dataSS.getSheetByName('debt_hybrid_transactions');
-
-  if (!sourceSh)              { notify_('Sheet "Sheet1" not found.\nPaste your Coin CSV there, then run again.'); return; }
-  if (!eqSheet || !debtSheet) { notify_('equity_transactions or debt_hybrid_transactions sheet not found.'); return; }
-
-  ensureHeader(eqSheet);
-  ensureHeader(debtSheet);
-
-  const eqIdToRow   = buildIdMap(eqSheet);
-  const debtIdToRow = buildIdMap(debtSheet);
+  const srcSS    = vaultSpreadsheet_();
+  const sourceSh = srcSS.getSheetByName('Sheet1');
+  if (!sourceSh) { notify_('Sheet "Sheet1" not found.\nPaste your Coin CSV there, then run again.'); return; }
 
   const rawData = sourceSh.getDataRange().getValues();
   if (rawData.length < 2) { notify_('Sheet1 is empty — paste your Coin CSV first.'); return; }
+  const srcTz = srcSS.getSpreadsheetTimeZone();
 
   const h = rawData[0].map(c => String(c).trim().toLowerCase());
   const C = {
@@ -89,12 +80,11 @@ function importFromCoinForAccount(accountId) {
     return;
   }
 
-  // Account-scoped row id so the same order can live under multiple accounts.
-  // Account 1 keeps the raw exchange_order_id (preserves existing Self rows).
-  const idFor = oid => (String(accountId) === '1' ? oid : oid + '-a' + accountId);
+  // Account-scoped source_ref so the same order id can live under multiple accounts.
+  // Account 1 keeps the raw exchange_order_id (matches existing Self rows).
+  const refFor = oid => (String(accountId) === '1' ? oid : oid + '-a' + accountId);
 
-  const eq   = { toInsert: [], toUpdate: [] };
-  const debt = { toInsert: [], toUpdate: [] };
+  const eq = [], debt = [];
   const skipped = [];
 
   for (let i = 1; i < rawData.length; i++) {
@@ -121,36 +111,35 @@ function importFromCoinForAccount(accountId) {
 
     const txnType   = mode === 'SELL' ? 'Sell' : 'Buy';
     const txnAmount = isNaN(amount) || amount <= 0 ? Math.round(units * nav * 100) / 100 : amount;
-    const dateISO   = parseCoinDate(dateRaw);
+    const dateISO   = cellDateISO_(rawData[i][C.date], srcTz) || parseCoinDate(dateRaw);
     const dateMs    = new Date(dateISO).getTime();
-    const rowId     = idFor(orderId);
-    const managed   = { id: rowId, txn_type: txnType, txn_date: dateISO, units, nav, amount: txnAmount };
+    const managed   = { source_ref: refFor(orderId), txn_type: txnType, txn_date: dateISO, units, nav, amount: txnAmount };
 
     const eqFund = acct.equity[isin];
     if (eqFund) {
       managed.fund_id = eqFund.id;
-      pushUpsert(eq, eqIdToRow, rowId, eqFund.id, managed, dateMs, remarks);
+      pushUpsert(eq, eqFund.id, managed, dateMs, remarks);
       continue;
     }
     const debtFund = acct.debt[isin];
     if (debtFund) {
       managed.fund_id = debtFund.id;
-      pushUpsert(debt, debtIdToRow, rowId, debtFund.id, managed, dateMs, remarks);
+      pushUpsert(debt, debtFund.id, managed, dateMs, remarks);
       continue;
     }
     skipped.push({ line: i + 1, scheme: row[C.scheme], isin, reason: acct.unmappedReason(isin) });
   }
 
-  upsertRows(eqSheet, eq.toUpdate, eq.toInsert);
-  upsertRows(debtSheet, debt.toUpdate, debt.toInsert);
+  const eqRes   = vzApiUpsert_('equity_transactions', eq);
+  const debtRes = vzApiUpsert_('debt_hybrid_transactions', debt);
 
   const skipLines = skipped.length
     ? '\n\nSkipped:\n' + skipped.slice(0, 8).map(s => `• Line ${s.line}: ${s.scheme || s.isin} — ${s.reason}`).join('\n') +
       (skipped.length > 8 ? `\n… and ${skipped.length - 8} more` : '')
     : '';
   notify_(
-    `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
-    `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
+    `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eqRes.inserted}   Updated : ${eqRes.updated}\n\n` +
+    `debt_hybrid_transactions\n  Inserted : ${debtRes.inserted}   Updated : ${debtRes.updated}\n\nSkipped : ${skipped.length}` + skipLines
   );
 }
 

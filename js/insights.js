@@ -515,17 +515,14 @@ function renderInsightsTab(container, agg, filtered, rawData) {
 const ENTRIES = [
   { catId: 1, catName: 'Indian EQ MF',              bucketId: 1, stream: STREAMS.equity_mf,               subcatName: null },
   { catId: 2, catName: 'Indian Equity Stocks',      bucketId: 1, stream: STREAMS.indian_stocks,            subcatName: null },
-  { catId: 3, catName: 'US Equity (IndMoney)',           bucketId: 1, stream: STREAMS.us_stocks,                subcatName: null },
   { catId: 4, catName: 'Real Estate',                bucketId: 1, stream: STREAMS.real_estate,              subcatName: null },
   { catId: 5, catName: 'Debt & Hybrid MF',           bucketId: 2, stream: STREAMS.debt_hybrid_mf,           subcatName: null },
-  { catId: 6, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
-  { catId: 6, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
-  { catId: 7, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto,                   subcatName: null },
-  { catId: 8,  catName: 'Indian EQ MF SIP',     bucketId: 1, stream: STREAMS.equity_sip,      subcatName: null },
-  { catId: 9,  catName: 'Debt & Hybrid MF SIP', bucketId: 2, stream: STREAMS.debt_hybrid_sip, subcatName: null },
-  { catId: 10, catName: 'EPF',                  bucketId: 2, stream: STREAMS.epf,              subcatName: null },
-  { catId: 11, catName: 'Bank Accounts',         bucketId: 2, stream: STREAMS.bank_accounts,   subcatName: null },
-  { catId: 12, catName: 'US Equity',             bucketId: 1, stream: STREAMS.us_equity_ibkr,  subcatName: null },
+  { catId: 8, catName: 'Precious Metals (Digital)',  bucketId: 3, stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
+  { catId: 8, catName: 'Precious Metals (Physical)', bucketId: 3, stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
+  { catId: 9, catName: 'Cryptocurrency',              bucketId: 3, stream: STREAMS.crypto,                   subcatName: null },
+  { catId: 6, catName: 'EPF',                  bucketId: 2, stream: STREAMS.epf,              subcatName: null },
+  { catId: 7, catName: 'Bank Accounts',         bucketId: 2, stream: STREAMS.bank_accounts,   subcatName: null },
+  { catId: 3, catName: 'US Equity',             bucketId: 1, stream: STREAMS.us_equity_ibkr,  subcatName: null },
 ];
 
 async function fetchAllInsightsData() {
@@ -928,21 +925,18 @@ function buildMetricStrip(agg) {
 const CAT_ICONS = {
   'Indian EQ MF':              '📊',
   'Indian Equity Stocks':      '📈',
-  'US Equity (IndMoney)':      '🏦',
   'US Equity':                 '🇺🇸',
   'Real Estate':               '🏠',
   'Debt & Hybrid MF':          '🛡️',
   'Precious Metals (Digital)': '✨',
   'Precious Metals (Physical)':'🥇',
   'Cryptocurrency':            '₿',
-  'Indian EQ MF SIP':          '🔄',
-  'Debt & Hybrid MF SIP':      '🔄',
 };
 
 const LIQUIDITY_TIERS = [
   { label: 'Instant',  color: '#8b5cf6', cats: ['Cryptocurrency'] },
   { label: '1 Day',    color: '#22c55e', cats: ['Indian Equity Stocks'] },
-  { label: '3-5 Days', color: '#3b82f6', cats: ['Indian EQ MF', 'Debt & Hybrid MF', 'US Equity (IndMoney)', 'US Equity', 'Precious Metals (Digital)'] },
+  { label: '3-5 Days', color: '#3b82f6', cats: ['Indian EQ MF', 'Debt & Hybrid MF', 'US Equity', 'Precious Metals (Digital)'] },
   { label: 'Weeks',    color: '#f59e0b', cats: ['Precious Metals (Physical)'] },
   { label: 'Months+',  color: '#ef4444', cats: ['Real Estate'] },
 ];
@@ -954,25 +948,19 @@ const CURRENCY_MAP = {
   'Precious Metals (Digital)': 'INR',
   'Precious Metals (Physical)':'INR',
   'Real Estate':               'INR',
-  'US Equity (IndMoney)':      'USD',
   'US Equity':                 'USD',
   'Cryptocurrency':            'Crypto',
-  'Indian EQ MF SIP':          'INR',
-  'Debt & Hybrid MF SIP':      'INR',
 };
 
 const TAX_CONFIG = {
   'Indian EQ MF':              { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
   'Indian Equity Stocks':      { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
-  'US Equity (IndMoney)':      { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
   'US Equity':                 { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
   'Debt & Hybrid MF':          { ltcgMonths: null, rate: 'income', note: 'Taxed as income' },
   'Precious Metals (Digital)': { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
   'Precious Metals (Physical)':{ ltcgMonths: 36, ltcgRate: 0.20, stcgRate: 0.30 },
   'Real Estate':               { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
   'Cryptocurrency':            { ltcgMonths: null, rate: 0.30, note: 'Flat 30%' },
-  'Indian EQ MF SIP':          { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
-  'Debt & Hybrid MF SIP':      { ltcgMonths: null, rate: 'income', note: 'Taxed as income' },
 };
 
 // ── Stream-wise P&L table ─────────────────────────────────────────────────────
@@ -2253,7 +2241,7 @@ function buildHealthCheck(agg, filtered, rawData) {
   }
 
   // Core vs Satellite
-  const SATELLITE = new Set(['Cryptocurrency', 'US Equity', 'US Equity (IndMoney)']);
+  const SATELLITE = new Set(['Cryptocurrency', 'US Equity']);
   let satVal = 0;
   Object.entries(agg.byCategory).forEach(([name, c]) => { if (SATELLITE.has(name)) satVal += cv(c); });
   satVal += cv(agg.bySubcat['Small Cap'] || {});
@@ -2317,7 +2305,7 @@ function drawCoreSatellite(divId, agg) {
   const wrap = document.getElementById(divId);
   if (!wrap) return;
   const cv = c => (c && c.currentValue > 0) ? c.currentValue : (c && c.netCost) || 0;
-  const SATELLITE = new Set(['Cryptocurrency', 'US Equity', 'US Equity (IndMoney)']);
+  const SATELLITE = new Set(['Cryptocurrency', 'US Equity']);
 
   let core = 0, sat = 0;
   Object.entries(agg.byCategory).forEach(([name, c]) => {
@@ -2464,14 +2452,9 @@ function renderPlanTab(container, agg, filtered, rawData) {
   container.appendChild(buildContribGrowthCard(agg));
   const proj = buildCorpusProjectionCard(agg);
   container.appendChild(proj.card);
-  const sipCard = document.createElement('div');
-  sipCard.className = 'chart-card chart-card-full';
-  sipCard.innerHTML = '<div class="chart-card-title">SIP Plan &amp; Cashflow</div><div id="plan-sip"><p class="chart-empty">Loading SIP plan…</p></div>';
-  container.appendChild(sipCard);
   requestAnimationFrame(() => {
     drawContribGrowthChart(agg);
     proj.init();
-    buildSipPlan(document.getElementById('plan-sip'));
   });
 }
 
@@ -2572,68 +2555,4 @@ function buildCorpusProjectionCard(agg) {
   }
   card.querySelectorAll('.proj-inputs input').forEach(el => el.addEventListener('input', recompute));
   return { card, init: recompute };
-}
-
-// ── SIP Plan & Cashflow ───────────────────────────────────────────────────────
-async function buildSipPlan(host) {
-  if (!host) return;
-  const today = new Date().toISOString().slice(0, 10);
-  const sources = [];
-  if (typeof STREAMS !== 'undefined') {
-    if (STREAMS.equity_sip)      sources.push({ label: 'EQ MF', stream: STREAMS.equity_sip });
-    if (STREAMS.debt_hybrid_sip) sources.push({ label: 'Debt',  stream: STREAMS.debt_hybrid_sip });
-  }
-  if (!sources.length) { host.innerHTML = '<p class="chart-empty">No SIP streams configured.</p>'; return; }
-  try {
-    const tables = [...new Set(sources.flatMap(s => [s.stream.sipEventsTable, s.stream.assetTable]))];
-    let res = {};
-    try { res = await API.batchGet(tables); }
-    catch (_) { const rr = await Promise.allSettled(tables.map(async t => [t, await API.get(t, { limit: 3000 })])); rr.forEach(x => { if (x.status === 'fulfilled') res[x.value[0]] = x.value[1]; }); }
-
-    const active = [];
-    sources.forEach(src => {
-      const st = src.stream;
-      const events = (res[st.sipEventsTable]?.rows || []).slice().sort((a, b) => String(b.effective_date).localeCompare(String(a.effective_date)));
-      const funds = res[st.assetTable]?.rows || [];
-      const fmap = {}, amap = {};
-      funds.forEach(f => { fmap[String(f.id)] = f[st.assetNameCol] || f.fund_name || String(f.id); amap[String(f.id)] = f.account_id; });
-      const seen = new Set();
-      events.forEach(ev => {
-        if (String(ev.effective_date).slice(0, 10) > today) return;      // future — ignore
-        const key = String(ev.fund_id) + '|' + String(ev.reason_id);
-        if (seen.has(key)) return; seen.add(key);                        // only the latest per fund+reason
-        if (String(ev.event_type) === 'STOP') return;                    // latest is a STOP → not active
-        const acct = amap[String(ev.fund_id)];
-        if (typeof ACCOUNTS !== 'undefined' && !ACCOUNTS.matches(acct)) return;
-        active.push({ amount: parseFloat(ev.amount) || 0, sip_date: ev.sip_date, event_type: ev.event_type || '—',
-                      account: acct, fundName: fmap[String(ev.fund_id)] || ('#' + ev.fund_id) });
-      });
-    });
-
-    if (!active.length) { host.innerHTML = '<p class="chart-empty">No active SIPs for this view.</p>'; return; }
-
-    const total = active.reduce((s, a) => s + a.amount, 0);
-    const byType = {}, byAcct = {}, byDay = {};
-    active.forEach(a => {
-      byType[a.event_type] = (byType[a.event_type] || 0) + a.amount;
-      const an = (typeof ACCOUNTS !== 'undefined') ? (ACCOUNTS.name(a.account) || 'Unassigned') : 'All';
-      byAcct[an] = (byAcct[an] || 0) + a.amount;
-      const d = a.sip_date ? String(a.sip_date) : '—';
-      byDay[d] = (byDay[d] || 0) + a.amount;
-    });
-    const chip = (label, val, color) => '<span class="sipplan-chip" style="border-color:' + color + '55;color:' + color + '"><b>' + label + '</b> ' + fmtCurrency(val) + '</span>';
-    const typeHtml = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, v], i) => chip(t, v, CAT_COLORS[i % CAT_COLORS.length])).join('');
-    const acctHtml = Object.entries(byAcct).sort((a, b) => b[1] - a[1]).map(([t, v], i) => chip(t, v, ['#7fa8d9', '#dcae5e', '#7fc99a', '#c58fd6'][i % 4])).join('');
-    const days = Object.keys(byDay).sort((a, b) => (a === '—' ? 99 : parseInt(a)) - (b === '—' ? 99 : parseInt(b)));
-    const dayHtml = days.map(d => '<div class="sipplan-day"><span class="sipplan-day-n">' + (d === '—' ? 'No day' : d) + '</span><span class="sipplan-day-v">' + fmtCurrency(byDay[d]) + '</span></div>').join('');
-
-    host.innerHTML =
-      '<div class="sipplan-total">Total monthly SIP: <b>' + fmtCurrency(total) + '</b> <span>· ' + active.length + ' active</span></div>' +
-      '<div class="sipplan-row"><span class="sipplan-lbl">By type</span><div class="sipplan-chips">' + typeHtml + '</div></div>' +
-      '<div class="sipplan-row"><span class="sipplan-lbl">By account</span><div class="sipplan-chips">' + acctHtml + '</div></div>' +
-      '<div class="sipplan-cal-title">Monthly cashflow (by SIP day)</div>' +
-      '<div class="sipplan-cal">' + dayHtml + '</div>';
-  } catch (e) {
-    host.innerHTML = '<p class="chart-empty">Couldn\'t load SIP plan: ' + (e && e.message ? e.message : e) + '</p>';
-  }
 }

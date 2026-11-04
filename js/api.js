@@ -203,12 +203,8 @@ const HIDDEN = {
   isCat(id)           { return this._hit('category', id); },
   isSub(id)           { return this._hit('subcategory', id); },
   isAsset(table, id)  { return this._hit('asset', `${table}|${id}`); },
-  // SIP reasons/types are shared config (not per-account) — always hidden globally.
-  isReason(table, id) { return this._hit('sip_reason', `${table}|${id}`); },
-  isType(name)        { return this._hit('sip_type', name); },
 
-  // forceGlobal=true stores the hide with an empty account (applies to every view),
-  // used for shared config like SIP reasons/types.
+  // forceGlobal=true stores the hide with an empty account (applies to every view).
   async hide(kind, ref, name, forceGlobal = false) {
     ref = String(ref);
     const account = forceGlobal ? '' : this._scope();
@@ -266,18 +262,19 @@ function buildManualPricesMap(rows) {
 
 const LSC = {
   TTL: 30 * 60 * 1000,
+  PREFIX: 'vz_v2_',   // bump when cached shapes/ids change (v2: range-scheme category ids)
   get(key) {
     try {
-      const raw = localStorage.getItem('vz_' + key);
+      const raw = localStorage.getItem(this.PREFIX + key);
       if (!raw) return null;
       const { data, ts } = JSON.parse(raw);
       return (Date.now() - ts) < this.TTL ? data : null;
     } catch (_) { return null; }
   },
   set(key, data) {
-    try { localStorage.setItem('vz_' + key, JSON.stringify({ data, ts: Date.now() })); } catch (_) {}
+    try { localStorage.setItem(this.PREFIX + key, JSON.stringify({ data, ts: Date.now() })); } catch (_) {}
   },
   clear(...keys) {
-    keys.forEach(k => { try { localStorage.removeItem('vz_' + k); } catch (_) {} });
+    keys.forEach(k => { try { localStorage.removeItem(this.PREFIX + k); } catch (_) {} });
   },
 };

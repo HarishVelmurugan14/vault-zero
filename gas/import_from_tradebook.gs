@@ -1,36 +1,38 @@
 /**
  * VaultZero — Import equity/debt transactions from a Zerodha Tradebook CSV into a
- * chosen VaultZero account (Self, Oppurtunity, Mother, Future Wife, …).
+ * chosen VaultZero account (Self, Thulasi, Harini, …).
+ *
+ * ⚠️ LIVES IN THE TRADEBOOK APPS SCRIPT PROJECT (bound to the Tradebook sheet), together with
+ * import_from_coin.gs — NOT in the VaultZero project. It READS VaultZero directly (fund lists)
+ * but WRITES only through the VaultZero web app (action upsertBySourceRef), so every row
+ * passes VaultZero's constraints, write lock and id sequence (gas/schema.gs there).
+ *
+ * ONE-TIME SETUP (in this project): run setVaultZeroApiToken('<the same API key the app uses>').
  *
  * HOW TO USE:
  *   1. Paste one tradebook CSV into the "Tradebook" (or "Sheet1") tab (A1, incl. header)
  *   2. Run importTradebook()  → prompts which account,
- *      or run importTradebook_Self() / _Oppurtunity() / _Mother() / _FutureWife().
+ *      or run importTradebook_Self() / _Thulasi() / _Harini().
  *   3. Clear the tab, paste the next CSV, run again.
  *
  * WHY per-account: a transaction's account is derived from its fund_id
  * (fund → fund.account_id), so each account needs its OWN fund rows in VaultZero.
  *
  * PER-PERSON FUND LISTS: each account has its own ISIN → fund map below
- * (ISIN_TO_FUND_A3 = Mother, ISIN_TO_FUND_A4 = Future Wife, …). To add a fund:
+ * (ISIN_TO_FUND_A3 = Thulasi, ISIN_TO_FUND_A4 = Harini, …). To add a fund:
  *   1. In the VaultZero app, switch to that person and add the fund.
  *   2. Copy the new row's `id` from equity_funds / debt_hybrid_funds.
  *   3. Add  'ISIN': { id: <that id>, name: '...' }  to that person's map.
  * Safety check: an id must belong to THAT account, or the row is skipped — so a
- * typo can never drop Mother's trades into your account.
+ * typo can never drop Thulasi's trades into your account.
  *
  * Shortcut: a fund Self also holds can be left out of a person's map — the importer
  * matches it automatically by scheme `code` against that person's own fund rows.
  *
- * Row ids: account 1 uses the raw order_id (preserves existing data); every other
- * account uses `order_id-a<accountId>`. That keeps rows unique when the same order
- * is mirrored (Oppurtunity) AND when two people's demats reuse the same order_id.
- *
- * ⚠️ Mirroring the same trades into two accounts (Self + Oppurtunity) DOUBLE-COUNTS
- * them in "All Accounts". Separate demats (Mother, Future Wife) don't have this issue.
- *
- * Header-aware upsert keyed on the (account-scoped) id: existing → updated
- * (financial fields only, preserving notes/created_at); new → inserted.
+ * Upsert key: source_ref (UNIQUE) = the broker order_id — account 1 uses it raw, every
+ * other account `order_id-a<accountId>`, so two people's demats reusing an order_id stay
+ * distinct. Existing → financial fields updated (notes/created_at kept); new → inserted
+ * with a fresh VaultZero id. ⚠️ Never import the same trades into two accounts.
  */
 
 // ── ISIN catalog = Self's funds (account 1). Also reused by import_from_coin.gs ──
@@ -58,16 +60,7 @@ const DEBT_ISIN_TO_FUND = {
   'INF205K01KR8': { id: 7, name: 'Invesco India Arbitrage' },
 };
 
-// ── Account 2 (Oppurtunity) — mirrors some of Self's funds ────────────────────
-const ISIN_TO_FUND_A2 = {
-  'INF959L01FP2': { id: 22, name: 'Navi Nifty 50 Index' },
-  'INF879O01027': { id: 23, name: 'Parag Parikh Flexi Cap' },
-  'INF843K01AO4': { id: 24, name: 'Edelweiss Mid Cap' },
-  'INF204K01K15': { id: 25, name: 'Nippon India Small Cap' },
-};
-const DEBT_ISIN_TO_FUND_A2 = {};
-
-// ── Account 3 (Mother) — her own funds (ids from her rows in VaultZero) ────────
+// ── Account 3 (Thulasi) — her own funds (ids from her rows in VaultZero) ────────
 const ISIN_TO_FUND_A3 = {
   // 'INF879O01027': { id: 31, name: 'Parag Parikh Flexi Cap' },
 };
@@ -75,7 +68,7 @@ const DEBT_ISIN_TO_FUND_A3 = {
   // 'INF109K01Q49': { id: 11, name: 'ICICI Liquid' },
 };
 
-// ── Account 4 (Future Wife) — her own funds ───────────────────────────────────
+// ── Account 4 (Harini) — her own funds ─────────────────────────────────────────
 const ISIN_TO_FUND_A4 = {
   // 'INF...': { id: 41, name: '...' },
 };
@@ -84,19 +77,18 @@ const DEBT_ISIN_TO_FUND_A4 = {
 };
 
 // Registry: account id → { name, equity, debt }. Add a block + a row per new account.
+// The id must match the person's row in VaultZero's `accounts` tab (create it in the app first).
 const ACCOUNT_MAPS = {
-  1: { name: 'Self',        equity: ISIN_TO_FUND,    debt: DEBT_ISIN_TO_FUND },
-  2: { name: 'Oppurtunity', equity: ISIN_TO_FUND_A2, debt: DEBT_ISIN_TO_FUND_A2 },
-  3: { name: 'Mother',      equity: ISIN_TO_FUND_A3, debt: DEBT_ISIN_TO_FUND_A3 },
-  4: { name: 'Future Wife', equity: ISIN_TO_FUND_A4, debt: DEBT_ISIN_TO_FUND_A4 },
+  1: { name: 'Self',    equity: ISIN_TO_FUND,    debt: DEBT_ISIN_TO_FUND },
+  3: { name: 'Thulasi', equity: ISIN_TO_FUND_A3, debt: DEBT_ISIN_TO_FUND_A3 },
+  4: { name: 'Harini',  equity: ISIN_TO_FUND_A4, debt: DEBT_ISIN_TO_FUND_A4 },
 };
 
 // ── Run these ─────────────────────────────────────────────────────────────────
-function importTradebook_Self()        { importTradebookForAccount(1); }
-function importTradebook_Oppurtunity() { importTradebookForAccount(2); }
-function importTradebook_Mother()      { importTradebookForAccount(3); }
-function importTradebook_FutureWife()  { importTradebookForAccount(4); }
-function importFromTradebook()         { importTradebookForAccount(1); }  // back-compat alias
+function importTradebook_Self()    { importTradebookForAccount(1); }
+function importTradebook_Thulasi() { importTradebookForAccount(3); }
+function importTradebook_Harini()  { importTradebookForAccount(4); }
+function importFromTradebook()     { importTradebookForAccount(1); }  // back-compat alias
 
 // Asks which account (when a UI is available), else defaults to Self.
 function importTradebook() {
@@ -118,21 +110,11 @@ function importTradebookForAccount(accountId) {
 
   const srcSS       = vaultSpreadsheet_();
   const tradebookSh = srcSS.getSheetByName('Tradebook') || srcSS.getSheetByName('Sheet1');
-  const eqSheet     = dataSS.getSheetByName('equity_transactions');
-  const debtSheet   = dataSS.getSheetByName('debt_hybrid_transactions');
-
   if (!tradebookSh) { notify_('Paste the tradebook CSV into a "Tradebook" or "Sheet1" tab, then run again.'); return; }
-  if (!eqSheet)     { notify_('Sheet "equity_transactions" not found.'); return; }
-  if (!debtSheet)   { notify_('Sheet "debt_hybrid_transactions" not found.'); return; }
-
-  ensureHeader(eqSheet);
-  ensureHeader(debtSheet);
-
-  const eqIdToRow   = buildIdMap(eqSheet);
-  const debtIdToRow = buildIdMap(debtSheet);
 
   const rawData = tradebookSh.getDataRange().getValues();
   if (rawData.length < 2) { notify_('Tradebook sheet is empty.'); return; }
+  const srcTz = srcSS.getSpreadsheetTimeZone();
 
   const headerRow = rawData[0].map(c => String(c).trim().toLowerCase());
   const C = {
@@ -150,19 +132,18 @@ function importTradebookForAccount(accountId) {
     return;
   }
 
-  // Account-scoped row id so the same order can live under multiple accounts.
-  // Account 1 keeps the raw order_id (preserves existing Self rows).
-  const idFor = oid => (String(accountId) === '1' ? oid : oid + '-a' + accountId);
+  // Account-scoped source_ref so the same order id can live under multiple accounts.
+  // Account 1 keeps the raw order_id (matches existing Self rows).
+  const refFor = oid => (String(accountId) === '1' ? oid : oid + '-a' + accountId);
 
-  const eq   = { toInsert: [], toUpdate: [] };
-  const debt = { toInsert: [], toUpdate: [] };
+  const eq = [], debt = [];
   const skipped = [];
 
   for (let i = 1; i < rawData.length; i++) {
     const row     = rawData[i].map(c => String(c).trim());
     const isin    = row[C.isin];
     const symbol  = row[C.symbol];
-    const dateStr = row[C.date];
+    const dateStr = cellDateISO_(rawData[i][C.date], srcTz) || row[C.date];
     const type    = (row[C.type] || '').toLowerCase();
     const auction = C.auction >= 0 ? (row[C.auction] || '').toLowerCase() : 'false';
     const qty     = parseFloat(row[C.qty]);
@@ -179,34 +160,33 @@ function importTradebookForAccount(accountId) {
     const txnType = type === 'sell' ? 'Sell' : 'Buy';
     const amount  = Math.round(qty * price * 100) / 100;
     const dateMs  = new Date(dateStr).getTime();
-    const rowId   = idFor(orderId);
-    const managed = { id: rowId, txn_type: txnType, txn_date: dateStr, units: qty, nav: price, amount };
+    const managed = { source_ref: refFor(orderId), txn_type: txnType, txn_date: dateStr, units: qty, nav: price, amount };
 
     const eqFund = acct.equity[isin];
     if (eqFund) {
       managed.fund_id = eqFund.id;
-      pushUpsert(eq, eqIdToRow, rowId, eqFund.id, managed, dateMs);
+      pushUpsert(eq, eqFund.id, managed, dateMs);
       continue;
     }
     const debtFund = acct.debt[isin];
     if (debtFund) {
       managed.fund_id = debtFund.id;
-      pushUpsert(debt, debtIdToRow, rowId, debtFund.id, managed, dateMs);
+      pushUpsert(debt, debtFund.id, managed, dateMs);
       continue;
     }
     skipped.push({ line: i + 1, symbol, isin, reason: acct.unmappedReason(isin) });
   }
 
-  upsertRows(eqSheet, eq.toUpdate, eq.toInsert);
-  upsertRows(debtSheet, debt.toUpdate, debt.toInsert);
+  const eqRes   = vzApiUpsert_('equity_transactions', eq);
+  const debtRes = vzApiUpsert_('debt_hybrid_transactions', debt);
 
   const skipLines = skipped.length
     ? '\n\nSkipped:\n' + skipped.slice(0, 8).map(s => `• Line ${s.line}: ${s.symbol} — ${s.reason}`).join('\n') +
       (skipped.length > 8 ? `\n… and ${skipped.length - 8} more` : '')
     : '';
   notify_(
-    `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
-    `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
+    `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eqRes.inserted}   Updated : ${eqRes.updated}\n\n` +
+    `debt_hybrid_transactions\n  Inserted : ${debtRes.inserted}   Updated : ${debtRes.updated}\n\nSkipped : ${skipped.length}` + skipLines
   );
 }
 
@@ -279,17 +259,53 @@ function accountOptions_() {
 
 // ── Shared helpers (used by import_from_coin.gs too) ──────────────────────────
 
-// Build an upsert entry. Inserts add notes/created_at defaults; updates carry only
-// the managed (financial) fields so any other columns are preserved.
-function pushUpsert(bucket, idToRow, rowId, fundId, managed, dateMs, notes) {
-  if (idToRow[rowId]) {
-    bucket.toUpdate.push({ sheetRow: idToRow[rowId], fields: managed });
-  } else {
-    bucket.toInsert.push({
-      dateMs, fundId,
-      fields: Object.assign({}, managed, { notes: notes || '', created_at: new Date() }),
-    });
-  }
+// Queue one row for the VaultZero upsert. `fields` are written on insert AND update;
+// `onInsert` only on insert (so notes typed later in VaultZero are never overwritten).
+function pushUpsert(list, fundId, managed, dateMs, notes) {
+  list.push({ dateMs, fundId, fields: managed, onInsert: { notes: notes || '' } });
+}
+
+// VaultZero web app (same URL as js/config.js). Writes go through it — never directly.
+const VZ_API_URL = 'https://script.google.com/macros/s/AKfycbwv8qssFUIA0aUDSDCrQ1CBWbVHM-Y0nFMO5ViruYshTJFJXuxYfu240Vb8MRsrIVPO/exec';
+
+// Run once in this project: setVaultZeroApiToken('<the API key you use in the VaultZero app>')
+function setVaultZeroApiToken(token) {
+  PropertiesService.getScriptProperties().setProperty('VZ_API_TOKEN', String(token || '').trim());
+  Logger.log('VZ_API_TOKEN ' + (token ? 'set' : 'cleared'));
+}
+
+// Send one table's rows to VaultZero. Rows are sent oldest-first so new ids follow trade
+// order. VaultZero validates the whole batch: one bad row → nothing is written, and the
+// constraint error is thrown here.
+function vzApiUpsert_(table, list) {
+  if (!list.length) return { inserted: 0, updated: 0 };
+  list.sort((a, b) => a.dateMs - b.dateMs || a.fundId - b.fundId);
+  const res = UrlFetchApp.fetch(VZ_API_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      action: 'upsertBySourceRef',
+      sheet: table,
+      rows: list.map(x => ({ fields: x.fields, onInsert: x.onInsert })),
+      token: PropertiesService.getScriptProperties().getProperty('VZ_API_TOKEN') || '',
+    }),
+  });
+  let body;
+  try { body = JSON.parse(res.getContentText()); }
+  catch (e) { throw new Error('VaultZero returned a non-JSON response (HTTP ' + res.getResponseCode() + ')'); }
+  if (body.error === 'unauthorized') throw new Error('VaultZero rejected the API key — run setVaultZeroApiToken(...) with the key the app uses.');
+  if (body.error) throw new Error(table + ': ' + body.error);
+  return body;
+}
+
+// A source sheet often auto-converts its date column to real Date cells. String()
+// on those gives "Mon Jun 01 2026 00:00:00 GMT+0530 (India Standard Time)", which
+// used to be written into txn_date as TEXT. Returns 'yyyy-MM-dd' for a Date cell
+// (in the source sheet's timezone, so the calendar day is preserved), else null.
+function cellDateISO_(cell, tz) {
+  if (!(cell instanceof Date) || isNaN(cell.getTime())) return null;
+  return Utilities.formatDate(cell, tz, 'yyyy-MM-dd');
 }
 
 const VAULTZERO_ID_ = '1R4yXbxb6YgXh-rDqnnw3iWOZe2ABcYMD96iN5hvDi5A';
@@ -303,7 +319,7 @@ function vaultSpreadsheet_() {
   return SpreadsheetApp.openById(VAULTZERO_ID_);
 }
 
-// The VaultZero database — always the same spreadsheet, regardless of where you run from.
+// The VaultZero database — read-only from here (fund lists). Writes go via vzApiUpsert_.
 function vaultDataSpreadsheet_() {
   return SpreadsheetApp.openById(VAULTZERO_ID_);
 }
@@ -312,47 +328,4 @@ function vaultDataSpreadsheet_() {
 // with "Cannot call SpreadsheetApp.getUi() from this context".
 function notify_(msg) {
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) { Logger.log(msg); }
-}
-
-function getHeaders(sheet) {
-  return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
-}
-
-function ensureHeader(sheet) {
-  if (String(sheet.getRange(1, 1).getValue()).trim() !== 'id') {
-    throw new Error(`Sheet "${sheet.getName()}" is missing its header row (A1 should be 'id'). Run setupAllSheets first.`);
-  }
-}
-
-function buildIdMap(sheet) {
-  const data = sheet.getDataRange().getValues();
-  const idToRow = {};
-  for (let i = 1; i < data.length; i++) {
-    const oid = String(data[i][0]).trim();
-    if (oid) idToRow[oid] = i + 1;
-  }
-  return idToRow;
-}
-
-// Header-aware upsert. Update overwrites only managed fields (preserves goal_id/notes/created_at).
-function upsertRows(sheet, toUpdate, toInsert) {
-  const headers = getHeaders(sheet);
-  const width = headers.length;
-
-  for (const u of toUpdate) {
-    const existing = sheet.getRange(u.sheetRow, 1, 1, width).getValues()[0];
-    const merged = headers.map((h, i) => (u.fields[h] !== undefined ? u.fields[h] : existing[i]));
-    sheet.getRange(u.sheetRow, 1, 1, width).setValues([merged]);
-  }
-
-  toInsert.sort((a, b) => a.dateMs - b.dateMs || a.fundId - b.fundId);
-  for (const ins of toInsert) {
-    sheet.appendRow(headers.map(h => (ins.fields[h] !== undefined ? ins.fields[h] : '')));
-  }
-
-  const dateCol = headers.indexOf('txn_date') + 1;
-  const totalRows = sheet.getLastRow() - 1;
-  if (dateCol > 0 && totalRows > 0) {
-    sheet.getRange(2, dateCol, totalRows, 1).setNumberFormat('yyyy-mm-dd');
-  }
 }

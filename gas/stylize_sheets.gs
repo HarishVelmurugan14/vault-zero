@@ -2,7 +2,7 @@
  * VaultZero — one-time COSMETIC styling for the backend spreadsheet.
  *
  * Applies tab colors, header shading, subtle row banding and frozen headers,
- * colour-grouped by category (Indian EQ MF, Debt, US Equity, SIP, Screener, …).
+ * colour-grouped by category (Indian EQ MF, Debt, US Equity, Screener, …).
  * FORMATTING ONLY — it never reads or writes a single cell value, so your data
  * is untouched. Safe to re-run; use resetVaultZeroStyles() to revert.
  *
@@ -14,11 +14,8 @@
 var VZ_STYLE = {
   reference:  { tab: '#B0B7C3', header: '#E8EAED', band: '#F5F6F8' }, // buckets/categories/accounts/…
   eqmf:       { tab: '#8FB0DD', header: '#DCE8F6', band: '#F2F7FC' }, // Indian EQ MF
-  eqsip:      { tab: '#9E97E2', header: '#E3E1F8', band: '#F5F4FC' }, // EQ SIP
   debt:       { tab: '#8FCBA1', header: '#DEEFE3', band: '#F3FAF5' }, // Debt & Hybrid
-  debtsip:    { tab: '#83CCC1', header: '#DDEEEB', band: '#F2FBF9' }, // Debt SIP
   stocks:     { tab: '#80C6D2', header: '#D8EDF1', band: '#F1FAFB' }, // Indian Equity Stocks
-  usind:      { tab: '#AE95D5', header: '#E9E0F3', band: '#F8F4FC' }, // US Equity (IndMoney)
   usibkr:     { tab: '#A28FDA', header: '#E4DCF4', band: '#F6F3FC' }, // US Equity (IBKR) + wires/repat/income
   metals:     { tab: '#DCBD79', header: '#F5ECD9', band: '#FCF8EE' }, // Precious Metals
   crypto:     { tab: '#E3AD7F', header: '#F7E6D8', band: '#FDF6EF' }, // Cryptocurrency
@@ -32,12 +29,9 @@ function vzGroupFor_(name) {
   var n = name.toLowerCase();
   if (name.charAt(0) === '_') return 'scratch';
   if (n.indexOf('screener') === 0)                 return 'screener';
-  if (n.indexOf('equity_sip') === 0)               return 'eqsip';
   if (n.indexOf('equity_') === 0)                  return 'eqmf';      // equity_funds / equity_transactions
-  if (n.indexOf('debt_sip') === 0)                 return 'debtsip';
   if (n.indexOf('debt_hybrid') === 0)              return 'debt';
   if (n.indexOf('indian_equity_stocks') === 0)     return 'stocks';
-  if (n.indexOf('us_eq_indmoney') === 0)           return 'usind';
   if (n.indexOf('us_equity') === 0 || n.indexOf('us_wire') === 0 ||
       n.indexOf('us_repat') === 0 || n.indexOf('us_income') === 0) return 'usibkr';
   if (n.indexOf('precious_metal') === 0)           return 'metals';

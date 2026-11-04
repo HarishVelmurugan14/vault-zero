@@ -290,14 +290,6 @@ function renderSubcategories(page) {
 async function startLogForm() {
   STATE.stream = STATE.stream || resolveStream(STATE.category, STATE.subcategory?.name);
 
-  if (STATE.stream?.isSIPStream) {
-    const container = document.getElementById('log-content');
-    container.innerHTML = '';
-    setHeader('log-content', STATE.category.name, () => renderCategories('log'));
-    await renderSIPPage(container, STATE.stream);
-    return;
-  }
-
   if (STATE.stream?.staticBalance) {
     const container = document.getElementById('log-content');
     container.innerHTML = '';
@@ -489,7 +481,7 @@ function streamCategory(streamKey) {
 }
 
 // Every stream that has a real transaction table with a txn_date column.
-// SIP streams (no txnTable) and static-balance streams (txnTable: null) have no
+// Static-balance streams (EPF / Bank, txnTable: null) have no
 // per-txn log, so they're naturally excluded. Hidden categories are skipped.
 function recentTxnStreams() {
   const seen = new Set();
@@ -593,7 +585,7 @@ function renderRecentList(area, results, nDays) {
   area.innerHTML = '';
 
   const cats = new Set(results.map(r => r.catName));
-  const IN = ['Buy', 'SIP', 'BUY'], OUT = ['Sell', 'SWP', 'SELL'];
+  const IN = ['Buy', 'BUY'], OUT = ['Sell', 'SELL'];
   let inAmt = 0, outAmt = 0;
   results.forEach(({ txn }) => {
     const amt = parseFloat(txn.amount_inr || txn.amount || 0) || 0;
@@ -850,8 +842,8 @@ function renderHistorySummary(el, rows, stream) {
   const qtyField = stream.txnFields?.find(f => ['units', 'quantity'].includes(f.id));
   const qtyCol   = qtyField?.id || null;
   const amtCol   = stream.amountCol || 'amount';
-  const BUY      = ['Buy', 'SIP'];
-  const SELL     = ['Sell', 'SWP'];
+  const BUY      = ['Buy'];
+  const SELL     = ['Sell'];
 
   // Per-asset aggregation so current value is computed correctly across assets
   const byAsset = {};

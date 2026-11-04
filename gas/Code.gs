@@ -64,6 +64,8 @@ function doPost(e) {
     if (!checkToken(payload.token)) return respond({ error: 'unauthorized' });
 
     if (!sheet) return respond({ error: 'sheet required' }, 400);
+    // Only VaultZero tables (gas/schema.gs) are writable — StockIQ / staging tabs are not.
+    if (!VZ_SCHEMA[sheet]) return respond({ error: 'writes are not allowed to "' + sheet + '"' }, 400);
 
     if (action === 'insert') {
       const newId = appendRow(sheet, row);
@@ -71,12 +73,12 @@ function doPost(e) {
     }
 
     if (action === 'update') {
-      updateRow(sheet, id, row);
+      updateRows(sheet, [{ id, data: row }]);
       return respond({ success: true });
     }
 
     if (action === 'batchUpdate') {
-      rows.forEach(r => updateRow(sheet, r.id, r.data));
+      updateRows(sheet, rows);          // all rows validated before any is written
       return respond({ success: true });
     }
 
@@ -85,9 +87,10 @@ function doPost(e) {
       return respond({ success: true });
     }
 
-    if (action === 'seed') {
-      seedSheet(sheet, row);
-      return respond({ success: true });
+    // Used by the Coin / Tradebook importers (separate Apps Script project) so every
+    // write to VaultZero goes through this one constrained, locked path.
+    if (action === 'upsertBySourceRef') {
+      return respond(upsertBySourceRef(sheet, rows));
     }
 
     return respond({ error: 'unknown action' }, 400);
@@ -127,74 +130,187 @@ function readSheet(sheetName, limit, offset, filters) {
   return { rows, total };
 }
 
+// Every write takes the script lock (one writer at a time) and is checked against the
+// constraints in schema.gs before anything touches the sheet.
+function withWriteLock_(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+
 function appendRow(sheetName, row) {
   const ss = getSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) throw new Error('Sheet not found: ' + sheetName);
 
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  return withWriteLock_(() => {
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
 
-  // Auto-increment id
-  const lastRow = sheet.getLastRow();
-  const newId = lastRow <= 1 ? 1 : sheet.getRange(lastRow, 1).getValue() + 1;
-  row.id = newId;
-  row.created_at = new Date().toISOString();
+    // PRIMARY KEY: next value of the table's sequence (never reuses a deleted id), assigned
+    // here — never by the client.
+    const idCol = headers.indexOf('id');
+    const lastRow = sheet.getLastRow();
+    let maxId = 0;
+    if (idCol >= 0 && lastRow > 1) {
+      sheet.getRange(2, idCol + 1, lastRow - 1, 1).getValues().forEach(r => {
+        const v = Number(r[0]);
+        if (isFinite(v) && v > maxId) maxId = v;
+      });
+    }
+    const newId = vzNextId_(sheetName, maxId);
+    row.id = newId;
+    row.created_at = new Date().toISOString();
 
-  const rowData = headers.map(h => row[h] !== undefined ? row[h] : '');
-  sheet.appendRow(rowData);
-  const newRowNum = sheet.getLastRow();
-  writePriceFormula(sheet, sheetName, headers, newRowNum);
-  return newId;
+    const rowData = headers.map(h => row[h] !== undefined ? row[h] : '');
+    const stored = {};
+    headers.forEach((h, i) => { stored[h] = rowData[i]; });
+    vzAssertRow_(vzCtx_(ss), sheetName, stored, null);
+
+    sheet.appendRow(vzCoerceDates_(sheetName, headers.map(h => String(h).trim()), [rowData], ss.getSpreadsheetTimeZone())[0]);
+    const newRowNum = sheet.getLastRow();
+    writePriceFormula(sheet, sheetName, headers, newRowNum);
+    SpreadsheetApp.flush();   // commit before the next waiting insert reads MAX(id)
+    return newId;
+  });
 }
 
-function updateRow(sheetName, id, updates) {
+// updates: [{ id, data }]. Validates every merged row first; writes only if all pass.
+function updateRows(sheetName, updates) {
   const ss = getSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) throw new Error('Sheet not found: ' + sheetName);
 
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const idCol = headers.indexOf('id');
+  withWriteLock_(() => {
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const idCol = headers.indexOf('id');
+    const ctx = vzCtx_(ss);
+    const writes = [];
 
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][idCol] == id) {
+    (updates || []).forEach(u => {
+      const rowIdx = data.findIndex((r, i) => i > 0 && vzKey_(r[idCol]) === vzKey_(u.id));
+      if (rowIdx < 0) throw new Error('Row not found: id=' + u.id);
+      const fields = u.data || {};
+      if (fields.id !== undefined && vzKey_(fields.id) !== vzKey_(u.id)) throw new Error('id is immutable (id=' + u.id + ')');
+      const merged = {};
+      headers.forEach((h, j) => { merged[h] = fields[h] !== undefined ? fields[h] : data[rowIdx][j]; });
+      vzAssertRow_(ctx, sheetName, merged, u.id);
+      ctx.replace(sheetName, u.id, merged);
       headers.forEach((h, j) => {
-        if (updates[h] !== undefined) {
-          sheet.getRange(i + 1, j + 1).setValue(updates[h]);
-        }
+        if (h === 'id' || fields[h] === undefined) return;
+        const v = vzCoerceDates_(sheetName, [String(h).trim()], [[fields[h]]], ss.getSpreadsheetTimeZone())[0][0];
+        writes.push([rowIdx + 1, j + 1, v]);
       });
-      return;
-    }
-  }
-  throw new Error('Row not found: id=' + id);
+    });
+
+    writes.forEach(([r, c, v]) => sheet.getRange(r, c).setValue(v));
+    SpreadsheetApp.flush();
+  });
 }
 
+// Importer upsert keyed on source_ref (the broker order id).
+// items: [{ fields: {...}, onInsert: {...} }] — `fields` are the managed columns written on
+// both insert and update; `onInsert` (e.g. notes) only on insert. Existing rows keep their
+// id / created_at; new rows get the next sequence id. Every row is validated before
+// anything is written. Returns { inserted, updated }.
+function upsertBySourceRef(sheetName, items) {
+  const spec = VZ_SCHEMA[sheetName];
+  if (!spec || !(spec.unique || []).some(u => (Array.isArray(u) ? u : u.cols).join() === 'source_ref')) {
+    throw new Error('upsertBySourceRef only works on tables with a UNIQUE source_ref');
+  }
+  const ss = getSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) throw new Error('Sheet not found: ' + sheetName);
+
+  return withWriteLock_(() => {
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0].map(h => String(h).trim());
+    const refCol = headers.indexOf('source_ref'), idCol = headers.indexOf('id');
+    if (refCol < 0) throw new Error(sheetName + ' has no source_ref column — run cleanupVaultZeroApply() first.');
+    const tz = ss.getSpreadsheetTimeZone();
+    const ctx = vzCtx_(ss);
+
+    const byRef = {};
+    let maxId = 0;
+    for (let i = 1; i < data.length; i++) {
+      const k = vzKey_(data[i][refCol]);
+      if (k) byRef[k] = i;
+      const v = Number(data[i][idCol]);
+      if (isFinite(v) && v > maxId) maxId = v;
+    }
+
+    const seen = {};
+    const inserts = [];
+    let updated = 0;
+    (items || []).forEach(it => {
+      const f = it.fields || {};
+      const ref = vzKey_(f.source_ref);
+      if (!ref) throw new Error('Constraint violation in ' + sheetName + ': source_ref is required');
+      if (seen[ref]) throw new Error('Constraint violation in ' + sheetName + ': UNIQUE (source_ref) = (' + ref + ') appears twice in this import');
+      seen[ref] = true;
+      const rowIdx = byRef[ref];
+      if (rowIdx !== undefined) {
+        const merged = headers.map((h, j) => (h === 'id' || h === 'created_at' || f[h] === undefined) ? data[rowIdx][j] : f[h]);
+        const obj = vzRowObj_(headers, merged);
+        vzAssertRow_(ctx, sheetName, obj, obj.id);
+        ctx.replace(sheetName, obj.id, obj);
+        data[rowIdx] = merged;
+        updated++;
+      } else {
+        maxId = vzNextId_(sheetName, maxId);
+        const all = Object.assign({}, it.onInsert || {}, f, { id: maxId, created_at: new Date().toISOString() });
+        const arr = headers.map(h => (all[h] !== undefined ? all[h] : ''));
+        const obj = vzRowObj_(headers, arr);
+        vzAssertRow_(ctx, sheetName, obj, null);
+        ctx.add(sheetName, obj);
+        inserts.push(arr);
+      }
+    });
+
+    // One block write for updates (transaction tabs hold no formulas), one for inserts.
+    if (updated) sheet.getRange(2, 1, data.length - 1, headers.length).setValues(vzCoerceDates_(sheetName, headers, data.slice(1), tz));
+    if (inserts.length) sheet.getRange(sheet.getLastRow() + 1, 1, inserts.length, headers.length).setValues(vzCoerceDates_(sheetName, headers, inserts, tz));
+    const dateCol = headers.indexOf('txn_date');
+    if (dateCol >= 0 && sheet.getLastRow() > 1) sheet.getRange(2, dateCol + 1, sheet.getLastRow() - 1, 1).setNumberFormat('yyyy-mm-dd');
+    SpreadsheetApp.flush();
+    return { inserted: inserts.length, updated };
+  });
+}
+
+// Back-compat single-row form.
+function updateRow(sheetName, id, updates) { updateRows(sheetName, [{ id, data: updates }]); }
+
+// ON DELETE RESTRICT: refuses while any row still references this one; hidden_items
+// preferences that point at it are CASCADE-deleted.
 function deleteRow(sheetName, id) {
   const ss = getSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) throw new Error('Sheet not found: ' + sheetName);
 
-  const data = sheet.getDataRange().getValues();
-  const idCol = data[0].indexOf('id');
+  withWriteLock_(() => {
+    const data = sheet.getDataRange().getValues();
+    const idCol = data[0].indexOf('id');
+    const rowIdx = data.findIndex((r, i) => i > 0 && vzKey_(r[idCol]) === vzKey_(id));
+    if (rowIdx < 0) throw new Error('Row not found: id=' + id);
 
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][idCol] == id) {
-      sheet.deleteRow(i + 1);
-      return;
+    const ctx = vzCtx_(ss);
+    const check = vzDeleteCheck_(ctx, sheetName, id);
+    if (check.blockers.length) {
+      throw new Error('Cannot delete ' + sheetName + ' id ' + id + ' — still referenced by ' + check.blockers.join(', '));
     }
-  }
-  throw new Error('Row not found: id=' + id);
-}
+    sheet.deleteRow(rowIdx + 1);
 
-function seedSheet(sheetName, headers) {
-  const ss = getSpreadsheet();
-  let sheet = ss.getSheetByName(sheetName);
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
-  }
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(headers);
-  }
+    if (sheetName !== 'hidden_items' && check.cascadeHiddenIds.length) {
+      const hid = ss.getSheetByName('hidden_items');
+      const hData = hid.getDataRange().getValues();
+      const hIdCol = hData[0].indexOf('id');
+      const doomed = new Set(check.cascadeHiddenIds.map(vzKey_));
+      for (let i = hData.length - 1; i >= 1; i--) {
+        if (doomed.has(vzKey_(hData[i][hIdCol]))) hid.deleteRow(i + 1);
+      }
+    }
+    SpreadsheetApp.flush();
+  });
 }
 
 function respond(data, code) {
@@ -209,7 +325,6 @@ const PRICE_COLUMN_CONFIG = {
   'equity_funds':                { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
   'debt_hybrid_funds':           { codeCol: 'code',   priceCol: 'current_nav',   formulaType: 'mutf_in'    },
   'indian_equity_stocks_assets': { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct'     },
-  'us_eq_indmoney_assets':       { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd' },
   'us_equity_assets':            { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'direct_usd', usdPriceCol: 'current_price_usd' },
   'precious_metal_etf_assets':   { codeCol: 'code',   priceCol: 'current_price', formulaType: 'nse'        },
   'crypto_assets':               { codeCol: 'ticker', priceCol: 'current_price', formulaType: 'crypto_usd' },
@@ -274,23 +389,6 @@ function cleanupGoalArtifacts() {
   Logger.log('Cleanup complete.');
 }
 
-// Run once to rename the old IndMoney US tabs to the new names. Safe to re-run.
-function renameIndMoneyTabs() {
-  const ss = getSpreadsheet();
-  const renames = {
-    'us_equity_stocks_assets':       'us_eq_indmoney_assets',
-    'us_equity_stocks_transactions': 'us_eq_indmoney_transactions',
-  };
-  Object.entries(renames).forEach(([from, to]) => {
-    const sh = ss.getSheetByName(from);
-    if (!sh)                       { Logger.log('Skip (not found): ' + from); return; }
-    if (ss.getSheetByName(to))     { Logger.log('Skip (target exists): ' + to); return; }
-    sh.setName(to);
-    Logger.log('Renamed ' + from + ' → ' + to);
-  });
-  Logger.log('IndMoney tab rename complete.');
-}
-
 // Run once to add multi-account support: creates the accounts sheet (seeds a
 // default 'Self' account, id 1), adds account_id to every asset table (existing
 // rows → account 1), and adds account_id to hidden_items (existing → global ''). Safe to re-run.
@@ -302,7 +400,7 @@ function migrateAddAccounts() {
   if (acc.getLastRow() <= 1) acc.appendRow([1, 'Self', true, new Date().toISOString()]);
 
   const tables = [
-    'equity_funds', 'debt_hybrid_funds', 'indian_equity_stocks_assets', 'us_eq_indmoney_assets',
+    'equity_funds', 'debt_hybrid_funds', 'indian_equity_stocks_assets',
     'precious_metal_etf_assets', 'precious_metal_physical_assets', 'crypto_assets', 'real_estate_assets',
     'epf_assets', 'bank_assets', 'us_equity_assets', 'us_wires', 'us_repatriations', 'us_income',
   ];
@@ -361,15 +459,6 @@ function addAccountIdColumn_(ss, name, defaultVal) {
   Logger.log(name + ': added account_id');
 }
 
-// Run once: make SIP budgets account-specific. Adds account_id to the SIP budget
-// tables and backfills existing budgets to account 1 (Self). Safe to re-run.
-// (SIP events already carry account via their fund; only budgets needed a column.)
-function migrateAddSipBudgetAccounts() {
-  const ss = getSpreadsheet();
-  ['equity_sip_budget', 'debt_sip_budget'].forEach(name => addAccountIdColumn_(ss, name, 1));
-  Logger.log('SIP budget account migration complete.');
-}
-
 // Run once in GAS editor to add price column + formulas to existing asset rows
 function migrateAddPriceColumns() {
   const ss = getSpreadsheet();
@@ -407,18 +496,13 @@ function setupAllSheets() {
     subcategories: ['id', 'category_id', 'name', 'created_at'],
 
     equity_funds: ['id', 'account_id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'is_active', 'current_nav', 'created_at'],
-    equity_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
-    equity_sip_mandates: ['id', 'fund_id', 'platform', 'mandate_ref', 'created_at'],
-    equity_sip_events: ['id', 'sip_mandate_id', 'event_type', 'effective_date', 'amount', 'sip_date', 'frequency', 'reason', 'created_at'],
+    equity_transactions: ['id', 'source_ref', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
 
-    debt_hybrid_funds: ['id', 'account_id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'purpose', 'is_active', 'current_nav', 'created_at'],
-    debt_hybrid_transactions: ['id', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
+    debt_hybrid_funds: ['id', 'account_id', 'subcategory_id', 'fund_name', 'fund_house', 'code', 'is_active', 'current_nav', 'created_at'],
+    debt_hybrid_transactions: ['id', 'source_ref', 'fund_id', 'txn_type', 'txn_date', 'units', 'nav', 'amount', 'notes', 'created_at'],
 
     indian_equity_stocks_assets: ['id', 'account_id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
     indian_equity_stocks_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share', 'amount', 'notes', 'created_at'],
-
-    us_eq_indmoney_assets: ['id', 'account_id', 'subcategory_id', 'company_name', 'ticker', 'strategy', 'is_active', 'current_price', 'created_at'],
-    us_eq_indmoney_transactions: ['id', 'asset_id', 'txn_type', 'txn_date', 'quantity', 'price_per_share_usd', 'amount_usd', 'conv_rate', 'amount_inr', 'notes', 'created_at'],
 
     // ── US Equity (IBKR) — wire-aware stream (additive) ──────────────────────
     us_wires: ['id', 'account_id', 'wire_date', 'payment_reference', 'inr_principal', 'commission', 'gst', 'correspondent_charge', 'inr_debited', 'usd_sent', 'usd_received', 'effective_rate', 'actual_rate', 'status', 'notes', 'created_at'],
@@ -483,44 +567,34 @@ function seedReferenceData() {
   const allCatRows = catSheet.getLastRow() > 1
     ? catSheet.getRange(2, 1, catSheet.getLastRow() - 1, 1).getValues().map(r => r[0])
     : [];
+  // Range scheme: 1–9 in bucket order (Wealth Builder 1–4, Safety Net 5–7, Hedge 8–9).
   const missingCats = [
     [1, 1, 'Indian EQ Mutual Fund',       '', now],
     [2, 1, 'Indian Equity Stocks',         '', now],
-    [3, 1, 'US Equity Stocks',             '', now],
+    [3, 1, 'US Equity',                    '', now],
     [4, 1, 'Real Estate',                  '', now],
     [5, 2, 'Debt & Hybrid Mutual Fund',    '', now],
-    [6, 3, 'Precious Metals',              '', now],
-    [7, 3, 'Cryptocurrency',               '', now],
-    [8, 1, 'Indian EQ MF SIP',             '', now],
-    [9, 2, 'Debt & Hybrid MF SIP',         '', now],
-    [10, 2, 'EPF',                          '', now],
-    [11, 2, 'Bank Accounts',               '', now],
-    [12, 1, 'US Equity',                    '', now],
+    [6, 2, 'EPF',                          '', now],
+    [7, 2, 'Bank Accounts',                '', now],
+    [8, 3, 'Precious Metals',              '', now],
+    [9, 3, 'Cryptocurrency',               '', now],
   ].filter(row => !allCatRows.includes(row[0]));
   missingCats.forEach(row => catSheet.appendRow(row));
 
-  // Subcategories
+  // Subcategories — additive by id. id = category × 100 + n.
   const subSheet = ss.getSheetByName('subcategories');
-  if (subSheet.getLastRow() <= 1) {
-    const now = new Date().toISOString();
-    let id = 1;
-    // Indian EQ MF (cat 1)
-    ['Large Cap','Mid Cap','Small Cap','Flexi Cap','ELSS','Index','Sectoral'].forEach(n => subSheet.appendRow([id++, 1, n, now]));
-    // Debt & Hybrid MF (cat 5)
-    ['Liquid','Overnight','Ultra Short Term','Money Market','Short Duration','Medium Duration','Dynamic Bond','Arbitrage','Credit Risk','Balanced Advantage','Conservative Hybrid','Equity Savings'].forEach(n => subSheet.appendRow([id++, 5, n, now]));
-    // Precious Metals (cat 6)
-    subSheet.appendRow([id++, 6, 'Digital', now]);
-    subSheet.appendRow([id++, 6, 'Physical', now]);
-    // No subcategories for Indian Stocks (cat 2), US Stocks (cat 3), Real Estate (cat 4), Crypto (cat 7)
-  }
-
-  // US Equity (cat 12) subcategories — additive (ids 29, 30; ≤28 already used in live data)
   const subRows = subSheet.getLastRow() > 1
-    ? subSheet.getRange(2, 1, subSheet.getLastRow() - 1, 1).getValues().map(r => r[0])
+    ? subSheet.getRange(2, 1, subSheet.getLastRow() - 1, 1).getValues().map(r => Number(r[0]))
     : [];
   [
-    [29, 12, 'ETF (Passive)', now],
-    [30, 12, 'Stocks (Active)', now],
-  ].filter(row => !subRows.includes(row[0]))
-   .forEach(row => subSheet.appendRow(row));
+    [101, 1, 'Large Cap'], [102, 1, 'Mid Cap'], [103, 1, 'Small Cap'],
+    [104, 1, 'Flexi Cap'], [105, 1, 'ELSS'],    [106, 1, 'Index'],
+    [201, 2, 'Large Cap'], [202, 2, 'Mid & Small Cap'],
+    [301, 3, 'ETF'],       [302, 3, 'Stocks'],
+    [401, 4, 'Land & Plots'],
+    [501, 5, 'Liquid'],    [502, 5, 'Ultra Short Duration'], [503, 5, 'Arbitrage'],
+    [801, 8, 'Digital'],   [802, 8, 'Physical'],              // names drive resolveStream()
+    [901, 9, 'Majors (BTC & ETH)'],
+  ].filter(r => !subRows.includes(r[0]))
+   .forEach(r => subSheet.appendRow([r[0], r[1], r[2], now]));
 }

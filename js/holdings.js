@@ -263,17 +263,14 @@ async function buildHoldingsRows() {
   const streamEntries = [
     { cat: CATEGORIES.find(c => c.id === 1), stream: STREAMS.equity_mf,               subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 2), stream: STREAMS.indian_stocks,            subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 3), stream: STREAMS.us_stocks,                subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 4), stream: STREAMS.real_estate,              subcatName: null },
     { cat: CATEGORIES.find(c => c.id === 5), stream: STREAMS.debt_hybrid_mf,           subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
-    { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
-    { cat: CATEGORIES.find(c => c.id === 7), stream: STREAMS.crypto,                   subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 8), stream: STREAMS.equity_sip,               subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 9), stream: STREAMS.debt_hybrid_sip,          subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 10), stream: STREAMS.epf,                     subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 11), stream: STREAMS.bank_accounts,           subcatName: null },
-    { cat: CATEGORIES.find(c => c.id === 12), stream: STREAMS.us_equity_ibkr,          subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 8), stream: STREAMS.precious_metals_digital,  subcatName: 'Digital' },
+    { cat: CATEGORIES.find(c => c.id === 8), stream: STREAMS.precious_metals_physical, subcatName: 'Physical' },
+    { cat: CATEGORIES.find(c => c.id === 9), stream: STREAMS.crypto,                   subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 6), stream: STREAMS.epf,                     subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 7), stream: STREAMS.bank_accounts,           subcatName: null },
+    { cat: CATEGORIES.find(c => c.id === 3), stream: STREAMS.us_equity_ibkr,          subcatName: null },
   ];
 
   await HIDDEN.load();

@@ -6,32 +6,32 @@ const BUCKETS = [
   { id: 3, name: 'Hedge & Opportunities', icon: '⚡', color: '#d97706' },
 ];
 
+// Fallback only — overwritten from the `subcategories` sheet at boot. Keep in sync
+// with that sheet (and with VZC_ID_PLAN in gas/cleanup_vaultzero.gs).
+// Range scheme: subcategory id = category id × 100 + n.
 const SUBCAT_NAMES = {
-  1: 'Large Cap', 2: 'Mid Cap', 3: 'Small Cap', 4: 'Flexi Cap',
-  5: 'ELSS', 6: 'Index', 7: 'Sectoral',
-  8: 'Liquid', 9: 'Overnight', 10: 'Ultra Short Term', 11: 'Money Market',
-  12: 'Short Duration', 13: 'Medium Duration', 14: 'Dynamic Bond',
-  15: 'Arbitrage', 16: 'Credit Risk', 17: 'Balanced Advantage',
-  18: 'Conservative Hybrid', 19: 'Equity Savings',
-  20: 'Digital', 21: 'Physical',
-  29: 'ETF (Passive)', 30: 'Stocks (Active)',
+  101: 'Large Cap', 102: 'Mid Cap', 103: 'Small Cap', 104: 'Flexi Cap', 105: 'ELSS', 106: 'Index',  // 1 Indian EQ MF
+  201: 'Large Cap', 202: 'Mid & Small Cap',                                                    // 2 Indian Equity Stocks
+  301: 'ETF', 302: 'Stocks',                                                                   // 3 US Equity
+  401: 'Land & Plots',                                                                         // 4 Real Estate
+  501: 'Liquid', 502: 'Ultra Short Duration', 503: 'Arbitrage',                                // 5 Debt & Hybrid (SEBI type)
+  801: 'Digital', 802: 'Physical',                                                             // 8 Precious Metals (names drive resolveStream)
+  901: 'Majors (BTC & ETH)',                                                                   // 9 Cryptocurrency
 };
 
-// Categories keyed by bucket_id
+// Categories — range scheme: ids 1–9 in bucket order (Wealth Builder 1–4, Safety Net 5–7,
+// Hedge 8–9). Must match the `categories` sheet.
 // hasSubcategories: true = show subcategory drill-down in History
 const CATEGORIES = [
-  { id: 1, bucket_id: 1, name: 'Indian EQ Mutual Fund', stream: 'equity_mf', hasSubcategories: true },
-  { id: 2, bucket_id: 1, name: 'Indian Equity Stocks', stream: 'indian_stocks', hasSubcategories: true },
-  { id: 3, bucket_id: 1, name: 'US Equity (IndMoney)', stream: 'us_stocks', hasSubcategories: true },
-  { id: 4, bucket_id: 1, name: 'Real Estate', stream: 'real_estate', hasSubcategories: true },
-  { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf', hasSubcategories: true },
-  { id: 6, bucket_id: 3, name: 'Precious Metals', stream: 'precious_metals', hasSubcategories: true },
-  { id: 7, bucket_id: 3, name: 'Cryptocurrency', stream: 'crypto', hasSubcategories: true },
-  { id: 8, bucket_id: 1, name: 'Indian EQ MF — SIP',    stream: 'equity_sip',      hasSubcategories: false },
-  { id: 9, bucket_id: 2, name: 'Debt & Hybrid MF — SIP', stream: 'debt_hybrid_sip', hasSubcategories: false },
-  { id: 10, bucket_id: 2, name: 'EPF',           stream: 'epf',           hasSubcategories: false },
-  { id: 11, bucket_id: 2, name: 'Bank Accounts',  stream: 'bank_accounts', hasSubcategories: false },
-  { id: 12, bucket_id: 1, name: 'US Equity',      stream: 'us_equity_ibkr', hasSubcategories: true },
+  { id: 1, bucket_id: 1, name: 'Indian EQ Mutual Fund',     stream: 'equity_mf',       hasSubcategories: true  },
+  { id: 2, bucket_id: 1, name: 'Indian Equity Stocks',      stream: 'indian_stocks',   hasSubcategories: true  },
+  { id: 3, bucket_id: 1, name: 'US Equity',                 stream: 'us_equity_ibkr',  hasSubcategories: true  },
+  { id: 4, bucket_id: 1, name: 'Real Estate',               stream: 'real_estate',     hasSubcategories: true  },
+  { id: 5, bucket_id: 2, name: 'Debt & Hybrid Mutual Fund', stream: 'debt_hybrid_mf',  hasSubcategories: true  },
+  { id: 6, bucket_id: 2, name: 'EPF',                       stream: 'epf',             hasSubcategories: false },
+  { id: 7, bucket_id: 2, name: 'Bank Accounts',             stream: 'bank_accounts',   hasSubcategories: false },
+  { id: 8, bucket_id: 3, name: 'Precious Metals',           stream: 'precious_metals', hasSubcategories: true  },
+  { id: 9, bucket_id: 3, name: 'Cryptocurrency',            stream: 'crypto',          hasSubcategories: true  },
 ];
 
 // Stream configurations — defines tables, asset form fields, transaction form fields
@@ -74,7 +74,6 @@ const STREAMS = {
       { id: 'fund_name', label: 'Fund Name', type: 'text', required: true, placeholder: 'e.g. ICICI Pru Ultra Short Term' },
       { id: 'fund_house', label: 'Fund House', type: 'text', required: true },
       { id: 'code', label: 'Price Fetch Code', type: 'text', required: true },
-      { id: 'purpose', label: 'Purpose', type: 'text', placeholder: 'e.g. Yearly Bills, Emergency' },
     ],
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true },
@@ -106,32 +105,6 @@ const STREAMS = {
       { id: 'quantity', label: 'Shares', type: 'number', step: '1', required: true },
       { id: 'price_per_share', label: 'Price per Share (₹)', type: 'number', step: '0.01', required: true, triggers: 'amount' },
       { id: 'amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true, computed: 'quantity*price_per_share' },
-      { id: 'notes', label: 'Notes', type: 'text' },
-    ],
-  },
-
-  us_stocks: {
-    label: 'US Equity (IndMoney)',
-    currentPriceCol: 'current_price',
-    amountCol: 'amount_inr',
-    assetTable: 'us_eq_indmoney_assets',
-    txnTable: 'us_eq_indmoney_transactions',
-    assetIdCol: 'asset_id',
-    assetNameCol: 'company_name',
-    assetFields: [
-      { id: 'subcategory_id', label: 'Subcategory', type: 'subcategory', required: true },
-      { id: 'company_name', label: 'Company Name', type: 'text', required: true, placeholder: 'e.g. Alphabet Inc Class A' },
-      { id: 'ticker', label: 'Ticker / Code', type: 'text', required: true, placeholder: 'e.g. GOOGL' },
-      { id: 'strategy', label: 'Strategy', type: 'select', options: ['Long Term', 'Dividend', 'Short Term'], required: true },
-    ],
-    txnFields: [
-      { id: 'txn_type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true },
-      { id: 'txn_date', label: 'Date', type: 'date', required: true },
-      { id: 'quantity', label: 'Shares', type: 'number', step: '0.00000001', required: true },
-      { id: 'price_per_share_usd', label: 'Price per Share (USD)', type: 'number', step: '0.0001', required: true, triggers: 'amount_usd' },
-      { id: 'amount_usd', label: 'Amount (USD)', type: 'number', step: '0.01', required: true, computed: 'quantity*price_per_share_usd' },
-      { id: 'amount_inr', label: 'Amount (₹)', type: 'number', step: '0.01', required: true, triggers: 'conv_rate' },
-      { id: 'conv_rate', label: 'Conv. Rate (auto)', type: 'number', step: '0.0001', readonly: true, computed: 'amount_inr/amount_usd' },
       { id: 'notes', label: 'Notes', type: 'text' },
     ],
   },
@@ -300,68 +273,6 @@ const STREAMS = {
     ],
     manualPrice: true,
     manualPriceLabel: 'Price per unit',
-  },
-
-  equity_sip: {
-    label: 'Indian EQ MF SIP',
-    isSIPStream: true,
-    currentPriceCol: 'current_nav',
-    amountCol: 'amount',
-    assetTable: 'equity_funds',
-    assetIdCol: 'fund_id',
-    assetNameCol: 'fund_name',
-    sipBudgetTable: 'equity_sip_budget',
-    sipEventsTable: 'equity_sip_events',
-    sipReasonsTable: 'equity_sip_reasons',
-    txnFields: [
-      { id: 'txn_type', label: 'Type', type: 'select', options: ['SIP', 'SWP'], required: true },
-      { id: 'txn_date', label: 'Date', type: 'date', required: true },
-      { id: 'amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true },
-      { id: 'nav', label: 'NAV (₹)', type: 'number', step: '0.0001', required: true, triggers: 'units' },
-      { id: 'units', label: 'Units', type: 'number', step: '0.000001', required: true, computed: 'amount/nav' },
-      { id: 'notes', label: 'Notes', type: 'text' },
-    ],
-    sipEventFields: [
-      { id: 'fund_id', label: 'Fund', type: 'fund-select', required: true },
-      { id: 'event_type', label: 'Type', type: 'select',
-        options: ['Monthly SIP', 'Rebalance SIP', 'Rebalance SWP', 'Redeem SWP', 'STOP'],
-        required: true },
-      { id: 'amount', label: 'Amount (₹/month)', type: 'number', step: '0.01', required: true },
-      { id: 'sip_date', label: 'SIP Day of Month (1–28)', type: 'number', step: '1', placeholder: '5' },
-      { id: 'effective_date', label: 'Effective Date', type: 'date', required: true },
-      { id: 'reason', label: 'Reason', type: 'select', options: ['Regular', 'Rebalance', 'Redeem'], required: true },
-    ],
-  },
-
-  debt_hybrid_sip: {
-    label: 'Debt & Hybrid MF SIP',
-    isSIPStream: true,
-    currentPriceCol: 'current_nav',
-    amountCol: 'amount',
-    assetTable: 'debt_hybrid_funds',
-    assetIdCol: 'fund_id',
-    assetNameCol: 'fund_name',
-    sipBudgetTable: 'debt_sip_budget',
-    sipEventsTable: 'debt_sip_events',
-    sipReasonsTable: 'debt_sip_reasons',
-    txnFields: [
-      { id: 'txn_type', label: 'Type', type: 'select', options: ['SIP', 'SWP'], required: true },
-      { id: 'txn_date', label: 'Date', type: 'date', required: true },
-      { id: 'amount', label: 'Amount (₹)', type: 'number', step: '0.01', required: true },
-      { id: 'nav', label: 'NAV (₹)', type: 'number', step: '0.0001', required: true, triggers: 'units' },
-      { id: 'units', label: 'Units', type: 'number', step: '0.000001', required: true, computed: 'amount/nav' },
-      { id: 'notes', label: 'Notes', type: 'text' },
-    ],
-    sipEventFields: [
-      { id: 'fund_id', label: 'Fund', type: 'fund-select', required: true },
-      { id: 'event_type', label: 'Type', type: 'select',
-        options: ['Monthly SIP', 'Rebalance SIP', 'Rebalance SWP', 'Redeem SWP', 'STOP'],
-        required: true },
-      { id: 'amount', label: 'Amount (₹/month)', type: 'number', step: '0.01', required: true },
-      { id: 'sip_date', label: 'SIP Day of Month (1–28)', type: 'number', step: '1', placeholder: '5' },
-      { id: 'effective_date', label: 'Effective Date', type: 'date', required: true },
-      { id: 'reason', label: 'Reason', type: 'select', options: ['Regular', 'Rebalance', 'Redeem'], required: true },
-    ],
   },
 
   epf: {

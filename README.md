@@ -18,10 +18,12 @@ js/
   form.js           dynamic transaction + asset forms, manual price panel
   holdings.js       holdings tree (bucket → category → subcategory → asset)
   insights.js       charts, XIRR, liquidity ladder, tax estimates
-  sip.js            SIP budget & allocation dashboard
+  manage.js         show / hide categories, subcategories and assets per account
 gas/
   Code.gs           Apps Script backend (CRUD + setupAllSheets)
-  fetch_gold_price.gs  daily Chennai 22K gold price → manual_prices sheet
-  bulkImport.gs     one-time bulk import helpers
-  import_from_tradebook.gs  Zerodha tradebook import
+  schema.gs         relational constraints (PK / UNIQUE / FK / CHECK) + checkConstraints()
+  import_from_coin.gs       Zerodha Coin import      ┐ live in the separate TRADEBOOK Apps Script
+  import_from_tradebook.gs  Zerodha tradebook import ┘ project; write to VaultZero via the web app
+  cleanup_vaultzero.gs      one-off Nov 2026 data cleanup / migration (dry run first)
+  stylize_sheets.gs         cosmetic tab colours for the spreadsheet
 ```
