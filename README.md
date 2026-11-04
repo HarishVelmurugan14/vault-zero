@@ -6,7 +6,7 @@ A personal investment tracking web app. Logs transactions across multiple asset 
 - **[PROGRESS.md](PROGRESS.md)** — Features built, known gaps, deferred work
 
 ## Quick file map
-
+-
 ```
 index.html          entry point
 css/styles.css      all styling (dark theme, components)
