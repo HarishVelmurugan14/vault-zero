@@ -48,6 +48,7 @@
   --chart-grid:    rgba(255,255,255,0.05);
   --chart-legend:  #8b90a8;
   --chart-label:   #9fb0a6;   /* Plan-tab chart labels */
+  --chart-name:    #a3a3a3;   /* Top-holdings names */
   --chart-surface: #111111;
 }
 
@@ -1045,6 +1046,7 @@ body::before {
 }
 
 /* Account tag on a holding (shown only in the All-Accounts view) */
+.ht-acct-tag-c { color: var(--tag-c) !important; background: var(--tag-bg) !important; border-color: var(--tag-bd) !important; }
 .ht-acct-tag {
   display: inline-block;
   font-size: 10px;
@@ -1476,7 +1478,7 @@ body::before {
   letter-spacing: 0.4px; text-transform: uppercase;
   padding: 2px 8px; border-radius: 10px;
 }
-.mf-badge-active   { background: rgba(34,197,94,0.15);  color: #22c55e; }
+.mf-badge-active   { background: rgba(34,197,94,0.15);  color: var(--positive); }
 .mf-badge-inactive { background: rgba(107,114,128,0.15); color: #9ca3af; }
 
 /* ── US Equity (IBKR) log + ledgers ──────────────────────────────────────────── */
@@ -1651,6 +1653,7 @@ body::before {
 
 .multiselect { position: relative; display: inline-block; }
 .multiselect-btn { text-align: left; cursor: pointer; white-space: nowrap; }
+.ht-amt-round { display: none; }                                    /* phones may show it instead of paise */
 /* In a filter column the button fills the column and never forces it wider. */
 .insights-filter-group .multiselect { display: block; min-width: 0; }
 .insights-filter-group .multiselect-btn { min-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -1881,6 +1884,12 @@ body::before {
   }
   html:not([data-theme="modern"]) .nav-tabs::-webkit-scrollbar { display: none; }
   html:not([data-theme="modern"]) .nav-tab { flex: 1 0 auto; }
+  html:not([data-theme="modern"]) .nav-right { min-width: 0; flex-shrink: 1; }
+  html:not([data-theme="modern"]) .account-switcher { min-width: 0; }
+}
+@media (max-width: 380px) {
+  html:not([data-theme="modern"]) .theme-toggle-name { display: none; }   /* just the ◐ glyph */
+  html:not([data-theme="modern"]) .account-switcher { max-width: 120px; }
 }
 
 @media (min-width: 480px) {
@@ -1942,7 +1951,7 @@ body::before {
 .proj-mile-y { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
 .proj-mile-v { font-size: 15px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
 .proj-mile-tgt { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
-.proj-mile-tgt .proj-mile-v { color: #22c55e; }
+.proj-mile-tgt .proj-mile-v { color: var(--positive); }
 
 /* ── Recent (Last N days, all categories) feed ──────────────────────────────── */
 .recent-entry {
@@ -1983,6 +1992,7 @@ body::before {
   background: transparent; border: 0; padding: 0; margin: 12px 0 14px;
 }
 .snapshot-view { display: inline-flex; gap: 6px; }
+.snapshot-controls { display: inline-flex; gap: 14px; flex-wrap: wrap; }
 .snapshot-take {
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
   border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; color: var(--text);

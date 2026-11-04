@@ -43,7 +43,8 @@ function CT() {
   const cs = getComputedStyle(document.documentElement);
   const v = (name, dflt) => (cs.getPropertyValue(name) || '').trim() || dflt;
   return { tick: v('--chart-tick', '#525252'), grid: v('--chart-grid', 'rgba(255,255,255,0.05)'),
-           legend: v('--chart-legend', '#8b90a8'), label: v('--chart-label', '#9fb0a6'), surface: v('--chart-surface', '#111111') };
+           legend: v('--chart-legend', '#8b90a8'), label: v('--chart-label', '#9fb0a6'), name: v('--chart-name', '#a3a3a3'),
+           surface: v('--chart-surface', '#111111') };
 }
 
 function fmtXIRR(r) {
@@ -376,14 +377,39 @@ function redrawCharts(chartsArea, rawData) {
   drawCharts(chartsArea, rawData);
 }
 
-// Theme changed: redraw the charts in the new colours, keeping filters, tab and scroll.
-// While Insights is still loading there is nothing to redraw (the first draw reads CT()).
+// Theme changed: re-colour the charts already on screen in place — every CT() colour they
+// were drawn with is swapped for the new theme's — so inputs, sort order and scroll stay put.
+// (Each theme keeps its CT() values distinct, so the swap is unambiguous.)
+let _ctDrawn = null;                                                   // the CT() the current charts used
 function restyleInsightsCharts() {
-  const area = document.getElementById('insights-charts-area');
-  if (!area || !area.isConnected || !_insightsCache) return;
-  const y = window.scrollY;
-  redrawCharts(area, _insightsCache);
-  requestAnimationFrame(() => window.scrollTo(0, y));
+  const to = CT(), from = _ctDrawn;
+  if (typeof Chart !== 'undefined') { Chart.defaults.color = to.tick; Chart.defaults.borderColor = to.grid; }
+  if (!from) return;
+  const map = {};
+  Object.keys(to).forEach(k => { if (from[k] !== to[k]) map[from[k]] = to[k]; });
+  const swap = (o, depth) => {
+    if (!o || typeof o !== 'object' || depth > 8) return;
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      if (typeof v === 'string') { if (map[v] !== undefined) o[k] = map[v]; }
+      else if (v && typeof v === 'object' && !(v instanceof Node)) swap(v, depth + 1);
+    }
+  };
+  // Walk the plain config, not c.options: reading through Chart.js's option resolver runs
+  // scriptable options (e.g. the pie datalabels formatter) and can throw. A full update()
+  // re-resolves shared element options (update('none') leaves them stale); animation is
+  // switched off for it so the new colours land at once.
+  _insightsCharts.forEach(c => {
+    try { swap(c.config.options, 0); } catch (_) {}
+    try { (c.data.datasets || []).forEach(d => swap(d, 0)); } catch (_) {}
+    try {
+      const o = c.config.options, had = Object.prototype.hasOwnProperty.call(o, 'animation'), anim = o.animation;
+      o.animation = false;
+      c.update();
+      if (had) o.animation = anim; else delete o.animation;
+    } catch (_) {}
+  });
+  _ctDrawn = to;
 }
 
 
@@ -414,6 +440,7 @@ function drawCharts(chartsArea, rawData) {
 
   chartsArea.innerHTML = '';
   if (typeof Chart !== 'undefined') {
+    _ctDrawn = CT();
     Chart.defaults.color = CT().tick;
     Chart.defaults.borderColor = CT().grid;
     Chart.defaults.font.family = getComputedStyle(document.body).fontFamily || "Inter, -apple-system, BlinkMacSystemFont, sans-serif";   // the theme's font
@@ -1503,7 +1530,7 @@ function invalidateSnapshots() {
   _snapshotFormCache = null;
   _snapshotLinesCache = {};
 }
-const SNAP_UI = { view: 'month', cats: [], subs: [], assets: [], years: [], months: [] };   // survives redraws
+const SNAP_UI = { view: 'month', chart: 'line', cats: [], subs: [], assets: [], years: [], months: [] };   // survives redraws
 
 function snapshotCachesFresh() {
   if (_snapshotDay !== new Date().toDateString()) invalidateSnapshots();
@@ -1626,9 +1653,15 @@ function buildSnapshotCard() {
   card.innerHTML = `
     <div class="chart-card-title" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="snapshot-card-title">${SNAP_UI.view === 'year' ? 'Yearly' : 'Monthly'} Snapshots — Invested vs Value</span>
-      <span class="snapshot-view" role="group" aria-label="Chart view" style="display:none">
-        <button type="button" class="btn-sm" data-view="month">Monthly</button>
-        <button type="button" class="btn-sm" data-view="year">Yearly</button>
+      <span class="snapshot-controls" style="display:none">
+        <span class="snapshot-view" role="group" aria-label="Period">
+          <button type="button" class="btn-sm" data-view="month">Monthly</button>
+          <button type="button" class="btn-sm" data-view="year">Yearly</button>
+        </span>
+        <span class="snapshot-view" role="group" aria-label="Chart type">
+          <button type="button" class="btn-sm" data-chart="line">Line</button>
+          <button type="button" class="btn-sm" data-chart="bar">Bars</button>
+        </span>
       </span>
     </div>
     <div class="snapshot-filters"></div>
@@ -1662,9 +1695,9 @@ async function drawSnapshotCard() {
   const card = note.closest('.chart-card');
   const render = () => renderSnapshotView(card, data, account);
   buildSnapshotFilters(card, data, render);
-  card.querySelector('.snapshot-view').style.display = '';
+  card.querySelector('.snapshot-controls').style.display = '';
   card.querySelectorAll('.snapshot-view button').forEach(b => {
-    b.onclick = () => { SNAP_UI.view = b.dataset.view; render(); };
+    b.onclick = () => { if (b.dataset.view) SNAP_UI.view = b.dataset.view; else SNAP_UI.chart = b.dataset.chart; render(); };
   });
   render();
 }
@@ -1790,10 +1823,12 @@ function snapshotPoints(data) {
 
 function renderSnapshotView(card, data, account) {
   card.querySelectorAll('.snapshot-view button').forEach(b => {
-    b.className = 'btn-sm ' + (b.dataset.view === SNAP_UI.view ? 'btn-secondary' : 'btn-outline');
-    b.setAttribute('aria-pressed', String(b.dataset.view === SNAP_UI.view));
+    const on = b.dataset.view ? b.dataset.view === SNAP_UI.view : b.dataset.chart === SNAP_UI.chart;
+    b.className = 'btn-sm ' + (on ? 'btn-secondary' : 'btn-outline');
+    b.setAttribute('aria-pressed', String(on));
   });
   const yearly = SNAP_UI.view === 'year';
+  const bars = SNAP_UI.chart === 'bar';
   const title = card.querySelector('.snapshot-card-title');
   if (title) title.textContent = (yearly ? 'Yearly' : 'Monthly') + ' Snapshots — Invested vs Value';
   const pts = snapshotPoints(data);
@@ -1810,17 +1845,18 @@ function renderSnapshotView(card, data, account) {
 
   if (pts.length) {
     const GRID = CT().grid, TICK = CT().tick;
+    const dot = yearly ? 4 : pts.length > 36 ? 0 : 2;                     // few yearly points → visible dots
     newChart('chart-snapshots', {
-      type: yearly ? 'bar' : 'line',
+      type: bars ? 'bar' : 'line',
       data: {
         labels: pts.map(p => p.label),
         datasets: [
           { label: 'Current value', data: pts.map(p => Math.round(p.cur)), borderColor: '#22c55e',
-            backgroundColor: yearly ? 'rgba(34,197,94,0.55)' : 'rgba(34,197,94,0.10)',
-            fill: !yearly, tension: 0.25, pointRadius: 2, borderWidth: 2, borderRadius: 4 },
+            backgroundColor: bars ? 'rgba(34,197,94,0.55)' : 'rgba(34,197,94,0.10)',
+            fill: !bars, tension: 0.25, pointRadius: dot, pointHoverRadius: 5, borderWidth: 2, borderRadius: 4 },
           { label: 'Invested', data: pts.map(p => Math.round(p.inv)), borderColor: '#f59e0b',
-            backgroundColor: yearly ? 'rgba(245,158,11,0.55)' : 'transparent',
-            tension: 0.25, pointRadius: 2, borderWidth: 2, borderDash: yearly ? [] : [5, 4], borderRadius: 4 },
+            backgroundColor: bars ? 'rgba(245,158,11,0.55)' : 'transparent',
+            tension: 0.25, pointRadius: dot, pointHoverRadius: 5, borderWidth: 2, borderDash: bars ? [] : [5, 4], borderRadius: 4 },
         ],
       },
       options: {
@@ -1873,7 +1909,7 @@ function renderSnapshotView(card, data, account) {
         <td>${fmtCurrency(p.inv)}</td><td>${fmtCurrency(p.cur)}</td>
         <td class="${cls}">${g >= 0 ? '+' : '−'}${fmtCurrency(Math.abs(g))}</td><td class="${cls}">${pct.toFixed(1)}%</td>
         ${yearly ? `<td class="${ch === null ? '' : ch >= 0 ? 'positive' : 'negative'}">${ch === null ? '—' : (ch >= 0 ? '+' : '−') + fmtCurrency(Math.abs(ch))}</td>` : ''}
-        <td>${snapEsc(statusText(p))}${p.atCost ? ' · ' + p.atCost + ' at cost' : ''}${p.old ? ' · ' + p.old + ' old price' : ''}</td></tr>`;
+        <td style="white-space:nowrap">${snapEsc(statusText(p))}${p.atCost ? ' · ' + p.atCost + ' at cost' : ''}${p.old ? ' · ' + p.old + ' old price' : ''}</td></tr>`;
     }).join('')}</tbody></table></div>
     ${!yearly && rows.length > 12 ? '<button class="btn-outline btn-sm" id="snapshot-more" style="margin-top:8px">Show all ' + rows.length + ' months</button>' : ''}
     <div id="snapshot-lines"></div>`;
@@ -1937,6 +1973,8 @@ function fmtCurrency(v) {
 function newChart(id, config) {
   const canvas = document.getElementById(id);
   if (!canvas) return null;
+  const prev = Chart.getChart(canvas);                                  // a quick re-render may have drawn here already
+  if (prev) { prev.destroy(); _insightsCharts = _insightsCharts.filter(c => c !== prev); }
   const chart = new Chart(canvas, config);
   _insightsCharts.push(chart);
   return chart;
@@ -2145,7 +2183,7 @@ function drawTopHoldingsChart(topHoldings) {
       },
       scales: {
         x: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
-        y: { ticks: { color: '#a3a3a3', font: { size: 11 } }, grid: { display: false } },
+        y: { ticks: { color: CT().name, font: { size: 11 } }, grid: { display: false } },
       },
     },
   });
@@ -3076,6 +3114,7 @@ function buildCorpusProjectionCard(agg) {
     '<div class="chart-canvas-wrap"><canvas id="plan-proj-chart"></canvas></div>';
   let chart = null;
   function recompute() {
+    if (!card.isConnected) return;                                    // the tab was swapped before this ran
     const cur = parseFloat(document.getElementById('proj-cur').value) || 0;
     const sip = parseFloat(document.getElementById('proj-sip').value) || 0;
     const ret = parseFloat(document.getElementById('proj-ret').value) || 0;

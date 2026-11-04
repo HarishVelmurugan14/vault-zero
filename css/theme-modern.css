@@ -46,7 +46,8 @@ html[data-theme="modern"] {
   --chart-tick:    rgba(60,60,67,0.6);
   --chart-grid:    rgba(60,60,67,0.10);
   --chart-legend:  rgba(60,60,67,0.75);
-  --chart-label:   rgba(60,60,67,0.75);
+  --chart-label:   rgba(60,60,67,0.76);   /* --chart-* values stay distinct: a theme switch swaps them in place */
+  --chart-name:    rgba(60,60,67,0.85);
   --chart-surface: #ffffff;
 
   color-scheme: light;
@@ -65,7 +66,7 @@ html[data-theme="modern"][data-scheme="dark"] {
   --shadow-sm: none; --shadow: none; --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
   --bar: rgba(22,22,24,0.78); --sheet-dim: rgba(0,0,0,0.5);
   --chart-tick: rgba(235,235,245,0.55); --chart-grid: rgba(235,235,245,0.08);
-  --chart-legend: rgba(235,235,245,0.75); --chart-label: rgba(235,235,245,0.75); --chart-surface: #1c1c1e;
+  --chart-legend: rgba(235,235,245,0.75); --chart-label: rgba(235,235,245,0.76); --chart-name: rgba(235,235,245,0.85); --chart-surface: #1c1c1e;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -80,7 +81,7 @@ html[data-theme="modern"][data-scheme="dark"] {
     --shadow-sm: none; --shadow: none; --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
     --bar: rgba(22,22,24,0.78); --sheet-dim: rgba(0,0,0,0.5);
     --chart-tick: rgba(235,235,245,0.55); --chart-grid: rgba(235,235,245,0.08);
-    --chart-legend: rgba(235,235,245,0.75); --chart-label: rgba(235,235,245,0.75); --chart-surface: #1c1c1e;
+    --chart-legend: rgba(235,235,245,0.75); --chart-label: rgba(235,235,245,0.76); --chart-name: rgba(235,235,245,0.85); --chart-surface: #1c1c1e;
     color-scheme: dark;
   }
 }
@@ -129,6 +130,15 @@ html[data-theme="modern"] .app-logo {
   font-size: 17px; font-weight: 700; letter-spacing: -0.02em;
 }
 html[data-theme="modern"] .app-logo::before { content: '◆ '; color: var(--accent); }
+html[data-theme="modern"] .app-logo { white-space: nowrap; flex-shrink: 0; }
+
+/* Tablet portrait (721–899px): one row doesn't fit, so the segmented tabs take a second row. */
+@media (min-width: 721px) and (max-width: 899px) {
+  html[data-theme="modern"] .top-nav { flex-wrap: wrap; height: auto; padding-top: 10px; padding-bottom: 10px; row-gap: 10px; }
+  html[data-theme="modern"] .nav-tabs { order: 3; flex: 1 0 100%; overflow-x: auto; scrollbar-width: none; }
+  html[data-theme="modern"] .nav-tabs::-webkit-scrollbar { display: none; }
+  html[data-theme="modern"] .nav-tab { flex: 1 0 auto; }
+}
 
 /* Segmented control */
 html[data-theme="modern"] .nav-tabs {
@@ -257,8 +267,20 @@ html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfol
   .holdings-tree, .history-summary-card, .snapshot-take, .holdings-acct-breakdown) {
   background: var(--surface); border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow);
 }
-html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero)::before,
-html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero)::after { display: none; }
+html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero, .history-summary-card)::before,
+html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero, .history-summary-card)::after { display: none; }
+html[data-theme="modern"] .portfolio-hero-meta { border-top-color: var(--border); }
+html[data-theme="modern"] .insights-month-input { color-scheme: inherit; }    /* native picker follows light/dark */
+html[data-theme="modern"] .mf-badge-inactive { color: var(--text-sub); background: var(--fill); }
+/* Classic's tier / owner hues were picked for a near-black page; darken them on light cards. */
+html[data-theme="modern"] .liquidity-tier-label { color: color-mix(in srgb, var(--lt-color, var(--accent)) 62%, #000); }
+html[data-theme="modern"] .ht-acct-tag-c { color: color-mix(in srgb, var(--tag-c) 55%, #000) !important; border-color: transparent !important; }
+html[data-theme="modern"][data-scheme="dark"] .liquidity-tier-label { color: var(--lt-color, var(--accent)); }
+html[data-theme="modern"][data-scheme="dark"] .ht-acct-tag-c { color: var(--tag-c) !important; }
+@media (prefers-color-scheme: dark) {
+  html[data-theme="modern"]:not([data-scheme="light"]) .liquidity-tier-label { color: var(--lt-color, var(--accent)); }
+  html[data-theme="modern"]:not([data-scheme="light"]) .ht-acct-tag-c { color: var(--tag-c) !important; }
+}
 html[data-theme="modern"] .chart-card:hover { box-shadow: var(--shadow); border: none; }
 html[data-theme="modern"] .chart-card-title {
   text-transform: none; letter-spacing: -0.01em; font-size: 17px; font-weight: 600; color: var(--text);
@@ -322,7 +344,7 @@ html[data-theme="modern"] .manage-cat:not(.manage-row) {
   background: var(--surface); border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow); margin-bottom: 18px;
 }
 html[data-theme="modern"] .manage-row { padding: 9px 14px 9px 16px; border-bottom: 0.5px solid var(--border); min-height: 48px; }
-html[data-theme="modern"] .manage-row.manage-cat { background: none; }
+html[data-theme="modern"] .manage-row.manage-cat { background: none; margin: 0; border: none; border-bottom: 0.5px solid var(--border); border-radius: 0; }
 html[data-theme="modern"] .manage-row.manage-cat .manage-label { font-size: 17px; font-weight: 600; }
 html[data-theme="modern"] .manage-row.manage-sub { padding-left: 16px; background: var(--fill); }
 html[data-theme="modern"] .manage-row.manage-sub .manage-label {
@@ -385,7 +407,6 @@ html[data-theme="modern"] .goal-manage-hint { color: var(--text-sub); font-size:
   }
   html[data-theme="modern"] .edit-action-bar { bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 5; }
   /* Top bar on narrow phones: keep the logo on one line and let the controls shrink. */
-  html[data-theme="modern"] .app-logo { white-space: nowrap; flex-shrink: 0; }
   html[data-theme="modern"] .nav-right { min-width: 0; flex-shrink: 1; }
   html[data-theme="modern"] .account-switcher { min-width: 0; }
   /* Filters: a tidy two-column grid that never pokes past the card. */
@@ -395,8 +416,11 @@ html[data-theme="modern"] .goal-manage-hint { color: var(--text-sub); font-size:
   html[data-theme="modern"] .insights-filter-bar > .insights-filter-group:last-child:nth-child(odd) { grid-column: 1 / -1; }
   /* Holdings tree: names wrap to two lines instead of cutting off. */
   html[data-theme="modern"] :is(.holdings-tree-header, .ht-bucket, .ht-category, .ht-subcat, .ht-asset, .ht-grand) {
-    grid-template-columns: minmax(0, 1fr) 94px 94px; padding-right: 12px;
+    grid-template-columns: minmax(0, 1fr) 88px 88px; column-gap: 6px; padding-right: 12px;
   }
+  /* Whole rupees here — paise don't fit two columns of lakh/crore figures. */
+  html[data-theme="modern"] .ht-amt-full  { display: none; }
+  html[data-theme="modern"] .ht-amt-round { display: inline; }
   html[data-theme="modern"] :is(.ht-bucket-name, .ht-category-name, .ht-subcat-name, .ht-asset-name) {
     white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
     overflow-wrap: anywhere;
@@ -416,7 +440,7 @@ html[data-theme="modern"] .goal-manage-hint { color: var(--text-sub); font-size:
   html[data-theme="modern"] .theme-toggle-name { display: none; }   /* just the ◐ glyph */
   html[data-theme="modern"] .account-switcher { max-width: 132px; }
   html[data-theme="modern"] :is(.holdings-tree-header, .ht-bucket, .ht-category, .ht-subcat, .ht-asset, .ht-grand) {
-    grid-template-columns: minmax(0, 1fr) 84px 84px; padding-right: 8px;
+    grid-template-columns: minmax(0, 1fr) 80px 80px; column-gap: 4px; padding-right: 8px;
   }
   html[data-theme="modern"] :is(.ht-bucket-num, .ht-category-num, .ht-subcat-num, .ht-asset-num, .ht-grand-num) { font-size: 11px; }
   html[data-theme="modern"] .ht-bucket   { padding-left: 10px; }

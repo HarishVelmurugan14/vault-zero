@@ -582,8 +582,8 @@ function renderHoldingsTable(wrap, rows, { singleCat = false, singleSubcat = fal
   gRow.className = 'ht-grand';
   gRow.innerHTML = `
     <div class="ht-grand-label">Total</div>
-    <div class="ht-grand-num">₹${formatINR(grandInvested)}</div>
-    <div class="ht-grand-num">${grandCurrent > 0 ? '₹' + formatINR(grandCurrent) : '—'}</div>
+    <div class="ht-grand-num">${htAmt(grandInvested)}</div>
+    <div class="ht-grand-num">${grandCurrent > 0 ? htAmt(grandCurrent) : '—'}</div>
     <div class="ht-grand-num ${grandPnL !== null ? (grandPnL >= 0 ? 'positive' : 'negative') : ''}">${grandPnL !== null ? (grandPnL >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(grandPnL)) : '—'}</div>
   `;
   tree.appendChild(gRow);
@@ -600,8 +600,8 @@ function makeBucketRow(bucket, totals) {
       <span class="ht-toggle">▾</span>
       <span>${bucket.icon || ''} ${bucket.name}</span>
     </div>
-    <div class="ht-bucket-num">₹${formatINR(totals.invested)}</div>
-    <div class="ht-bucket-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
+    <div class="ht-bucket-num">${htAmt(totals.invested)}</div>
+    <div class="ht-bucket-num">${totals.currentValue > 0 ? htAmt(totals.currentValue) : '—'}</div>
     <div class="ht-bucket-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
@@ -614,8 +614,8 @@ function makeCategoryRow(catName, totals) {
   row.className = 'ht-category';
   row.innerHTML = `
     <div class="ht-category-name"><span class="ht-toggle">▾</span>${catName}</div>
-    <div class="ht-category-num">₹${formatINR(totals.invested)}</div>
-    <div class="ht-category-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
+    <div class="ht-category-num">${htAmt(totals.invested)}</div>
+    <div class="ht-category-num">${totals.currentValue > 0 ? htAmt(totals.currentValue) : '—'}</div>
     <div class="ht-category-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
@@ -628,8 +628,8 @@ function makeSubcatRow(subcatName, totals) {
   row.className = 'ht-subcat';
   row.innerHTML = `
     <div class="ht-subcat-name"><span class="ht-toggle">▾</span>${subcatName}</div>
-    <div class="ht-subcat-num">₹${formatINR(totals.invested)}</div>
-    <div class="ht-subcat-num">${totals.currentValue > 0 ? '₹' + formatINR(totals.currentValue) : '—'}</div>
+    <div class="ht-subcat-num">${htAmt(totals.invested)}</div>
+    <div class="ht-subcat-num">${totals.currentValue > 0 ? htAmt(totals.currentValue) : '—'}</div>
     <div class="ht-subcat-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
@@ -641,6 +641,11 @@ function accountTagColor(accountId) {
   if (typeof ACCOUNTS === 'undefined' || !ACCOUNTS.list) return '#9ca3af';
   const idx = ACCOUNTS.list.findIndex(a => String(a.id) === String(accountId));
   return ACCT_TAG_COLORS[(idx < 0 ? 0 : idx) % ACCT_TAG_COLORS.length];
+}
+
+// Tree amount: with paise, plus a rounded twin that narrow layouts can show instead.
+function htAmt(v) {
+  return `<span class="ht-amt-full">₹${formatINR(v)}</span><span class="ht-amt-round">₹${formatINR(Math.round(v))}</span>`;
 }
 
 function makeAssetRow(r) {
@@ -658,14 +663,14 @@ function makeAssetRow(r) {
       const an = ACCOUNTS.name(r.account);
       if (an) {
         const c = accountTagColor(r.account);
-        tag = `<span class="ht-acct-tag" style="color:${c};background:${c}22;border-color:${c}66;margin:0 7px 0 0">${an}</span>`;
+        tag = `<span class="ht-acct-tag ht-acct-tag-c" style="--tag-c:${c};--tag-bg:${c}22;--tag-bd:${c}66;margin:0 7px 0 0">${an}</span>`;
       }
     }
   }
   row.innerHTML = `
     <div class="ht-asset-name">${tag}${r.name}</div>
-    <div class="ht-asset-num">₹${formatINR(r.invested)}</div>
-    <div class="ht-asset-num">${r.currentValue > 0 ? '₹' + formatINR(r.currentValue) : '—'}</div>
+    <div class="ht-asset-num">${htAmt(r.invested)}</div>
+    <div class="ht-asset-num">${r.currentValue > 0 ? htAmt(r.currentValue) : '—'}</div>
     <div class="ht-asset-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
   `;
   return row;
