@@ -1,23 +1,60 @@
 /**
- * VaultZero — Import equity/debt transactions from Coin Order History CSV
+ * VaultZero — Import equity/debt transactions from a Coin Order History CSV into a
+ * chosen VaultZero account (Self, Oppurtunity, Mother, Future Wife, …).
  *
  * HOW TO USE:
  *   1. coin.zerodha.com → Orders → Download order history CSV
  *   2. Paste the CSV into the "Sheet1" tab of the VaultZero spreadsheet (A1, incl. header)
- *   3. Run importFromCoin()
- *   4. Clear Sheet1, paste next CSV, run again
+ *   3. Run importFromCoin()  → prompts which account,
+ *      or run importFromCoin_Self() / _Oppurtunity() / _Mother() / _FutureWife().
+ *   4. Clear Sheet1, paste the next CSV, run again.
  *
  * Only COMPLETE orders imported. Unique key: exchange_order_id.
- * Reuses ISIN_TO_FUND, DEBT_ISIN_TO_FUND, pushUpsert, ensureHeader, buildIdMap,
- * getHeaders, upsertRows from import_from_tradebook.gs (project-wide scope).
+ *
+ * Fund lists are shared with the tradebook importer: each person's ISIN → fund map
+ * lives in import_from_tradebook.gs (ISIN_TO_FUND_A3 = Mother, _A4 = Future Wife).
+ * Same rules apply — an id must belong to that account (safety check), and funds
+ * Self also holds are matched automatically by scheme `code`.
+ *
+ * Row ids: account 1 uses the raw exchange_order_id (preserves existing data); every
+ * other account uses `exchange_order_id-a<accountId>`.
+ *
+ * ⚠️ Mirroring the same trades into two accounts (Self + Oppurtunity) DOUBLE-COUNTS
+ * them in "All Accounts". Separate demats (Mother, Future Wife) don't have this issue.
+ *
+ * Reuses resolveAccountMaps_, accountOptions_, pushUpsert, ensureHeader, buildIdMap,
+ * getHeaders, upsertRows, notify_, vaultSpreadsheet_, vaultDataSpreadsheet_ from
+ * import_from_tradebook.gs (project-wide scope).
  *
  * Coin CSV columns: client_id, isin, scheme_name, plan, transaction_mode,
  * settlement_id, trade_date (DD/MM/YYYY), ordered_at, folio_number, amount,
  * units, nav, status, exchange_order_id, remarks, tag.
  */
 
+// ── Run these ─────────────────────────────────────────────────────────────────
+function importFromCoin_Self()        { importFromCoinForAccount(1); }
+function importFromCoin_Oppurtunity() { importFromCoinForAccount(2); }
+function importFromCoin_Mother()      { importFromCoinForAccount(3); }
+function importFromCoin_FutureWife()  { importFromCoinForAccount(4); }
+
+// Asks which account (when a UI is available), else defaults to Self.
 function importFromCoin() {
-  const dataSS    = vaultDataSpreadsheet_();
+  var accountId = 1;
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var res = ui.prompt('Import from Coin', 'Which account?   ' + accountOptions_(), ui.ButtonSet.OK_CANCEL);
+    if (res.getSelectedButton() !== ui.Button.OK) return;
+    accountId = parseInt(res.getResponseText().trim(), 10);
+  } catch (e) { /* headless — default to Self */ }
+  importFromCoinForAccount(accountId);
+}
+
+// Core importer for a given VaultZero account.
+function importFromCoinForAccount(accountId) {
+  const dataSS = vaultDataSpreadsheet_();
+  const acct   = resolveAccountMaps_(accountId, dataSS);
+  if (!acct) { notify_('Unknown account ' + accountId + '. Choose one of: ' + accountOptions_() + '\n(Add new accounts to ACCOUNT_MAPS in import_from_tradebook.gs.)'); return; }
+
   const sourceSh  = vaultSpreadsheet_().getSheetByName('Sheet1');
   const eqSheet   = dataSS.getSheetByName('equity_transactions');
   const debtSheet = dataSS.getSheetByName('debt_hybrid_transactions');
@@ -52,6 +89,10 @@ function importFromCoin() {
     return;
   }
 
+  // Account-scoped row id so the same order can live under multiple accounts.
+  // Account 1 keeps the raw exchange_order_id (preserves existing Self rows).
+  const idFor = oid => (String(accountId) === '1' ? oid : oid + '-a' + accountId);
+
   const eq   = { toInsert: [], toUpdate: [] };
   const debt = { toInsert: [], toUpdate: [] };
   const skipped = [];
@@ -82,22 +123,22 @@ function importFromCoin() {
     const txnAmount = isNaN(amount) || amount <= 0 ? Math.round(units * nav * 100) / 100 : amount;
     const dateISO   = parseCoinDate(dateRaw);
     const dateMs    = new Date(dateISO).getTime();
-    const managed   = { id: orderId, txn_type: txnType, txn_date: dateISO, units, nav, amount: txnAmount };
+    const rowId     = idFor(orderId);
+    const managed   = { id: rowId, txn_type: txnType, txn_date: dateISO, units, nav, amount: txnAmount };
 
-    const eqFund = ISIN_TO_FUND[isin];
+    const eqFund = acct.equity[isin];
     if (eqFund) {
       managed.fund_id = eqFund.id;
-      pushUpsert(eq, eqIdToRow, orderId, eqFund.id, managed, dateMs, remarks);
+      pushUpsert(eq, eqIdToRow, rowId, eqFund.id, managed, dateMs, remarks);
       continue;
     }
-    if (isin in DEBT_ISIN_TO_FUND) {
-      const debtFund = DEBT_ISIN_TO_FUND[isin];
-      if (!debtFund) { skipped.push({ line: i + 1, scheme: row[C.scheme], isin, reason: 'Not in debt_hybrid_funds — skipped' }); continue; }
+    const debtFund = acct.debt[isin];
+    if (debtFund) {
       managed.fund_id = debtFund.id;
-      pushUpsert(debt, debtIdToRow, orderId, debtFund.id, managed, dateMs, remarks);
+      pushUpsert(debt, debtIdToRow, rowId, debtFund.id, managed, dateMs, remarks);
       continue;
     }
-    skipped.push({ line: i + 1, scheme: row[C.scheme], isin, reason: 'ISIN not in map — add to ISIN_TO_FUND in import_from_tradebook.gs' });
+    skipped.push({ line: i + 1, scheme: row[C.scheme], isin, reason: acct.unmappedReason(isin) });
   }
 
   upsertRows(eqSheet, eq.toUpdate, eq.toInsert);
@@ -108,7 +149,7 @@ function importFromCoin() {
       (skipped.length > 8 ? `\n… and ${skipped.length - 8} more` : '')
     : '';
   notify_(
-    `✅  Done\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
+    `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
     `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
   );
 }

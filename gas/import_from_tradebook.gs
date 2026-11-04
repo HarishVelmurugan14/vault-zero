@@ -1,29 +1,39 @@
 /**
  * VaultZero — Import equity/debt transactions from a Zerodha Tradebook CSV into a
- * chosen VaultZero account (the same demat can feed more than one account).
+ * chosen VaultZero account (Self, Oppurtunity, Mother, Future Wife, …).
  *
  * HOW TO USE:
  *   1. Paste one tradebook CSV into the "Tradebook" (or "Sheet1") tab (A1, incl. header)
- *   2. Run importTradebook()  → prompts which account (1 = Self, 2 = Oppurtunity),
- *      or run importTradebook_Self() / importTradebook_Oppurtunity() directly.
+ *   2. Run importTradebook()  → prompts which account,
+ *      or run importTradebook_Self() / _Oppurtunity() / _Mother() / _FutureWife().
  *   3. Clear the tab, paste the next CSV, run again.
  *
  * WHY per-account: a transaction's account is derived from its fund_id
- * (fund → fund.account_id). So the SAME Zerodha order can be tracked under two
- * accounts — e.g. your real "Self" strategy and a parallel "Oppurtunity" what-if —
- * by mapping its ISIN to each account's own fund. To keep the two rows distinct
- * (the `id` column IS the order_id and must be unique), account 1 uses the raw
- * order_id (preserving existing data) and other accounts use `order_id-a<accountId>`.
+ * (fund → fund.account_id), so each account needs its OWN fund rows in VaultZero.
  *
- * ⚠️ Mirroring the same trades into two accounts DOUBLE-COUNTS those holdings in the
- * "All Accounts" total. View Self and Oppurtunity separately via the account switcher.
+ * PER-PERSON FUND LISTS: each account has its own ISIN → fund map below
+ * (ISIN_TO_FUND_A3 = Mother, ISIN_TO_FUND_A4 = Future Wife, …). To add a fund:
+ *   1. In the VaultZero app, switch to that person and add the fund.
+ *   2. Copy the new row's `id` from equity_funds / debt_hybrid_funds.
+ *   3. Add  'ISIN': { id: <that id>, name: '...' }  to that person's map.
+ * Safety check: an id must belong to THAT account, or the row is skipped — so a
+ * typo can never drop Mother's trades into your account.
+ *
+ * Shortcut: a fund Self also holds can be left out of a person's map — the importer
+ * matches it automatically by scheme `code` against that person's own fund rows.
+ *
+ * Row ids: account 1 uses the raw order_id (preserves existing data); every other
+ * account uses `order_id-a<accountId>`. That keeps rows unique when the same order
+ * is mirrored (Oppurtunity) AND when two people's demats reuse the same order_id.
+ *
+ * ⚠️ Mirroring the same trades into two accounts (Self + Oppurtunity) DOUBLE-COUNTS
+ * them in "All Accounts". Separate demats (Mother, Future Wife) don't have this issue.
  *
  * Header-aware upsert keyed on the (account-scoped) id: existing → updated
  * (financial fields only, preserving notes/created_at); new → inserted.
  */
 
-// ── Per-account ISIN → fund maps ──────────────────────────────────────────────
-// Account 1 (Self). These names are ALSO reused by import_from_coin.gs — keep them.
+// ── ISIN catalog = Self's funds (account 1). Also reused by import_from_coin.gs ──
 const ISIN_TO_FUND = {
   'INF966L01986': { id: 1,  name: 'Quant ELSS Tax Saver' },
   'INF200K01UM9': { id: 2,  name: 'SBI ELSS Tax Saver' },
@@ -48,7 +58,7 @@ const DEBT_ISIN_TO_FUND = {
   'INF205K01KR8': { id: 7, name: 'Invesco India Arbitrage' },
 };
 
-// Account 2 (Oppurtunity) — same funds, their own fund rows/ids.
+// ── Account 2 (Oppurtunity) — mirrors some of Self's funds ────────────────────
 const ISIN_TO_FUND_A2 = {
   'INF959L01FP2': { id: 22, name: 'Navi Nifty 50 Index' },
   'INF879O01027': { id: 23, name: 'Parag Parikh Flexi Cap' },
@@ -57,15 +67,35 @@ const ISIN_TO_FUND_A2 = {
 };
 const DEBT_ISIN_TO_FUND_A2 = {};
 
-// Registry: account id → { name, equity, debt }. Add a row per account you track.
+// ── Account 3 (Mother) — her own funds (ids from her rows in VaultZero) ────────
+const ISIN_TO_FUND_A3 = {
+  // 'INF879O01027': { id: 31, name: 'Parag Parikh Flexi Cap' },
+};
+const DEBT_ISIN_TO_FUND_A3 = {
+  // 'INF109K01Q49': { id: 11, name: 'ICICI Liquid' },
+};
+
+// ── Account 4 (Future Wife) — her own funds ───────────────────────────────────
+const ISIN_TO_FUND_A4 = {
+  // 'INF...': { id: 41, name: '...' },
+};
+const DEBT_ISIN_TO_FUND_A4 = {
+  // 'INF...': { id: 21, name: '...' },
+};
+
+// Registry: account id → { name, equity, debt }. Add a block + a row per new account.
 const ACCOUNT_MAPS = {
   1: { name: 'Self',        equity: ISIN_TO_FUND,    debt: DEBT_ISIN_TO_FUND },
   2: { name: 'Oppurtunity', equity: ISIN_TO_FUND_A2, debt: DEBT_ISIN_TO_FUND_A2 },
+  3: { name: 'Mother',      equity: ISIN_TO_FUND_A3, debt: DEBT_ISIN_TO_FUND_A3 },
+  4: { name: 'Future Wife', equity: ISIN_TO_FUND_A4, debt: DEBT_ISIN_TO_FUND_A4 },
 };
 
 // ── Run these ─────────────────────────────────────────────────────────────────
 function importTradebook_Self()        { importTradebookForAccount(1); }
 function importTradebook_Oppurtunity() { importTradebookForAccount(2); }
+function importTradebook_Mother()      { importTradebookForAccount(3); }
+function importTradebook_FutureWife()  { importTradebookForAccount(4); }
 function importFromTradebook()         { importTradebookForAccount(1); }  // back-compat alias
 
 // Asks which account (when a UI is available), else defaults to Self.
@@ -73,8 +103,7 @@ function importTradebook() {
   var accountId = 1;
   try {
     var ui = SpreadsheetApp.getUi();
-    var opts = Object.keys(ACCOUNT_MAPS).map(function (k) { return k + ' = ' + ACCOUNT_MAPS[k].name; }).join(',  ');
-    var res = ui.prompt('Import Tradebook', 'Which account?   ' + opts, ui.ButtonSet.OK_CANCEL);
+    var res = ui.prompt('Import Tradebook', 'Which account?   ' + accountOptions_(), ui.ButtonSet.OK_CANCEL);
     if (res.getSelectedButton() !== ui.Button.OK) return;
     accountId = parseInt(res.getResponseText().trim(), 10);
   } catch (e) { /* headless — default to Self */ }
@@ -83,10 +112,10 @@ function importTradebook() {
 
 // Core importer for a given VaultZero account.
 function importTradebookForAccount(accountId) {
-  const acct = ACCOUNT_MAPS[accountId];
-  if (!acct) { notify_('No ISIN map for account ' + accountId + '. Add it to ACCOUNT_MAPS in import_from_tradebook.gs.'); return; }
+  const dataSS = vaultDataSpreadsheet_();
+  const acct   = resolveAccountMaps_(accountId, dataSS);
+  if (!acct) { notify_('Unknown account ' + accountId + '. Choose one of: ' + accountOptions_() + '\n(Add new accounts to ACCOUNT_MAPS in import_from_tradebook.gs.)'); return; }
 
-  const dataSS      = vaultDataSpreadsheet_();
   const srcSS       = vaultSpreadsheet_();
   const tradebookSh = srcSS.getSheetByName('Tradebook') || srcSS.getSheetByName('Sheet1');
   const eqSheet     = dataSS.getSheetByName('equity_transactions');
@@ -165,7 +194,7 @@ function importTradebookForAccount(accountId) {
       pushUpsert(debt, debtIdToRow, rowId, debtFund.id, managed, dateMs);
       continue;
     }
-    skipped.push({ line: i + 1, symbol, isin, reason: 'ISIN not mapped for ' + acct.name });
+    skipped.push({ line: i + 1, symbol, isin, reason: acct.unmappedReason(isin) });
   }
 
   upsertRows(eqSheet, eq.toUpdate, eq.toInsert);
@@ -179,6 +208,73 @@ function importTradebookForAccount(accountId) {
     `✅  Done — ${acct.name} (account ${accountId})\n\nequity_transactions\n  Inserted : ${eq.toInsert.length}   Updated : ${eq.toUpdate.length}\n\n` +
     `debt_hybrid_transactions\n  Inserted : ${debt.toInsert.length}   Updated : ${debt.toUpdate.length}\n\nSkipped : ${skipped.length}` + skipLines
   );
+}
+
+// ── Account resolution (shared with import_from_coin.gs) ───────────────────────
+
+// Full ISIN → { id, name } maps for one account: that account's own list first
+// (each id verified to be one of ITS fund rows), then funds shared with Self are
+// auto-matched by scheme `code`. Returns null for an unknown account.
+function resolveAccountMaps_(accountId, dataSS) {
+  const base = ACCOUNT_MAPS[accountId];
+  if (!base) return null;
+  const want = String(accountId);
+  const out = { name: base.name, equity: {}, debt: {} };
+  const bad = {};     // ISIN → reason, for list entries that failed the safety check
+  const known = {};   // ISIN → { kind, code } for Self-catalog ISINs (auto-match candidates)
+
+  [['equity', 'equity_funds', ISIN_TO_FUND], ['debt', 'debt_hybrid_funds', DEBT_ISIN_TO_FUND]].forEach(spec => {
+    const kind = spec[0], table = spec[1], selfMap = spec[2], funds = readFundRows_(dataSS, table);
+    const byId = {}, mineByCode = {};
+    funds.forEach(f => {
+      byId[f.id] = f;
+      if (f.account === want && f.code) mineByCode[f.code] = f;
+    });
+
+    // 1) this account's own list — id must exist AND belong to this account
+    const list = base[kind] || {};
+    Object.keys(list).forEach(isin => {
+      const id = String(list[isin].id), f = byId[id];
+      if (!f)                    bad[isin] = `${base.name}'s list points to ${kind} fund id ${id}, which doesn't exist in ${table}`;
+      else if (f.account !== want) bad[isin] = `${base.name}'s list points to fund id ${id}, but that fund belongs to account ${f.account} — fix the id`;
+      else out[kind][isin] = { id: Number(id), name: list[isin].name || f.name };
+    });
+
+    // 2) funds shared with Self → match this account's fund by scheme code
+    Object.keys(selfMap).forEach(isin => {
+      const self = byId[String(selfMap[isin].id)];
+      if (!self || !self.code) return;
+      known[isin] = { kind: kind, code: self.code };
+      if (out[kind][isin] || bad[isin]) return;
+      const f = mineByCode[self.code];
+      if (f) out[kind][isin] = { id: Number(f.id), name: f.name };
+    });
+  });
+
+  out.unmappedReason = isin => bad[isin]
+    || (known[isin]
+      ? `${base.name} has no fund for this scheme yet — add it in VaultZero under ${base.name}`
+      : `ISIN not in ${base.name}'s list — add it to ACCOUNT_MAPS[${accountId}]'s map in import_from_tradebook.gs`);
+  return out;
+}
+
+function readFundRows_(ss, table) {
+  const sh = ss.getSheetByName(table);
+  if (!sh) return [];
+  const v = sh.getDataRange().getValues();
+  if (v.length < 2) return [];
+  const h = v[0].map(x => String(x).trim());
+  const iId = h.indexOf('id'), iAcc = h.indexOf('account_id'), iCode = h.indexOf('code'), iName = h.indexOf('fund_name');
+  return v.slice(1).filter(r => String(r[iId]).trim() !== '').map(r => ({
+    id:      String(r[iId]).trim().replace(/\.0$/, ''),
+    account: iAcc >= 0 ? (String(r[iAcc]).trim().replace(/\.0$/, '') || '1') : '1',   // legacy blank = Self
+    code:    iCode >= 0 ? String(r[iCode]).trim() : '',
+    name:    iName >= 0 ? String(r[iName]).trim() : '',
+  }));
+}
+
+function accountOptions_() {
+  return Object.keys(ACCOUNT_MAPS).map(k => k + ' = ' + ACCOUNT_MAPS[k].name).join(',  ');
 }
 
 // ── Shared helpers (used by import_from_coin.gs too) ──────────────────────────

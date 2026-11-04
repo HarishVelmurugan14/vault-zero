@@ -451,10 +451,188 @@ async function renderHistoryPage() {
     await renderHistoryInArea(txnArea);
   });
 
+  // ── "Last N days" entry — all categories in one feed ──────
+  const recentEntry = document.createElement('div');
+  recentEntry.className = 'recent-entry';
+  recentEntry.innerHTML = `
+    <div class="recent-entry-main">
+      <span class="recent-entry-title">🕑 Last N days</span>
+      <span class="recent-entry-sub">All logs across every category in one feed</span>
+    </div>
+    <span class="recent-entry-go">→</span>`;
+  recentEntry.addEventListener('click', renderRecentLogs);
+  container.appendChild(recentEntry);
+
   filterBar.appendChild(catSelect);
   filterBar.appendChild(subcatSelect);
   container.appendChild(filterBar);
   container.appendChild(txnArea);
+}
+
+// ─── RECENT: LAST N DAYS, ALL CATEGORIES ─────────────────────────────────────
+// A cross-category feed: every transaction logged in the last N days, merged and
+// sorted newest-first, regardless of category. The backend already returns each
+// *transaction* sheet sorted by txn_date desc, so we page each table and stop as
+// soon as we cross the cutoff — no full-table scans.
+
+const RECENT_PAGE = 100;              // rows per fetch while scanning a txn table
+const RECENT_DAYS_KEY = 'vz_recent_days';
+
+// The category a txn stream belongs to (for the hidden-category check + the chip).
+function streamCategory(streamKey) {
+  let cat = CATEGORIES.find(c => c.stream === streamKey);
+  // precious_metals_digital / _physical both live under the precious_metals category
+  if (!cat && streamKey.startsWith('precious_metals')) {
+    cat = CATEGORIES.find(c => c.stream === 'precious_metals');
+  }
+  return cat || null;
+}
+
+// Every stream that has a real transaction table with a txn_date column.
+// SIP streams (no txnTable) and static-balance streams (txnTable: null) have no
+// per-txn log, so they're naturally excluded. Hidden categories are skipped.
+function recentTxnStreams() {
+  const seen = new Set();
+  const out = [];
+  Object.entries(STREAMS).forEach(([key, s]) => {
+    if (!s.txnTable || !s.txnFields?.some(f => f.id === 'txn_date')) return;
+    if (seen.has(s.txnTable)) return;           // safety: one entry per table
+    seen.add(s.txnTable);
+    const cat = streamCategory(key);
+    if (cat && HIDDEN.isCat(cat.id)) return;     // respect hidden categories
+    out.push({ stream: s, catName: cat ? cat.name : (s.label || key) });
+  });
+  return out;
+}
+
+function renderRecentLogs() {
+  const container = document.getElementById('history-content');
+  container.innerHTML = '';
+  setHeader('history-content', 'Recent activity', () => renderHistoryPage());
+
+  const saved = parseInt(localStorage.getItem(RECENT_DAYS_KEY), 10);
+  const defaultN = Number.isFinite(saved) && saved > 0 ? saved : 30;
+
+  const controls = document.createElement('div');
+  controls.className = 'recent-controls';
+  controls.innerHTML = `
+    <span class="recent-controls-label">All categories · last</span>
+    <input type="number" id="recent-n-days" class="recent-n-input" min="1" max="3650" value="${defaultN}">
+    <span class="recent-controls-label">days</span>
+    <button class="btn-primary btn-sm" id="recent-apply">Show</button>`;
+  container.appendChild(controls);
+
+  const area = document.createElement('div');
+  area.id = 'recent-logs-area';
+  container.appendChild(area);
+
+  const input = controls.querySelector('#recent-n-days');
+  const apply = () => {
+    const n = parseInt(input.value, 10);
+    if (!Number.isFinite(n) || n < 1) { showToast('Enter a number of days ≥ 1', 'error'); return; }
+    localStorage.setItem(RECENT_DAYS_KEY, String(n));
+    loadRecentLogs(n, area);
+  };
+  controls.querySelector('#recent-apply').addEventListener('click', apply);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') apply(); });
+
+  loadRecentLogs(defaultN, area);     // auto-run on open with remembered / default N
+}
+
+async function loadRecentLogs(nDays, area) {
+  area.innerHTML = '<div class="recent-status">Loading…</div>';
+  const statusEl = area.querySelector('.recent-status');
+
+  // Cutoff = local midnight, (nDays-1) days back → "last N days" inclusive of today.
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - (nDays - 1));
+
+  const streams = recentTxnStreams();
+  const results = [];
+
+  for (let i = 0; i < streams.length; i++) {
+    const { stream, catName } = streams[i];
+    if (statusEl) statusEl.textContent = `Loading… (${i + 1}/${streams.length} categories)`;
+
+    // Asset names + account mapping (cached per table across the app).
+    const assetMap = {};
+    try {
+      (await fetchAssetsCached(stream)).forEach(a => { assetMap[a.id] = a; STATE.assetMap[a.id] = a; });
+    } catch (_) {}
+
+    let offset = 0, done = false, guard = 0;
+    while (!done && guard++ < 200) {
+      let data;
+      try { data = await API.get(stream.txnTable, { limit: RECENT_PAGE, offset, filters: {} }); }
+      catch (_) { break; }
+      const rows = data.rows || [];
+      if (!rows.length) break;
+
+      for (const txn of rows) {
+        const d = txn.txn_date ? new Date(txn.txn_date) : null;
+        if (!d || isNaN(d.getTime())) continue;
+        if (d < cutoff) { done = true; break; }        // desc order → the rest are older
+        const assetId = String(txn[stream.assetIdCol]);
+        if (HIDDEN.isAsset(stream.assetTable, assetId)) continue;      // hidden asset
+        if (!ACCOUNTS.matches(assetMap[assetId]?.account_id)) continue; // other account
+        txn._assetName = assetMap[assetId]?.[stream.assetNameCol] || '';
+        results.push({ txn, stream, catName, when: d });
+      }
+
+      offset += rows.length;
+      if (offset >= data.total) done = true;
+    }
+  }
+
+  results.sort((a, b) => b.when - a.when);
+  renderRecentList(area, results, nDays);
+}
+
+function renderRecentList(area, results, nDays) {
+  area.innerHTML = '';
+
+  const cats = new Set(results.map(r => r.catName));
+  const IN = ['Buy', 'SIP', 'BUY'], OUT = ['Sell', 'SWP', 'SELL'];
+  let inAmt = 0, outAmt = 0;
+  results.forEach(({ txn }) => {
+    const amt = parseFloat(txn.amount_inr || txn.amount || 0) || 0;
+    if (IN.includes(txn.txn_type)) inAmt += amt;
+    else if (OUT.includes(txn.txn_type)) outAmt += amt;
+  });
+
+  if (!results.length) {
+    const empty = document.createElement('div');
+    empty.className = 'recent-empty';
+    empty.textContent = `No transactions logged in the last ${nDays} day${nDays === 1 ? '' : 's'}.`;
+    area.appendChild(empty);
+    return;
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'recent-summary';
+  summary.innerHTML =
+    `<b>${results.length}</b> txn${results.length === 1 ? '' : 's'} · ` +
+    `<b>${cats.size}</b> categor${cats.size === 1 ? 'y' : 'ies'} · ` +
+    `in ₹${formatINR(inAmt)} · out ₹${formatINR(outAmt)}`;
+  area.appendChild(summary);
+
+  // Grouped by day (date shown once per group; rows show category + meta).
+  let lastDay = null;
+  results.forEach(({ txn, stream, catName }) => {
+    const day = formatDate(txn.txn_date);
+    if (day !== lastDay) {
+      const head = document.createElement('div');
+      head.className = 'recent-day-head';
+      head.textContent = day;
+      area.appendChild(head);
+      lastDay = day;
+    }
+    const row = renderTxnRow(txn, stream, false);
+    const sub = row.querySelector('.txn-sub');
+    if (sub) sub.textContent = [catName, buildTxnMeta(txn, stream)].filter(Boolean).join('  ·  ');
+    area.appendChild(row);
+  });
 }
 
 async function renderHistoryInArea(area) {

@@ -2131,3 +2131,35 @@ body::before {
 }
 .sipplan-day-n { font-size: 10.5px; color: var(--text-muted); }
 .sipplan-day-v { font-size: 13.5px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ── Recent (Last N days, all categories) feed ──────────────────────────────── */
+.recent-entry {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; margin-bottom: 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.recent-entry:hover { border-color: var(--accent); transform: translateX(3px); }
+.recent-entry-main { display: flex; flex-direction: column; gap: 2px; }
+.recent-entry-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.recent-entry-sub { font-size: 12px; color: var(--text-muted); }
+.recent-entry-go { font-size: 18px; color: var(--text-muted); }
+
+.recent-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.recent-controls-label { font-size: 13px; color: var(--text-muted); }
+.recent-n-input {
+  width: 72px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px; color: var(--text);
+  font-size: 14px; outline: none;
+}
+.recent-n-input:focus { border-color: var(--accent); }
+
+.recent-summary { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 8px; }
+.recent-summary b { color: var(--text); }
+.recent-day-head {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted); margin: 16px 0 8px;
+}
+.recent-empty { font-size: 13px; color: var(--text-muted); padding: 24px 0; text-align: center; }
+.recent-status { font-size: 13px; color: var(--text-muted); padding: 16px 0; }
