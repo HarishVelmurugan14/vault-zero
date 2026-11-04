@@ -2,12 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#080808">
+  <!-- Theme before first paint: Classic (default) or Modern (iOS-style, follows the device's light / dark) -->
+  <script>(function(){var t='classic';try{t=localStorage.getItem('vz_theme')||'classic'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();</script>
   <title>VaultZero</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔐</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/theme-modern.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 </head>
@@ -24,7 +28,10 @@
       <button class="nav-tab" data-nav="manage">Manage</button>
       <a class="nav-tab" href="tools/valuation-split.html" target="_blank" rel="noopener" style="text-decoration:none" title="AlphaRevert — quarterly MF valuation-tilt split (v6)">AlphaRevert&nbsp;↗</a>
     </div>
-    <select id="account-switcher" class="account-switcher" title="Account (family view)"></select>
+    <div class="nav-right">
+      <button type="button" id="theme-toggle" class="theme-toggle" title="Switch theme"></button>
+      <select id="account-switcher" class="account-switcher" title="Account (family view)"></select>
+    </div>
   </nav>
 
   <!-- Log Page -->

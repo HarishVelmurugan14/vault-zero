@@ -1,0 +1,426 @@
+/* VaultZero — Modern theme (iOS-style): system font, grouped surfaces, frosted bars, segmented
+   controls, soft depth. Light by default; dark follows the device (or html[data-scheme="dark"]).
+   Every rule is scoped to html[data-theme="modern"], so the Classic theme is untouched. */
+
+/* ── Tokens: light ──────────────────────────────────────────────────────────── */
+
+html[data-theme="modern"] {
+  --bg:         #f2f2f7;              /* systemGroupedBackground */
+  --bg2:        #ececf1;
+  --surface:    #ffffff;              /* secondarySystemGroupedBackground */
+  --surface2:   #f2f2f7;
+  --surface3:   #e5e5ea;
+  --fill:       rgba(118,118,128,0.12);   /* tertiarySystemFill — inputs, segmented track */
+  --fill-2:     rgba(118,118,128,0.08);
+  --border:     rgba(60,60,67,0.12);      /* separator */
+  --border-2:   rgba(60,60,67,0.22);
+
+  --text:       #000000;
+  --text-sub:   rgba(60,60,67,0.75);
+  --text-muted: rgba(60,60,67,0.58);
+
+  --accent:     #007aff;              /* systemBlue */
+  --accent-dim: rgba(0,122,255,0.12);
+  --accent-glow:rgba(0,122,255,0.22);
+  --violet:     #007aff;
+  --violet-dim: rgba(0,122,255,0.12);
+  --violet-glow:rgba(0,122,255,0.22);
+
+  --positive:   #248a3d;              /* systemGreen, darkened for text contrast */
+  --negative:   #d70015;
+  --warning:    #c93400;
+
+  --radius-lg: 20px;
+  --radius:    14px;
+  --radius-sm: 11px;
+  --radius-xs:  8px;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow:    0 1px 2px rgba(0,0,0,0.04), 0 6px 20px rgba(0,0,0,0.05);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.12);
+  --bar:       rgba(249,249,251,0.78);   /* frosted nav / tab bar */
+  --sheet-dim: rgba(0,0,0,0.28);
+
+  --transition: 0.28s cubic-bezier(0.32,0.72,0,1);   /* iOS-like spring-out */
+
+  --chart-tick:    rgba(60,60,67,0.6);
+  --chart-grid:    rgba(60,60,67,0.10);
+  --chart-legend:  rgba(60,60,67,0.75);
+  --chart-label:   rgba(60,60,67,0.75);
+  --chart-surface: #ffffff;
+
+  color-scheme: light;
+}
+
+/* ── Tokens: dark (explicit, or following the device) ──────────────────────── */
+
+html[data-theme="modern"][data-scheme="dark"] {
+  --bg: #000000; --bg2: #0b0b0c; --surface: #1c1c1e; --surface2: #2c2c2e; --surface3: #3a3a3c;
+  --fill: rgba(118,118,128,0.24); --fill-2: rgba(118,118,128,0.16);
+  --border: rgba(84,84,88,0.55); --border-2: rgba(84,84,88,0.8);
+  --text: #ffffff; --text-sub: rgba(235,235,245,0.75); --text-muted: rgba(235,235,245,0.55);
+  --accent: #0a84ff; --accent-dim: rgba(10,132,255,0.18); --accent-glow: rgba(10,132,255,0.3);
+  --violet: #0a84ff; --violet-dim: rgba(10,132,255,0.18); --violet-glow: rgba(10,132,255,0.3);
+  --positive: #30d158; --negative: #ff453a; --warning: #ff9f0a;
+  --shadow-sm: none; --shadow: none; --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+  --bar: rgba(22,22,24,0.78); --sheet-dim: rgba(0,0,0,0.5);
+  --chart-tick: rgba(235,235,245,0.55); --chart-grid: rgba(235,235,245,0.08);
+  --chart-legend: rgba(235,235,245,0.75); --chart-label: rgba(235,235,245,0.75); --chart-surface: #1c1c1e;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="modern"]:not([data-scheme="light"]) {
+    --bg: #000000; --bg2: #0b0b0c; --surface: #1c1c1e; --surface2: #2c2c2e; --surface3: #3a3a3c;
+    --fill: rgba(118,118,128,0.24); --fill-2: rgba(118,118,128,0.16);
+    --border: rgba(84,84,88,0.55); --border-2: rgba(84,84,88,0.8);
+    --text: #ffffff; --text-sub: rgba(235,235,245,0.75); --text-muted: rgba(235,235,245,0.55);
+    --accent: #0a84ff; --accent-dim: rgba(10,132,255,0.18); --accent-glow: rgba(10,132,255,0.3);
+    --violet: #0a84ff; --violet-dim: rgba(10,132,255,0.18); --violet-glow: rgba(10,132,255,0.3);
+    --positive: #30d158; --negative: #ff453a; --warning: #ff9f0a;
+    --shadow-sm: none; --shadow: none; --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+    --bar: rgba(22,22,24,0.78); --sheet-dim: rgba(0,0,0,0.5);
+    --chart-tick: rgba(235,235,245,0.55); --chart-grid: rgba(235,235,245,0.08);
+    --chart-legend: rgba(235,235,245,0.75); --chart-label: rgba(235,235,245,0.75); --chart-surface: #1c1c1e;
+    color-scheme: dark;
+  }
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+
+html[data-theme="modern"] body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Inter', system-ui, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-theme="modern"] body::before { display: none; }          /* no noise texture */
+html[data-theme="modern"] .page { animation: vzm-in 0.35s var(--transition); }
+@keyframes vzm-in { from { transform: translateY(6px); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="modern"] .page { animation: none; }
+  html[data-theme="modern"] * { transition-duration: 0.01s !important; }
+}
+
+/* Press feedback everywhere it's tappable */
+html[data-theme="modern"] :is(button, .list-item, .bucket-card, .nav-tab, .snapshot-row, .ht-category, .ht-subcat):active {
+  transform: scale(0.98);
+}
+
+/* ── Top bar (frosted) ──────────────────────────────────────────────────────── */
+
+/* The frosted layer lives on ::before: a backdrop-filter on the bar itself would trap the
+   phone's fixed bottom tab bar inside it. */
+html[data-theme="modern"] .top-nav {
+  height: 54px;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom: 0.5px solid var(--border);
+  isolation: isolate;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+}
+html[data-theme="modern"] .top-nav::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: var(--bar); backdrop-filter: saturate(180%) blur(22px); -webkit-backdrop-filter: saturate(180%) blur(22px);
+}
+html[data-theme="modern"] .app-logo {
+  background: none; -webkit-text-fill-color: currentColor; color: var(--text);
+  font-size: 17px; font-weight: 700; letter-spacing: -0.02em;
+}
+html[data-theme="modern"] .app-logo::before { content: '◆ '; color: var(--accent); }
+
+/* Segmented control */
+html[data-theme="modern"] .nav-tabs {
+  background: var(--fill); border: none; border-radius: 10px; padding: 2px; gap: 0;
+}
+html[data-theme="modern"] .nav-tab {
+  color: var(--text); font-size: 13px; font-weight: 500; padding: 6px 14px; border-radius: 8px;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+html[data-theme="modern"] .nav-tab:hover { color: var(--text); background: var(--fill-2); }
+html[data-theme="modern"] .nav-tab.active {
+  background: var(--surface); color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 0 0 0.5px rgba(0,0,0,0.04);
+}
+html[data-theme="modern"][data-scheme="dark"] .nav-tab.active { background: #636366; }
+@media (prefers-color-scheme: dark) { html[data-theme="modern"]:not([data-scheme="light"]) .nav-tab.active { background: #636366; } }
+
+html[data-theme="modern"] :is(.theme-toggle, .account-switcher) {
+  background: var(--fill); border: none; color: var(--text); border-radius: 999px;
+  font-size: 13px; font-weight: 500; padding: 7px 12px; height: auto;
+}
+
+/* ── Page titles (iOS large title) ─────────────────────────────────────────── */
+
+html[data-theme="modern"] .page-header { padding: 26px 0 14px; }
+html[data-theme="modern"] .page-header h2 { font-size: 30px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; }
+/* Back sits on its own row above the large title, as on iOS. */
+html[data-theme="modern"] .page-header:has(> .btn-back) { row-gap: 2px; padding-top: 12px; }
+html[data-theme="modern"] .page-header:has(> .btn-back) h2 { flex-basis: 100%; }
+html[data-theme="modern"] .btn-back {
+  background: none; border: none; color: var(--accent); padding: 6px 4px 6px 0; font-size: 16px; font-weight: 500;
+}
+html[data-theme="modern"] .btn-back:hover { background: none; color: var(--accent); opacity: 0.7; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+
+html[data-theme="modern"] .btn-primary {
+  background: var(--accent); box-shadow: none; border-radius: 12px; font-size: 16px; font-weight: 600;
+  padding: 14px 20px; letter-spacing: -0.01em;
+}
+html[data-theme="modern"] .btn-primary:hover { background: var(--accent); transform: none; box-shadow: none; filter: brightness(1.06); }
+html[data-theme="modern"] .btn-secondary {
+  background: var(--accent-dim); color: var(--accent); border: none; border-radius: 12px; font-weight: 600;
+}
+html[data-theme="modern"] .btn-secondary:hover { background: var(--accent-dim); color: var(--accent); filter: brightness(0.97); }
+html[data-theme="modern"] .btn-outline {
+  background: var(--fill); color: var(--text); border: none; border-radius: 999px; font-weight: 500;
+}
+html[data-theme="modern"] .btn-outline:hover { background: var(--fill); color: var(--text); filter: brightness(0.96); }
+html[data-theme="modern"] .btn-outline.active { background: var(--accent); color: #fff; }
+html[data-theme="modern"] .btn-sm { padding: 6px 12px; font-size: 13px; }
+html[data-theme="modern"] .btn-danger { background: rgba(255,59,48,0.12); border: none; color: var(--negative); border-radius: 10px; }
+
+/* ── Log: bucket cards + inset grouped lists ───────────────────────────────── */
+
+html[data-theme="modern"] .bucket-card {
+  border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px 18px;
+}
+html[data-theme="modern"] .bucket-card::before,
+html[data-theme="modern"] .bucket-card::after { display: none; }
+html[data-theme="modern"] .bucket-card:hover { transform: none; box-shadow: var(--shadow); border: none; }
+html[data-theme="modern"] .bucket-icon {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--accent-dim); font-size: 22px;
+}
+html[data-theme="modern"] .bucket-name { font-size: 16px; font-weight: 600; }
+
+html[data-theme="modern"] .list {
+  gap: 0; background: var(--surface); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+  margin-top: 8px; padding-top: 0;
+}
+html[data-theme="modern"] .list-item {
+  background: transparent; border: none; border-radius: 0; padding: 14px 16px; font-size: 16px; font-weight: 400;
+  box-shadow: inset 0 -0.5px 0 var(--border); margin-left: 0;
+}
+html[data-theme="modern"] .list-item:last-child { box-shadow: none; }
+html[data-theme="modern"] .list-item::before { display: none; }
+html[data-theme="modern"] .list-item::after { color: var(--text-muted); font-size: 22px; font-weight: 300; }
+html[data-theme="modern"] .list-item:hover { background: var(--fill-2); transform: none; box-shadow: inset 0 -0.5px 0 var(--border); }
+html[data-theme="modern"] .list-item:hover::after { transform: none; color: var(--text-muted); }
+
+/* ── Forms ──────────────────────────────────────────────────────────────────── */
+
+html[data-theme="modern"] :is(.field-group, .form-group) label {
+  text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; color: var(--text-sub);
+}
+html[data-theme="modern"] :is(.field-group input, .field-group select, .form-input, .holdings-filter-select, .insights-month-input) {
+  background-color: var(--fill-2); border: 0.5px solid transparent; border-radius: 11px; font-size: 16px; color: var(--text);
+}
+html[data-theme="modern"] .field-group { margin-bottom: 18px; }
+html[data-theme="modern"] .field-error:empty { display: none; }
+html[data-theme="modern"] .field-error { margin-top: 6px; }
+html[data-theme="modern"] .field-group select:not([multiple]) {
+  appearance: none; -webkit-appearance: none; padding-right: 38px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238e8e93' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1.5l5 5 5-5'/></svg>");
+  background-repeat: no-repeat; background-position: right 14px center; background-size: 12px 8px;
+}
+html[data-theme="modern"] :is(.field-group input, .field-group select, .form-input):hover:not(:disabled) { border-color: var(--border); }
+html[data-theme="modern"] :is(.field-group input, .field-group select, .form-input, .holdings-filter-select):focus {
+  background-color: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-dim);
+}
+html[data-theme="modern"] .field-locked { background: var(--fill-2); border: none; border-radius: 11px; }
+
+/* ── Sheets (overlays) ──────────────────────────────────────────────────────── */
+
+html[data-theme="modern"] .asset-form-overlay {
+  background: var(--sheet-dim); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+html[data-theme="modern"] .asset-form-box {
+  background: var(--bg); border: none; border-radius: 22px 22px 0 0; box-shadow: var(--shadow-lg);
+  padding: 10px 20px calc(28px + env(safe-area-inset-bottom));
+}
+html[data-theme="modern"] .asset-form-box::before {           /* grabber */
+  content: ''; display: block; width: 36px; height: 5px; border-radius: 3px; background: var(--border-2); margin: 0 auto 16px;
+}
+html[data-theme="modern"] .asset-form-box h3 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+@media (min-width: 720px) {
+  html[data-theme="modern"] .asset-form-overlay { align-items: center; }
+  html[data-theme="modern"] .asset-form-box { border-radius: 22px; max-width: 520px; padding-top: 24px; }
+  html[data-theme="modern"] .asset-form-box::before { display: none; }
+}
+
+/* ── Cards (Insights, Holdings, History) ───────────────────────────────────── */
+
+html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero, .insights-filter-bar,
+  .holdings-tree, .history-summary-card, .snapshot-take, .holdings-acct-breakdown) {
+  background: var(--surface); border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow);
+}
+html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero)::before,
+html[data-theme="modern"] :is(.chart-card, .summary-card, .metric-card, .portfolio-hero)::after { display: none; }
+html[data-theme="modern"] .chart-card:hover { box-shadow: var(--shadow); border: none; }
+html[data-theme="modern"] .chart-card-title {
+  text-transform: none; letter-spacing: -0.01em; font-size: 17px; font-weight: 600; color: var(--text);
+}
+html[data-theme="modern"] .portfolio-hero { padding: 24px; }
+html[data-theme="modern"] .portfolio-hero-label { text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text-sub); font-weight: 500; }
+html[data-theme="modern"] .portfolio-hero-value { font-size: 44px; font-weight: 700; letter-spacing: -0.035em; }
+html[data-theme="modern"] .metric-card { border-left: none; }
+html[data-theme="modern"] .metric-card-label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text-sub); }
+html[data-theme="modern"] .metric-card-value { letter-spacing: -0.02em; }
+html[data-theme="modern"] .insights-filter-label { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500; color: var(--text-sub); }
+html[data-theme="modern"] .snapshot-take { border-left: none; }
+
+/* Insights sub-tabs → scrolling segmented pills */
+html[data-theme="modern"] .insights-subnav {
+  border-bottom: none; gap: 6px; padding: 4px 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+}
+html[data-theme="modern"] .insights-subnav::-webkit-scrollbar { display: none; }
+html[data-theme="modern"] .insights-subnav-tab { flex: 0 0 auto; }
+html[data-theme="modern"] .insights-subnav-tab {
+  border: none; border-radius: 999px; padding: 7px 14px; color: var(--text); background: var(--fill-2); font-weight: 500;
+}
+html[data-theme="modern"] .insights-subnav-tab.active { background: var(--text); color: var(--bg); border: none; }
+
+/* Health check rows */
+html[data-theme="modern"] .hc-item { background: var(--fill-2); border-left: none; border-radius: 12px; }
+
+/* Tables */
+html[data-theme="modern"] .report-table th {
+  text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; color: var(--text-sub);
+  background: transparent; border-bottom: 0.5px solid var(--border);
+}
+html[data-theme="modern"] .report-table td { border-bottom: 0.5px solid var(--border); }
+html[data-theme="modern"] .report-table tr:hover td { background: var(--fill-2); }
+
+/* Holdings tree rows */
+html[data-theme="modern"] :is(.ht-bucket, .ht-category, .ht-subcat, .ht-asset, .ht-grand) { border-color: var(--border); }
+html[data-theme="modern"] .ht-acct-tag { border-radius: 999px; background: var(--fill-2); border-color: transparent; }
+html[data-theme="modern"] .ht-bucket { background: var(--fill-2); }
+html[data-theme="modern"] .holdings-acct-breakdown .hab-bar { background: var(--fill); }
+
+/* History rows */
+html[data-theme="modern"] .txn-row {
+  background: var(--surface); border: none; border-radius: 14px; box-shadow: var(--shadow-sm);
+}
+html[data-theme="modern"] .txn-badge { border-radius: 50%; }
+
+/* Multi-select panel */
+html[data-theme="modern"] .multiselect-panel { background: var(--surface); border: 0.5px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); }
+html[data-theme="modern"] .multiselect-item { border-radius: 9px; font-size: 15px; }
+
+/* Toast → floating pill */
+html[data-theme="modern"] .toast {
+  background: rgba(28,28,30,0.88); color: #fff; border: none; border-radius: 999px;
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: var(--shadow-lg); font-weight: 500;
+}
+
+/* ── Manage: inset grouped list with iOS switches ──────────────────────────── */
+
+html[data-theme="modern"] .manage-cat:not(.manage-row) {
+  background: var(--surface); border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow); margin-bottom: 18px;
+}
+html[data-theme="modern"] .manage-row { padding: 9px 14px 9px 16px; border-bottom: 0.5px solid var(--border); min-height: 48px; }
+html[data-theme="modern"] .manage-row.manage-cat { background: none; }
+html[data-theme="modern"] .manage-row.manage-cat .manage-label { font-size: 17px; font-weight: 600; }
+html[data-theme="modern"] .manage-row.manage-sub { padding-left: 16px; background: var(--fill); }
+html[data-theme="modern"] .manage-row.manage-sub .manage-label {
+  text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; color: var(--text-sub);
+}
+html[data-theme="modern"] .manage-row.manage-asset { padding-left: 28px; }
+html[data-theme="modern"] .manage-label { font-size: 15px; }
+html[data-theme="modern"] .manage-row.manage-hidden .manage-label { text-decoration: none; opacity: 0.4; }
+/* The Shown / Hidden button becomes a switch; its text stays for screen readers. */
+html[data-theme="modern"] .manage-toggle {
+  position: relative; width: 51px; height: 31px; padding: 0; border: none; border-radius: 999px;
+  background: #34c759; color: transparent; font-size: 0; overflow: hidden;   /* systemGreen */
+  transition: background 0.2s ease;
+}
+html[data-theme="modern"] .manage-toggle::after {
+  content: ''; position: absolute; top: 2px; left: 22px; width: 27px; height: 27px; border-radius: 50%;
+  background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.04);
+  transition: left 0.22s cubic-bezier(.3,.7,.4,1);
+}
+html[data-theme="modern"] .manage-toggle.is-hidden { background: var(--fill); }
+html[data-theme="modern"] .manage-toggle.is-hidden::after { left: 2px; }
+html[data-theme="modern"] .manage-delete {
+  background: none; border: none; color: var(--negative); font-size: 14px; font-weight: 500; padding: 4px 6px;
+}
+html[data-theme="modern"] .goal-manage-hint { color: var(--text-sub); font-size: 13px; line-height: 1.45; }
+
+/* ── Phone: bottom tab bar (iOS) ───────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  html[data-theme="modern"] .nav-tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
+    display: flex; justify-content: space-around; border-radius: 0; padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    background: var(--bar); backdrop-filter: saturate(180%) blur(22px); -webkit-backdrop-filter: saturate(180%) blur(22px);
+    border-top: 0.5px solid var(--border);
+  }
+  html[data-theme="modern"] .nav-tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10.5px; font-weight: 500; padding: 4px 0; color: var(--text-muted); background: none;
+  }
+  html[data-theme="modern"] .nav-tabs .nav-tab:is(.active, :hover) { background: none; box-shadow: none; }
+  html[data-theme="modern"] .nav-tabs .nav-tab.active { color: var(--accent); }
+  html[data-theme="modern"] .nav-tab::before {
+    content: ''; width: 26px; height: 24px; background: currentColor;
+    -webkit-mask: var(--tab-icon) center / contain no-repeat; mask: var(--tab-icon) center / contain no-repeat;
+  }
+  html[data-theme="modern"] a.nav-tab { display: none; }       /* AlphaRevert opens a separate tool */
+  html[data-theme="modern"] .nav-tab[data-nav="log"]      { --tab-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><circle cx='12' cy='12' r='9'/><path d='M12 8v8M8 12h8'/></svg>"); }
+  html[data-theme="modern"] .nav-tab[data-nav="history"]  { --tab-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/></svg>"); }
+  html[data-theme="modern"] .nav-tab[data-nav="holdings"] { --tab-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v9h9'/><path d='M20.5 15.5A9 9 0 1 1 8.5 3.7'/></svg>"); }
+  html[data-theme="modern"] .nav-tab[data-nav="insights"] { --tab-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><path d='M4 20h16'/><path d='M7 16v-5M12 16V7M17 16v-8'/></svg>"); }
+  html[data-theme="modern"] .nav-tab[data-nav="manage"]   { --tab-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><path d='M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1'/><circle cx='15' cy='7' r='2'/><circle cx='9' cy='12' r='2'/><circle cx='17' cy='17' r='2'/></svg>"); }
+  html[data-theme="modern"] .page { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+  html[data-theme="modern"] .page-header h2 { font-size: 28px; }
+  html[data-theme="modern"] .portfolio-hero-value { font-size: 36px; }
+  html[data-theme="modern"] .toast { bottom: calc(84px + env(safe-area-inset-bottom)); }
+  /* Raised above the tab bar, so the hidden toast must drop further to leave the screen. */
+  html[data-theme="modern"] .toast:not(.show) {
+    transform: translateX(-50%) translateY(calc(100% + 100px + env(safe-area-inset-bottom))); visibility: hidden;
+    transition: transform 0.3s ease, visibility 0s linear 0.3s;
+  }
+  html[data-theme="modern"] .edit-action-bar { bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 5; }
+  /* Top bar on narrow phones: keep the logo on one line and let the controls shrink. */
+  html[data-theme="modern"] .app-logo { white-space: nowrap; flex-shrink: 0; }
+  html[data-theme="modern"] .nav-right { min-width: 0; flex-shrink: 1; }
+  html[data-theme="modern"] .account-switcher { min-width: 0; }
+  /* Filters: a tidy two-column grid that never pokes past the card. */
+  html[data-theme="modern"] .insights-filter-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html[data-theme="modern"] .insights-filter-group { min-width: 0; }
+  html[data-theme="modern"] .insights-filter-group > * { min-width: 0; max-width: 100%; }
+  html[data-theme="modern"] .insights-filter-bar > .insights-filter-group:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  /* Holdings tree: names wrap to two lines instead of cutting off. */
+  html[data-theme="modern"] :is(.holdings-tree-header, .ht-bucket, .ht-category, .ht-subcat, .ht-asset, .ht-grand) {
+    grid-template-columns: minmax(0, 1fr) 94px 94px; padding-right: 12px;
+  }
+  html[data-theme="modern"] :is(.ht-bucket-name, .ht-category-name, .ht-subcat-name, .ht-asset-name) {
+    white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+    overflow-wrap: anywhere;
+  }
+  html[data-theme="modern"] :is(.ht-bucket-num, .ht-category-num, .ht-subcat-num, .ht-asset-num, .ht-grand-num) {
+    font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  html[data-theme="modern"] .ht-bucket   { padding-left: 14px; }
+  html[data-theme="modern"] .ht-category { padding-left: 20px; }
+  html[data-theme="modern"] .ht-subcat   { padding-left: 28px; }
+  html[data-theme="modern"] .ht-asset    { padding-left: 36px; }
+  /* Three columns here, so the P&L cell hides up to 720px (Classic hides it only up to 600px). */
+  html[data-theme="modern"] :is(.ht-bucket-num, .ht-category-num, .ht-subcat-num, .ht-asset-num, .ht-grand-num):nth-child(4),
+  html[data-theme="modern"] .holdings-tree-header span:nth-child(4) { display: none; }
+}
+@media (max-width: 400px) {
+  html[data-theme="modern"] .theme-toggle-name { display: none; }   /* just the ◐ glyph */
+  html[data-theme="modern"] .account-switcher { max-width: 132px; }
+  html[data-theme="modern"] :is(.holdings-tree-header, .ht-bucket, .ht-category, .ht-subcat, .ht-asset, .ht-grand) {
+    grid-template-columns: minmax(0, 1fr) 84px 84px; padding-right: 8px;
+  }
+  html[data-theme="modern"] :is(.ht-bucket-num, .ht-category-num, .ht-subcat-num, .ht-asset-num, .ht-grand-num) { font-size: 11px; }
+  html[data-theme="modern"] .ht-bucket   { padding-left: 10px; }
+  html[data-theme="modern"] .ht-category { padding-left: 14px; }
+  html[data-theme="modern"] .ht-subcat   { padding-left: 20px; }
+  html[data-theme="modern"] .ht-asset    { padding-left: 26px; }
+}

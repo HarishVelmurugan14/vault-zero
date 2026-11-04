@@ -112,7 +112,37 @@ function showTokenModal(invalid = false) {
 }
 
 // Boot
+// ── Theme: Classic (default) or Modern (iOS-style; light / dark follows the device) ──
+const THEMES = { classic: 'Classic', modern: 'Modern' };
+function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'modern' ? 'modern' : 'classic'; }
+function applyTheme(name, restyle) {
+  const t = THEMES[name] ? name : 'classic';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('vz_theme', t); } catch (_) {}
+  const dark = t === 'classic' || (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'classic' ? '#080808' : dark ? '#000000' : '#f2f2f7');
+  const btn = document.getElementById('theme-toggle');
+  if (btn) {
+    btn.innerHTML = '◐ <span class="theme-toggle-name"></span>';
+    btn.lastChild.textContent = THEMES[t];
+    btn.title = 'Theme: ' + THEMES[t] + ' — tap to switch to ' + THEMES[t === 'classic' ? 'modern' : 'classic'];
+  }
+  // Only charts carry colours of their own; everything else restyles through CSS.
+  if (restyle && STATE.page === 'insights' && typeof restyleInsightsCharts === 'function') restyleInsightsCharts();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  try {                                                              // theming must never block boot
+    applyTheme(currentTheme(), false);
+    const themeBtn = document.getElementById('theme-toggle');
+    if (themeBtn) themeBtn.addEventListener('click', () => applyTheme(currentTheme() === 'classic' ? 'modern' : 'classic', true));
+    const mq = window.matchMedia && matchMedia('(prefers-color-scheme: dark)');
+    const onScheme = () => { if (currentTheme() === 'modern') applyTheme('modern', true); };
+    if (mq && mq.addEventListener) mq.addEventListener('change', onScheme);
+    else if (mq && mq.addListener) mq.addListener(onScheme);        // Safari 13 and older
+  } catch (e) { console.warn('Theme setup failed', e); }
+
   // If no token saved yet, show the key modal before anything else
   if (!AUTH.get()) {
     showTokenModal();

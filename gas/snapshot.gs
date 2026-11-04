@@ -286,7 +286,9 @@ function vzsBuild_(ss, data, plan, source, existing, log, liveDay) {
   return finish(true);
 }
 
-// Manual-priced assets held at the end of `dateStr`, with their latest price up to that day.
+// The assets the Take snapshot popup asks a price for: real estate and physical gold / silver
+// (no market price exists) that are held at the end of `dateStr` — unless the asset is set to
+// Price Source = formula (its price is in the sheet). With their latest price up to that day.
 function vzsManualHeld_(data, dateStr, tz) {
   const out = [];
   VZS_STREAMS.filter(st => st.manual).forEach(st => {
@@ -294,6 +296,7 @@ function vzsManualHeld_(data, dateStr, tz) {
     (data[st.assets] || []).forEach(a => {
       const p = pos[vzKey_(a.id)];
       if (!p || p.buyUnits <= 0 || p.netQty <= 1e-6) return;
+      if (String(a.price_fetch_way || '') === 'formula') return;
       const m = vzsManualPrice_(data, st.manual, a.id, dateStr, tz);
       out.push({ asset_type: st.manual, asset_id: vzKey_(a.id), name: String(a[st.name] || '').trim(),
                  account_id: vzKey_(a.account_id), last_price: m.p, last_date: m.d });
@@ -611,6 +614,10 @@ function vzsSheetPriceSource_(data, day, tz, started) {
       return { failed: [], warnings };
     },
     at(st, a, iso) {
+      if (st.manual && String(a.price_fetch_way || '') === 'formula') {   // priced in the sheet, not by you
+        const p = Number(a.current_price) || 0;
+        return { price: p > 0 ? p : 0, source: 'sheet', date: day };
+      }
       if (st.manual) {
         const m = vzsManualPrice_(data, st.manual, a.id, iso, tz);
         return { price: m.p, source: 'manual', date: m.d };

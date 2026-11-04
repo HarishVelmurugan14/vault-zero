@@ -42,6 +42,13 @@
   --shadow-lg: 0 12px 50px rgba(0,0,0,0.8);
 
   --transition: 0.18s cubic-bezier(0.4,0,0.2,1);
+
+  /* Chart colours (js/insights.js CT()) */
+  --chart-tick:    #525252;
+  --chart-grid:    rgba(255,255,255,0.05);
+  --chart-legend:  #8b90a8;
+  --chart-label:   #9fb0a6;   /* Plan-tab chart labels */
+  --chart-surface: #111111;
 }
 
 /* ── Reset & base ───────────────────────────────────────────────────────────── */
@@ -1501,6 +1508,14 @@ body::before {
 
 /* ── Account switcher (family view) ──────────────────────────────────────────── */
 
+.nav-right { display: flex; align-items: center; gap: 8px; }
+.theme-toggle {
+  background: var(--surface2); color: var(--text-sub); border: 1px solid var(--border);
+  border-radius: 20px; padding: 6px 12px; font-size: 12px; font-weight: 500; font-family: inherit;
+  cursor: pointer; white-space: nowrap;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-2); }
+
 .account-switcher {
   background: var(--surface2);
   color: var(--text);
@@ -1636,6 +1651,9 @@ body::before {
 
 .multiselect { position: relative; display: inline-block; }
 .multiselect-btn { text-align: left; cursor: pointer; white-space: nowrap; }
+/* In a filter column the button fills the column and never forces it wider. */
+.insights-filter-group .multiselect { display: block; min-width: 0; }
+.insights-filter-group .multiselect-btn { min-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .multiselect-panel {
   position: absolute; top: 100%; left: 0; z-index: 50;
   margin-top: 4px; min-width: 210px; max-width: calc(100vw - 32px); max-height: 300px; overflow-y: auto;
@@ -1851,6 +1869,20 @@ body::before {
 
 /* ── Responsive breakpoints ──────────────────────────────────────────────────── */
 
+/* Narrow screens, Classic: the one-row bar needs ~880px, so below that the logo
+   + theme/account sit on top and the tabs get a scrollable second row; the bar
+   never pushes the page wider than the screen. Side padding stays as set above. */
+@media (max-width: 899px) {
+  html:not([data-theme="modern"]) .top-nav {
+    flex-wrap: wrap; height: auto; padding-top: 10px; padding-bottom: 8px; row-gap: 8px;
+  }
+  html:not([data-theme="modern"]) .nav-tabs {
+    order: 3; flex: 1 0 100%; overflow-x: auto; scrollbar-width: none;
+  }
+  html:not([data-theme="modern"]) .nav-tabs::-webkit-scrollbar { display: none; }
+  html:not([data-theme="modern"]) .nav-tab { flex: 1 0 auto; }
+}
+
 @media (min-width: 480px) {
   .bucket-card:nth-child(3) { grid-column: auto; }
   .bucket-grid { grid-template-columns: repeat(3, 1fr); }
@@ -1953,9 +1985,14 @@ body::before {
 .snapshot-view { display: inline-flex; gap: 6px; }
 .snapshot-take {
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: var(--radius); padding: 12px 16px; margin-bottom: 16px; color: var(--text);
+  border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; color: var(--text);
 }
-.snapshot-take-title { font-weight: 600; margin-bottom: 4px; }
+.snapshot-take-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.snapshot-take-row .snapshot-take-muted { margin-left: 6px; }
+.snapshot-take-row .btn-primary { width: auto; margin-top: 0; padding: 8px 16px; }
+.snapshot-take-label { font-size: 12px; font-weight: 600; margin: 10px 0 2px; }
+.snapshot-dialog .snapshot-take-fields { grid-template-columns: 1fr; }
+.snapshot-take-title { font-weight: 600; }
 .snapshot-take-muted { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
 .snapshot-take-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 10px 0; }
 .snapshot-take-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }

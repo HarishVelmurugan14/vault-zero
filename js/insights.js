@@ -38,6 +38,14 @@ function newtonXIRR(sorted, t0) {
   return isFinite(rate) && rate > -1 && rate < 100 ? rate : null;
 }
 
+// Chart colours follow the theme (CSS tokens --chart-*), read when a chart is drawn.
+function CT() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, dflt) => (cs.getPropertyValue(name) || '').trim() || dflt;
+  return { tick: v('--chart-tick', '#525252'), grid: v('--chart-grid', 'rgba(255,255,255,0.05)'),
+           legend: v('--chart-legend', '#8b90a8'), label: v('--chart-label', '#9fb0a6'), surface: v('--chart-surface', '#111111') };
+}
+
 function fmtXIRR(r) {
   return r !== null ? (r * 100).toFixed(1) + '%' : '—';
 }
@@ -368,6 +376,16 @@ function redrawCharts(chartsArea, rawData) {
   drawCharts(chartsArea, rawData);
 }
 
+// Theme changed: redraw the charts in the new colours, keeping filters, tab and scroll.
+// While Insights is still loading there is nothing to redraw (the first draw reads CT()).
+function restyleInsightsCharts() {
+  const area = document.getElementById('insights-charts-area');
+  if (!area || !area.isConnected || !_insightsCache) return;
+  const y = window.scrollY;
+  redrawCharts(area, _insightsCache);
+  requestAnimationFrame(() => window.scrollTo(0, y));
+}
+
 
 function makeReportCard(title, divId, fullWidth = false) {
   const card = document.createElement('div');
@@ -396,9 +414,9 @@ function drawCharts(chartsArea, rawData) {
 
   chartsArea.innerHTML = '';
   if (typeof Chart !== 'undefined') {
-    Chart.defaults.color = '#525252';
-    Chart.defaults.borderColor = 'rgba(255,255,255,0.05)';
-    Chart.defaults.font.family = "Inter, -apple-system, BlinkMacSystemFont, sans-serif";
+    Chart.defaults.color = CT().tick;
+    Chart.defaults.borderColor = CT().grid;
+    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily || "Inter, -apple-system, BlinkMacSystemFont, sans-serif";   // the theme's font
     Chart.defaults.font.size = 11;
   }
 
@@ -1349,7 +1367,7 @@ function drawCurrencyChart(canvasId, byCategory) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v)), backgroundColor: entries.map(([k]) => colors[k] || '#7c3aed'), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v)), backgroundColor: entries.map(([k]) => colors[k] || '#7c3aed'), borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1379,12 +1397,12 @@ function drawCapSplitChart(canvasId, bySubcat) {
       responsive: true,
       plugins: {
         datalabels: { display: false },
-        legend: { position: 'top', labels: { color: '#8b90a8', padding: 12, usePointStyle: true } },
+        legend: { position: 'top', labels: { color: CT().legend, padding: 12, usePointStyle: true } },
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%` } },
       },
       scales: {
-        x: { ticks: { color: '#525252', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
-        y: { ticks: { color: '#525252', callback: v => v + '%', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, beginAtZero: true, max: 70 },
+        x: { ticks: { color: CT().tick, font: { size: 11 } }, grid: { color: CT().grid, drawBorder: false } },
+        y: { ticks: { color: CT().tick, callback: v => v + '%', font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false }, beginAtZero: true, max: 70 },
       },
     },
   });
@@ -1469,6 +1487,7 @@ function makeChartCard(title, canvasId, fullWidth = false) {
 // are applied server-side; the card's own filters (category → subcategory → asset, year → month,
 // all multi-select) and the Monthly / Yearly view run here on the compact per-asset rows.
 
+const SNAP_REDEPLOY = '📸 Snapshots need the new Apps Script version: Apps Script → Deploy → Manage deployments → ✏️ → Version: New version → Deploy, then reload.';
 let _snapshotCache = {};         // account → snapshotData payload (this page session)
 let _snapshotFormCache = null;   // snapshotForm: this month's window + manual prices to ask for
 let _snapshotTakeMsg = '';        // result of the last "Take snapshot", shown after the panel redraws
@@ -1517,61 +1536,86 @@ async function drawSnapshotTake() {
     const gen = _snapshotGen;
     try { f = await API.snapshot('snapshotForm'); }
     catch (e) { if (el.isConnected) { el.className = 'snapshot-take'; el.style.display = ''; el.textContent = 'Snapshot panel unavailable: ' + e.message; } return; }
+    if (!f || !f.month) {                                               // an Apps Script deployment without snapshot.gs
+      if (el.isConnected) { el.className = 'snapshot-take'; el.style.display = ''; el.textContent = SNAP_REDEPLOY; }
+      return;
+    }
     if (gen === _snapshotGen) _snapshotFormCache = f;
   }
   if (!el.isConnected) return;
   el.className = 'snapshot-take';
   el.style.display = '';
   const month = monthLabel(f.month.slice(0, 7));
-  const tagAcct = ACCOUNTS.list.length > 1;                            // the panel covers every account
+  const tagAcct = ACCOUNTS.list.length > 1;                            // the snapshot covers every account
+  el.innerHTML = `
+    <div class="snapshot-take-row">
+      <div>
+        <span class="snapshot-take-title">📸 ${snapEsc(month)} snapshot</span>
+        <span class="snapshot-take-muted">${f.taken
+          ? `· taken as of ${snapEsc(snapDayLabel(f.taken.date))} · value ${fmtCurrency(f.taken.value)}${tagAcct ? ' (all accounts)' : ''}`
+          : '· not taken yet'}</span>
+      </div>
+      <button type="button" class="btn-primary btn-sm" id="snapshot-take-btn">${f.taken ? 'Update snapshot' : 'Take snapshot'}</button>
+    </div>
+    ${_snapshotTakeMsg ? `<div class="snapshot-take-muted">${snapEsc(_snapshotTakeMsg)}</div>` : ''}`;
+  el.querySelector('#snapshot-take-btn').onclick = () => openSnapshotDialog(f);
+}
+
+// The popup: today's date, the prices that have no live source (land, physical gold — see
+// vzsManualHeld_ in gas/snapshot.gs), then "Take snapshot". Everything else is priced from the sheet.
+function openSnapshotDialog(f) {
+  const month = monthLabel(f.month.slice(0, 7));
+  const tagAcct = ACCOUNTS.list.length > 1;
   const unit = type => (Object.values(STREAMS).find(s => s.manualPriceType === type) || {}).manualPriceLabel || 'Price';
+  const overlay = document.createElement('div');
+  overlay.className = 'asset-form-overlay';
   const fields = (f.manual || []).map((m, i) => `
     <label class="snapshot-take-field">
       <span>${snapEsc(m.name)}${tagAcct && ACCOUNTS.name(m.account_id) ? ' · ' + snapEsc(ACCOUNTS.name(m.account_id)) : ''}
         <small>${snapEsc(unit(m.asset_type))} (₹) · ${m.last_date ? 'last ₹' + Number(m.last_price).toLocaleString('en-IN') + ' on ' + snapEsc(snapDayLabel(m.last_date)) : 'no price yet'}</small></span>
       <input type="number" step="0.01" min="0" inputmode="decimal" data-i="${i}" value="${m.last_price > 0 ? snapEsc(m.last_price) : ''}" />
     </label>`).join('');
-  el.innerHTML = `
-    <div class="snapshot-take-title">📸 ${snapEsc(month)} snapshot</div>
-    <div class="snapshot-take-muted">${f.taken
-      ? `Taken as of ${snapEsc(snapDayLabel(f.taken.date))} · ${f.taken.lines} holdings · value ${fmtCurrency(f.taken.value)}${tagAcct ? ' (all accounts)' : ''}. ` +
-        `Take it again to replace it with today's prices.`
-      : `Not taken yet — it records today's holdings at the sheet's current prices (${snapEsc(snapDayLabel(f.today))}).`}
-      It locks when the next month starts; a month you skip stays a gap.</div>
-    ${(f.epfTyped || []).length ? `<div class="snapshot-take-muted">EPF has no passbook entries yet — ${f.epfTyped.map(e => snapEsc(e.name) + ' counts at its typed ' + fmtCurrency(e.balance)).join(', ')}. Add the passbook first if you can: a month you take is not rebuilt later.</div>` : ''}
-    ${fields ? `<div class="snapshot-take-fields">${fields}</div>` : ''}
-    <button type="button" class="btn-primary btn-sm" id="snapshot-take-btn">${f.taken ? 'Update to today' : 'Take snapshot'}</button>
-    <div class="snapshot-take-muted" id="snapshot-take-msg">${snapEsc(_snapshotTakeMsg)}</div>`;
-  const btn = el.querySelector('#snapshot-take-btn');
-  btn.onclick = async () => {
+  overlay.innerHTML = `<div class="asset-form-box snapshot-dialog">
+    <h3>${f.taken ? 'Update' : 'Take'} the ${snapEsc(month)} snapshot</h3>
+    <p class="snapshot-take-muted">Holdings as of today (${snapEsc(snapDayLabel(f.today))}) at the sheet's current prices.
+      ${f.taken ? `This replaces the one taken on ${snapEsc(snapDayLabel(f.taken.date))}.` : ''} It locks when the next month starts.</p>
+    ${(f.epfTyped || []).length ? `<p class="snapshot-take-muted">EPF has no passbook entries yet — ${f.epfTyped.map(e => snapEsc(e.name) + ' counts at its typed ' + fmtCurrency(e.balance)).join(', ')}.</p>` : ''}
+    ${fields ? `<div class="snapshot-take-label">Prices with no live source — check and update:</div><div class="snapshot-take-fields">${fields}</div>`
+             : '<p class="snapshot-take-muted">No manual prices needed — everything you hold has a price in the sheet.</p>'}
+    <div class="snapshot-take-muted" id="snapshot-dialog-msg"></div>
+    <div class="form-actions">
+      <button type="button" class="btn-secondary" id="snapshot-cancel">Cancel</button>
+      <button type="button" class="btn-primary" id="snapshot-go">${f.taken ? 'Update snapshot' : 'Take snapshot'}</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+  const go = overlay.querySelector('#snapshot-go'), msg = overlay.querySelector('#snapshot-dialog-msg');
+  overlay.querySelector('#snapshot-cancel').onclick = () => overlay.remove();
+  go.onclick = async () => {
     const prices = [];
-    for (const inp of el.querySelectorAll('input[data-i]')) {
+    for (const inp of overlay.querySelectorAll('input[data-i]')) {
       const m = f.manual[Number(inp.dataset.i)];
       if (inp.validity && inp.validity.badInput) { showToast('Enter a plain number (no commas) for ' + m.name, 'error'); inp.focus(); return; }
       if (inp.value === '') continue;                                    // blank = keep the last price
       const v = parseFloat(inp.value);
-      if (!(v > 0)) { showToast('Enter a price above 0 for ' + m.name, 'error'); return; }
+      if (!(v > 0)) { showToast('Enter a price above 0 for ' + m.name, 'error'); inp.focus(); return; }
       prices.push({ asset_type: m.asset_type, asset_id: m.asset_id, price: v });
     }
-    btn.disabled = true;
-    btn.textContent = 'Taking… (fetching prices, ~20 s)';
+    go.disabled = true;
+    go.textContent = 'Taking…';
     try {
       const r = await API.takeSnapshot(prices);                          // clears the snapshot caches
       _snapshotTakeMsg = `✓ ${monthLabel(r.month)} snapshot ${r.updated ? 'saved as of ' + snapDayLabel(r.date) : 'unchanged'} — ${r.lines} holdings · invested ${fmtCurrency(r.invested)} · value ${fmtCurrency(r.value)}${tagAcct ? ' (all accounts)' : ''}` +
         (r.notes ? ' · ' + r.notes : '');
       showToast(r.updated ? 'Snapshot saved' : 'Nothing changed');
+      overlay.remove();
+      drawSnapshotTake();
+      drawSnapshotCard();
     } catch (e) {
-      // Keep what you typed on screen (a rebuilt form would refill the old prices); caches are
-      // already dropped, so the next visit re-reads whatever the server did save.
-      const msg = el.querySelector('#snapshot-take-msg');
-      if (msg) msg.textContent = 'Failed: ' + e.message + ' — your prices are still above; take it again.';
+      msg.textContent = 'Failed: ' + e.message + ' — your prices are still here; try again.';   // keep what you typed
       showToast('Snapshot failed: ' + e.message, 'error');
-      btn.disabled = false;
-      btn.textContent = f.taken ? 'Update to today' : 'Take snapshot';
-      return;
+      go.disabled = false;
+      go.textContent = f.taken ? 'Update snapshot' : 'Take snapshot';
     }
-    drawSnapshotTake();
-    drawSnapshotCard();
   };
 }
 
@@ -1581,7 +1625,7 @@ function buildSnapshotCard() {
   card.className = 'chart-card chart-card-full snapshot-card';
   card.innerHTML = `
     <div class="chart-card-title" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <span>Monthly Snapshots — Invested vs Value</span>
+      <span class="snapshot-card-title">${SNAP_UI.view === 'year' ? 'Yearly' : 'Monthly'} Snapshots — Invested vs Value</span>
       <span class="snapshot-view" role="group" aria-label="Chart view" style="display:none">
         <button type="button" class="btn-sm" data-view="month">Monthly</button>
         <button type="button" class="btn-sm" data-view="year">Yearly</button>
@@ -1605,6 +1649,7 @@ async function drawSnapshotCard() {
     const gen = _snapshotGen;
     try { data = await API.snapshot('snapshotData', { account }); }
     catch (e) { if (note.isConnected) note.textContent = 'Snapshots unavailable: ' + e.message; return; }
+    if (!data || !Array.isArray(data.months)) { if (note.isConnected) note.textContent = SNAP_REDEPLOY; return; }
     if ((data.months || []).length && gen === _snapshotGen) _snapshotCache[account] = data;   // never cache "none yet" or a stale reply
   }
   // The user may have switched tab / account while this was loading — draw nowhere stale.
@@ -1749,6 +1794,8 @@ function renderSnapshotView(card, data, account) {
     b.setAttribute('aria-pressed', String(b.dataset.view === SNAP_UI.view));
   });
   const yearly = SNAP_UI.view === 'year';
+  const title = card.querySelector('.snapshot-card-title');
+  if (title) title.textContent = (yearly ? 'Yearly' : 'Monthly') + ' Snapshots — Invested vs Value';
   const pts = snapshotPoints(data);
   const old = _insightsCharts.find(c => c.canvas && c.canvas.id === 'chart-snapshots');
   if (old) { old.destroy(); _insightsCharts = _insightsCharts.filter(c => c !== old); }
@@ -1762,7 +1809,7 @@ function renderSnapshotView(card, data, account) {
     ' · as of ' + snapDayLabel(p.date);
 
   if (pts.length) {
-    const GRID = 'rgba(255,255,255,0.05)', TICK = '#525252';
+    const GRID = CT().grid, TICK = CT().tick;
     newChart('chart-snapshots', {
       type: yearly ? 'bar' : 'line',
       data: {
@@ -1924,7 +1971,7 @@ function pieOptions(legendSize = 11) {
         color: '#fff',
         font: { size: 11, weight: '700' },
       },
-      legend: { position: 'bottom', labels: { color: '#8b90a8', padding: 12, font: { size: legendSize }, usePointStyle: true } },
+      legend: { position: 'bottom', labels: { color: CT().legend, padding: 12, font: { size: legendSize }, usePointStyle: true } },
       tooltip: {
         callbacks: {
           label: ctx => {
@@ -1947,7 +1994,7 @@ function drawBucketChart(byBucket) {
     type: 'pie',
     data: {
       labels: entries.map(([, v]) => v.name),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: BUCKET_COLORS, borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: BUCKET_COLORS, borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1962,7 +2009,7 @@ function drawCategoryChart(byCategory) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1980,7 +2027,7 @@ function drawSubcatChart(bySubcat) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: allColors.slice(0, entries.length), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: allColors.slice(0, entries.length), borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -1995,7 +2042,7 @@ function drawAllocCvChart(byCategory) {
     type: 'pie',
     data: {
       labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.currentValue)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: '#111111', borderWidth: 2, hoverOffset: 8 }],
+      datasets: [{ data: entries.map(([, v]) => Math.round(v.currentValue)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
     },
     options: pieOptions(),
   });
@@ -2006,8 +2053,8 @@ function drawAllocCvChart(byCategory) {
 function drawMonthlyChart(byMonth) {
   const months = Object.keys(byMonth).sort().slice(-24);
   if (!months.length) return emptyCard('chart-monthly', 'No transactions in selected period.');
-  const GRID = 'rgba(255,255,255,0.05)';
-  const TICK = '#525252';
+  const GRID = CT().grid;
+  const TICK = CT().tick;
   newChart('chart-monthly', {
     type: 'bar',
     data: {
@@ -2039,8 +2086,8 @@ function drawMonthlyChart(byMonth) {
 function drawYearlyChart(byYear) {
   const years = Object.keys(byYear).sort();
   if (!years.length) return emptyCard('chart-yearly', 'No transactions in selected period.');
-  const GRID = 'rgba(255,255,255,0.05)';
-  const TICK = '#525252';
+  const GRID = CT().grid;
+  const TICK = CT().tick;
   newChart('chart-yearly', {
     type: 'bar',
     data: {
@@ -2076,8 +2123,8 @@ function drawTopHoldingsChart(topHoldings) {
   const tagAcct = (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1);
   const fullName = h => tagAcct && h.account && ACCOUNTS.name(h.account) ? `${h.name} · ${ACCOUNTS.name(h.account)}` : h.name;
   const labels = topHoldings.map(h => { const n = fullName(h); return n.length > 22 ? n.substring(0, 20) + '…' : n; });
-  const GRID = 'rgba(255,255,255,0.05)';
-  const TICK = '#525252';
+  const GRID = CT().grid;
+  const TICK = CT().tick;
   const barColors = topHoldings.map((_, i) => CAT_COLORS[i % CAT_COLORS.length] + 'cc');
   newChart('chart-top-holdings', {
     type: 'bar',
@@ -2110,8 +2157,8 @@ function drawPnLChart(byCategory) {
   const entries = Object.entries(byCategory).filter(([, v]) => Math.abs(v.realizedPnL) > 1);
   if (!entries.length) return emptyCard('chart-pnl', 'No realized P&L yet — sell transactions will appear here.');
   const values = entries.map(([, v]) => Math.round(v.realizedPnL));
-  const GRID = 'rgba(255,255,255,0.05)';
-  const TICK = '#525252';
+  const GRID = CT().grid;
+  const TICK = CT().tick;
   newChart('chart-pnl', {
     type: 'bar',
     data: {
@@ -2549,7 +2596,7 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
     pointRadius: months.length > 30 ? 0 : 3,
     pointHoverRadius: 6,
     pointBackgroundColor: '#f59e0b',
-    pointBorderColor: '#111111',
+    pointBorderColor: CT().surface,
     pointBorderWidth: 2,
     borderWidth: 2.5,
   }];
@@ -2570,7 +2617,7 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
       pointRadius: months.map((_, i) => i === months.length - 1 ? 6 : 0),
       pointHoverRadius: 8,
       pointBackgroundColor: '#22c55e',
-      pointBorderColor: '#111111',
+      pointBorderColor: CT().surface,
       pointBorderWidth: 2,
     });
   }
@@ -2585,12 +2632,12 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
       responsive: true,
       plugins: {
         datalabels: { display: false },
-        legend: { position: 'top', labels: { color: '#8b90a8', padding: 12, usePointStyle: true } },
+        legend: { position: 'top', labels: { color: CT().legend, padding: 12, usePointStyle: true } },
         tooltip: { callbacks: { label: ctx => ctx.raw !== null ? ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` : null } },
       },
       scales: {
-        x: { ticks: { color: '#525252', maxTicksLimit: 14, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
-        y: { ticks: { color: '#525252', callback: fmtAxis, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, beginAtZero: true },
+        x: { ticks: { color: CT().tick, maxTicksLimit: 14, font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false } },
+        y: { ticks: { color: CT().tick, callback: fmtAxis, font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false }, beginAtZero: true },
       },
     },
   });
@@ -2684,7 +2731,7 @@ function drawVintageChart(canvasId, filteredData) {
 
   const realized   = years.map(y => Math.round(byYear[y].realized));
   const unrealized = years.map(y => Math.round(byYear[y].unrealized));
-  const GRID = 'rgba(255,255,255,0.05)', TICK = '#525252';
+  const GRID = CT().grid, TICK = CT().tick;
 
   newChart(canvasId, {
     type: 'bar',
@@ -2937,12 +2984,12 @@ function drawXirrTrend(canvasId, filteredData) {
       responsive: true,
       plugins: {
         datalabels: { display: false },
-        legend: { position: 'top', labels: { color: '#8b90a8', usePointStyle: true, padding: 12, font: { size: 11 } } },
+        legend: { position: 'top', labels: { color: CT().legend, usePointStyle: true, padding: 12, font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => ctx.raw != null ? ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%` : null } },
       },
       scales: {
-        x: { ticks: { color: '#525252', maxTicksLimit: 14, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
-        y: { ticks: { color: '#525252', callback: v => v.toFixed(0) + '%', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false } },
+        x: { ticks: { color: CT().tick, maxTicksLimit: 14, font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false } },
+        y: { ticks: { color: CT().tick, callback: v => v.toFixed(0) + '%', font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false } },
       },
     },
   });
@@ -2997,10 +3044,10 @@ function drawContribGrowthChart(agg) {
       { label: 'Growth',      data: rows.map(r => Math.round(r.growth)),  backgroundColor: '#22c55ecc', stack: 's' },
     ] },
     options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#9fb0a6', font: { size: 11 } } }, datalabels: { display: false },
+      plugins: { legend: { labels: { color: CT().label, font: { size: 11 } } }, datalabels: { display: false },
         tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + fmtCurrency(ctx.raw) } } },
-      scales: { x: { stacked: true, ticks: { color: '#525252', callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y: { stacked: true, ticks: { color: '#9fb0a6', font: { size: 11 } }, grid: { display: false } } } },
+      scales: { x: { stacked: true, ticks: { color: CT().tick, callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: CT().grid } },
+                y: { stacked: true, ticks: { color: CT().label, font: { size: 11 } }, grid: { display: false } } } },
   });
 }
 
@@ -3049,10 +3096,10 @@ function buildCorpusProjectionCard(agg) {
         { label: 'Contributions only', data: contrib, borderColor: '#818cf8', borderDash: [5, 4], fill: false, tension: 0, pointRadius: 0 },
       ] },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: '#9fb0a6', font: { size: 11 } } }, datalabels: { display: false },
+        plugins: { legend: { labels: { color: CT().label, font: { size: 11 } } }, datalabels: { display: false },
           tooltip: { callbacks: { title: c => c[0].label, label: ctx => ' ' + ctx.dataset.label + ': ' + fmtCurrency(ctx.raw) } } },
-        scales: { x: { ticks: { color: '#525252', maxTicksLimit: 12, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                  y: { ticks: { color: '#525252', callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } } } },
+        scales: { x: { ticks: { color: CT().tick, maxTicksLimit: 12, font: { size: 10 } }, grid: { color: CT().grid } },
+                  y: { ticks: { color: CT().tick, callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: CT().grid } } } },
     });
   }
   card.querySelectorAll('.proj-inputs input').forEach(el => el.addEventListener('input', recompute));
