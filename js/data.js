@@ -50,6 +50,7 @@ const STREAMS = {
       { id: 'fund_name', label: 'Fund Name', type: 'text', required: true, placeholder: 'e.g. PPFAS Flexi Cap' },
       { id: 'fund_house', label: 'Fund House', type: 'text', required: true, placeholder: 'e.g. Parag Parikh' },
       { id: 'code', label: 'Price Fetch Code', type: 'text', required: true, placeholder: 'e.g. QUAN_ELSS_TAX_KBGFAS' },
+      { id: 'isin', label: 'ISIN', type: 'text', placeholder: 'e.g. INF879O01027 (for monthly snapshot history)' },
     ],
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true },
@@ -74,6 +75,7 @@ const STREAMS = {
       { id: 'fund_name', label: 'Fund Name', type: 'text', required: true, placeholder: 'e.g. ICICI Pru Ultra Short Term' },
       { id: 'fund_house', label: 'Fund House', type: 'text', required: true },
       { id: 'code', label: 'Price Fetch Code', type: 'text', required: true },
+      { id: 'isin', label: 'ISIN', type: 'text', placeholder: 'e.g. INF109K01T04 (for monthly snapshot history)' },
     ],
     txnFields: [
       { id: 'txn_type', label: 'Type', type: 'select', options: ['Buy', 'Sell'], required: true },
@@ -275,16 +277,28 @@ const STREAMS = {
     manualPriceLabel: 'Price per unit',
   },
 
+  // EPF: a balance (no units / prices — so it skips the P&L charts like Bank), built from its
+  // passbook entries. Entries belong to an ACCOUNT (Self, …); each account has one EPF row in
+  // epf_assets (name, UAN, typed balance — used until that account has entries).
   epf: {
     label: 'EPF',
     staticBalance: true,
+    ledger: true,
     currentBalanceCol: 'current_balance',
-    assetTable: 'epf_assets', txnTable: null,
-    assetIdCol: 'id', assetNameCol: 'account_name',
+    assetTable: 'epf_assets', txnTable: 'epf_transactions',
+    assetIdCol: 'account_id',      // the entry's column …
+    assetKeyCol: 'account_id',     // … matches this column of the EPF row (not its id)
+    assetNameCol: 'account_name', amountCol: 'amount',
     assetFields: [
       { id: 'account_name',    label: 'Account Name',        type: 'text',   required: true, placeholder: 'e.g. Zoho EPF' },
       { id: 'uan',             label: 'UAN',                  type: 'text',   placeholder: '101596118819' },
-      { id: 'current_balance', label: 'Current Balance (₹)',  type: 'number', step: '0.01', required: true },
+      { id: 'current_balance', label: 'Balance (₹) — used until passbook entries are added', type: 'number', step: '0.01' },
+    ],
+    txnFields: [
+      { id: 'txn_type', label: 'Type', type: 'select', options: ['Contribution', 'Interest', 'Withdrawal'], required: true },
+      { id: 'txn_date', label: 'Date', type: 'date', required: true },
+      { id: 'amount',   label: 'Amount (₹) — your + employer EPF share', type: 'number', step: '0.01', required: true },
+      { id: 'notes',    label: 'Notes', type: 'text' },
     ],
   },
 
@@ -304,6 +318,55 @@ const STREAMS = {
 
 };
 
+// A sheet date as the calendar day 'yyyy-mm-dd'. The server sends days; older cached data has
+// UTC instants ('2026-10-31T18:30:00.000Z' = 1 Nov IST) — read those in local time, never cut them.
+function localYMD(v) {
+  if (!v) return '';
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(v);
+  if (isNaN(d)) return '';
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// …and as a local Date at midnight of that day (safe for display / day arithmetic in any timezone).
+function localDate(v) {
+  const s = localYMD(v);
+  return s ? new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10))) : null;
+}
+
+// A transaction's day as a local Date (Invalid Date when missing) — use this, not new Date(),
+// so day strings ('yyyy-mm-dd' = UTC midnight) compare correctly with local month-ends.
+function txnDay(v) {
+  return localDate(v) || new Date(NaN);
+}
+
+// The value a transaction's assetIdCol holds for this asset: its id, or (EPF) its account_id.
+function assetKey(stream, asset) {
+  return String(asset[stream.assetKeyCol || 'id']);
+}
+
+// Invested / value of a balance-type asset (EPF, Bank). A ledger stream (EPF) sums its entries —
+// value = contributions + interest − withdrawals, invested = contributions − withdrawals (never
+// below 0) — same rule as gas/snapshot.gs. Only an account with no entries at all (in allTxns, the
+// unfiltered list) falls back to its typed current balance, as Bank always does.
+function staticBalanceOf(stream, asset, txns, allTxns) {
+  const key = assetKey(stream, asset);
+  const mine = list => (list || []).filter(t => String(t[stream.assetIdCol]) === key);
+  if (!stream.ledger || !mine(allTxns || txns).length) {
+    const b = parseFloat(asset[stream.currentBalanceCol] || 0) || 0;
+    return { invested: b, value: b };
+  }
+  let c = 0, i = 0, w = 0;
+  mine(txns).forEach(t => {
+    const amt = parseFloat(t.amount || 0) || 0;
+    if (t.txn_type === 'Contribution') c += amt;
+    else if (t.txn_type === 'Withdrawal') w += amt;
+    else if (t.txn_type === 'Interest') i += amt;
+  });
+  return { invested: Math.max(0, c - w), value: c + i - w };
+}
+
 // Resolve stream for a category + subcategory
 function resolveStream(category, subcategoryName) {
   const streamKey = category.stream;
@@ -316,13 +379,21 @@ function resolveStream(category, subcategoryName) {
 // Validate a transaction form row — returns array of error strings
 function validateTxn(fields, values) {
   const errors = [];
+  const tomorrow = localYMD(new Date(Date.now() + 86400000));
   fields.forEach(f => {
-    if (f.required && (values[f.id] === undefined || values[f.id] === '')) {
+    const v = values[f.id];
+    if (f.required && (v === undefined || v === '')) {
       errors.push(`${f.label} is required`);
+      return;
     }
-    if (f.type === 'number' && values[f.id] !== '' && isNaN(parseFloat(values[f.id]))) {
-      errors.push(`${f.label} must be a number`);
+    if (v === undefined || v === '') return;
+    if (f.type === 'number') {
+      const n = parseFloat(v);
+      if (isNaN(n)) errors.push(`${f.label} must be a number`);
+      else if (n < 0) errors.push(`${f.label} can't be negative`);
+      else if (n === 0 && (f.id === 'units' || f.id === 'quantity')) errors.push(`${f.label} must be more than 0`);   // a price / amount of 0 is fine (bonus shares)
     }
+    if (f.type === 'date' && String(v) > tomorrow) errors.push(`${f.label} is in the future`);
   });
   return errors;
 }

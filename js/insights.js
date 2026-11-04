@@ -6,6 +6,21 @@ function computeXIRR(cashflows) {
   if (!cashflows || cashflows.length < 2) return null;
   const sorted = [...cashflows].sort((a, b) => a.date - b.date);
   const t0 = sorted[0].date;
+  const npv = r => sorted.reduce((s, cf) => s + cf.amount / Math.pow(1 + r, (cf.date - t0) / (365.25 * 86400000)), 0);
+  const newton = newtonXIRR(sorted, t0);
+  if (newton !== null) return newton;
+  // Fallback: bisection over (−99.99 %, +10,000 %) — Newton overshoots past −100 % for big losses.
+  let lo = -0.9999, hi = 100, flo = npv(lo), fhi = npv(hi);
+  if (!isFinite(flo) || !isFinite(fhi) || flo * fhi > 0) return null;
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2, fm = npv(mid);
+    if (Math.abs(fm) < 1e-6 || hi - lo < 1e-9) return mid;
+    if (flo * fm < 0) { hi = mid; } else { lo = mid; flo = fm; }
+  }
+  return (lo + hi) / 2;
+}
+
+function newtonXIRR(sorted, t0) {
   let rate = 0.1;
   for (let iter = 0; iter < 200; iter++) {
     let f = 0, df = 0;
@@ -56,6 +71,7 @@ async function renderInsights() {
     btn.textContent = '↻ Refresh';
     btn.addEventListener('click', () => {
       _insightsCache = null;
+      invalidateSnapshots();
       _manualPricesMap = {};
       LSC.clear('insights');
       resetInsightFilters();
@@ -281,7 +297,7 @@ function getAllYears(rawData) {
   const years = new Set();
   rawData.forEach(entry => {
     entry.txns.forEach(t => {
-      const y = (t.txn_date || '').substring(0, 4);
+      const y = localYMD(t.txn_date).slice(0, 4);
       if (y) years.add(y);
     });
   });
@@ -323,22 +339,23 @@ function applyFilters(rawData) {
         const ids = assetByEntry[String(idx)];
         assets = assets.filter(a => ids.has(String(a.id)));
       }
-      // US equity can carry cash (from a wire) before any asset exists — keep it.
-      if (!assets.length && !entry.stream.usEquity) return null;
+      // US equity can carry cash (from a wire) before any asset exists — keep it, unless a
+      // subcategory / asset filter is on (cash belongs to neither).
+      if (!assets.length && !(entry.stream.usEquity && !subcatNames.length && !hasAssetFilter)) return null;
 
-      const allowedAssetIds = new Set(assets.map(a => String(a.id)));
+      const allowedAssetIds = new Set(assets.map(a => assetKey(entry.stream, a)));   // what txns point at
 
-      // Filter transactions
-      const txns = entry.txns.filter(t => {
-        const aid = String(t[entry.stream.assetIdCol]);
-        if (!allowedAssetIds.has(aid)) return false;
-        const m = (t.txn_date || '').substring(0, 7);
-        if (fromMonth && m && m < fromMonth) return false;
-        if (toMonth && m && m > toMonth) return false;
-        return true;
-      });
+      // Transactions: each kept asset's full history (holdings / cost) and, with a date filter,
+      // the window's activity (bought / sold / realized / monthly / XIRR).
+      const assetTxns = entry.txns.filter(t => allowedAssetIds.has(String(t[entry.stream.assetIdCol])));
+      const inWindow = (fromMonth || toMonth) ? (t => {
+        const m = localYMD(t.txn_date).slice(0, 7);
+        return !(fromMonth && m && m < fromMonth) && !(toMonth && m && m > toMonth);
+      }) : null;
+      const txns = inWindow ? assetTxns.filter(inWindow) : assetTxns;
 
-      return { ...entry, assets, txns };
+      return { ...entry, assets, txns, assetTxns, inWindow, allTxns: entry.txns, allAssets: entry.assets,
+               narrowed: !!(subcatNames.length || hasAssetFilter) };
     })
     .filter(Boolean);
 }
@@ -430,14 +447,18 @@ function renderInsightsTab(container, agg, filtered, rawData) {
   if (tab === 'plan') { renderPlanTab(container, agg, filtered, rawData); return; }
 
   if (tab === 'overview') {
+    container.appendChild(buildSnapshotTake());
     container.appendChild(buildHealthCheck(agg, filtered, rawData));
     container.appendChild(makeChartCard('Portfolio Growth', 'chart-cumulative', true));
+    container.appendChild(buildSnapshotCard());
     const r = row2();
     r.appendChild(makeChartCard('Portfolio by Bucket', 'chart-bucket'));
     r.appendChild(makeChartCard('Portfolio by Category', 'chart-category'));
     container.appendChild(r);
     requestAnimationFrame(() => {
-      drawCumulativeChart(agg.allMonthlyNet, agg.totalCurrentValue);
+      drawCumulativeChart(agg.allMonthlyNet, agg.xirrValue);         // same scope as the cost line (market assets)
+      drawSnapshotTake();
+      drawSnapshotCard();
       drawBucketChart(agg.byBucket);
       drawCategoryChart(agg.byCategory);
     });
@@ -488,7 +509,7 @@ function renderInsightsTab(container, agg, filtered, rawData) {
     container.appendChild(makeReportCard('Indian EQ Mutual Funds — Per-Fund P&L (FIFO)', 'report-mf-detail', true));
     container.appendChild(makeChartCard('Realized P&L by Category', 'chart-pnl', true));
     requestAnimationFrame(() => {
-      drawMFReport('report-mf-detail', rawData);
+      drawMFReport('report-mf-detail', filtered);                     // selected account, hides respected
       drawPnLChart(agg.byCategory);
       enhanceReportTables(container);
     });
@@ -549,28 +570,32 @@ async function fetchAllInsightsData() {
     }));
   } catch (_) {}
 
+  let partial = false;
   if (!data) {
+    const whole = r => r.status === 'fulfilled' && Array.isArray(r.value.rows) && !(r.value.total > r.value.rows.length);
     const results = await Promise.allSettled(ENTRIES.map(async entry => {
       const [a, t] = await Promise.allSettled([
-        API.get(entry.stream.assetTable, { limit: 500 }),
-        API.get(entry.stream.txnTable,   { limit: 5000 }),
+        API.get(entry.stream.assetTable, { limit: 1000000 }),
+        entry.stream.txnTable ? API.get(entry.stream.txnTable, { limit: 1000000 }) : Promise.resolve({ rows: [], total: 0 }),
       ]);
+      if (!whole(a) || !whole(t)) partial = true;
       return {
         ...entry,
-        assets: a.status === 'fulfilled' ? (a.value.rows || []) : [],
-        txns:   t.status === 'fulfilled' ? (t.value.rows  || []) : [],
+        assets: whole(a) ? (a.value.rows || []) : [],
+        txns:   whole(t) ? (t.value.rows  || []) : [],
       };
     }));
+    if (results.some(r => r.status !== 'fulfilled')) partial = true;
     data = results.filter(r => r.status === 'fulfilled').map(r => r.value);
     try {
-      const mpRes = await API.get('manual_prices', { limit: 1000 });
+      const mpRes = await API.get('manual_prices', { limit: 1000000 });
       _manualPricesMap = buildManualPricesMap(mpRes.rows || []);
     } catch (_) {}
     try {
       const [w, r, inc] = await Promise.allSettled([
-        API.get('us_wires', { limit: 1000 }),
-        API.get('us_repatriations', { limit: 1000 }),
-        API.get('us_income', { limit: 1000 }),
+        API.get('us_wires', { limit: 1000000 }),
+        API.get('us_repatriations', { limit: 1000000 }),
+        API.get('us_income', { limit: 1000000 }),
       ]);
       _usAux = {
         wires:  w.status   === 'fulfilled' ? (w.value.rows   || []) : [],
@@ -580,7 +605,8 @@ async function fetchAllInsightsData() {
     } catch (_) {}
   }
 
-  LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, usAux: _usAux });
+  if (partial) showToast('Some tables failed to load — Insights may be incomplete (not cached; Refresh to retry)', 'error');
+  else LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, usAux: _usAux });   // never cache a partial view
   return data;
 }
 
@@ -588,9 +614,10 @@ async function fetchAllInsightsData() {
 
 function getAmtINR(stream, txn) {
   if (stream.amountCol) return parseFloat(txn[stream.amountCol] || 0);
-  return parseFloat(txn.quantity || 0) * parseFloat(txn.price_per_unit || 0)
-       + parseFloat(txn.registration_cost || 0)
-       + parseFloat(txn.other_expenses || 0);
+  // Real estate: costs add to what a buy cost you and come off what a sale brought in.
+  const gross = parseFloat(txn.quantity || 0) * parseFloat(txn.price_per_unit || 0);
+  const costs = parseFloat(txn.registration_cost || 0) + parseFloat(txn.other_expenses || 0);
+  return txn.txn_type === 'Sell' ? gross - costs : gross + costs;
 }
 
 function getQtyVal(txn) {
@@ -601,28 +628,42 @@ function getQtyVal(txn) {
 
 // ── P&L: average cost method ──────────────────────────────────────────────────
 
-function computeAssetMetrics(stream, txns) {
-  const sorted = [...txns].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
-  let totalCost = 0, totalQty = 0, realizedPnL = 0, totalBought = 0, totalSold = 0;
+// txns = the asset's FULL history (holdings and cost always come from all of it). inWindow(t),
+// when a date filter is on, picks which buys / sells count as this period's activity (bought,
+// sold, realized). A sell larger than what is held only counts the units actually held.
+// sells: [{ txn, cost }] — the cost of the units each sell took out (for the growth chart).
+function computeAssetMetrics(stream, txns, inWindow) {
+  const isBuy = t => t.txn_type === 'Buy';
+  const sorted = [...txns].sort((a, b) => (txnDay(a.txn_date) - txnDay(b.txn_date)) || (isBuy(b) - isBuy(a)));   // same day: buy first
+  let totalCost = 0, totalQty = 0, realizedPnL = 0, totalBought = 0, totalSold = 0, oversold = false;
+  const sells = [];
 
   sorted.forEach(t => {
     const amt = getAmtINR(stream, t);
     const qty = getQtyVal(t);
-    if (t.txn_type === 'Buy') {
-      totalCost   += amt;
-      totalQty    += qty;
-      totalBought += amt;
-    } else if (t.txn_type === 'Sell' && totalQty > 0) {
+    const counts = !inWindow || inWindow(t);
+    if (isBuy(t)) {
+      totalCost += amt;
+      totalQty  += qty;
+      if (counts) totalBought += amt;
+    } else if (t.txn_type === 'Sell') {
+      if (totalQty <= 1e-9) { oversold = true; return; }
+      const sold = Math.min(qty, totalQty);
+      if (qty > totalQty + 1e-6) oversold = true;
       const avgCost  = totalCost / totalQty;
-      const costSold = avgCost * Math.min(qty, totalQty);
-      realizedPnL   += amt - costSold;
-      totalQty       = Math.max(0, totalQty - qty);
-      totalCost      = avgCost * totalQty;
-      totalSold     += amt;
+      const proceeds = qty > 0 ? amt * (sold / qty) : amt;
+      if (counts) {
+        realizedPnL += proceeds - avgCost * sold;
+        totalSold   += proceeds;
+        sells.push({ txn: t, cost: avgCost * sold, proceeds });
+      }
+      totalQty -= sold;
+      totalCost = avgCost * totalQty;
+      if (totalQty < 1e-6) { totalQty = 0; totalCost = 0; }
     }
   });
 
-  return { netCost: totalCost, realizedPnL, totalBought, totalSold, currentQty: totalQty };
+  return { netCost: totalCost, realizedPnL, totalBought, totalSold, currentQty: totalQty, oversold, sells };
 }
 
 // ── Aggregation ───────────────────────────────────────────────────────────────
@@ -639,6 +680,9 @@ function aggregateInsights(filteredData) {
   const allMonthlyNet = {};
   const topHoldings   = [];
   const allCashflows  = [];
+  const unpricedAssets = [], oversoldAssets = [];
+  let xirrValue = 0;                    // value of the assets whose cashflows XIRR sees (not EPF / bank / US cash)
+  const dateFiltered = filteredData.some(e => e.inWindow);
 
   const addCatSub = (cat, sub, nc, cv) => {
     if (!byCatSubcat[cat]) byCatSubcat[cat] = {};
@@ -657,46 +701,91 @@ function aggregateInsights(filteredData) {
     const assetMap = {};
     assets.forEach(a => { assetMap[String(a.id)] = a; });
 
-    // ── staticBalance streams (EPF, Bank) — read balance directly, no P&L ──
+    // ── staticBalance streams (EPF, Bank) — a balance, no P&L (EPF: from its entries) ──
     if (stream.staticBalance) {
       assets
         .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
         .forEach(a => {
-          const balance = parseFloat(a[stream.currentBalanceCol] || 0);
-          if (!balance) return;
-          byCategory[catName].netCost      += balance;
-          byCategory[catName].currentValue  = (byCategory[catName].currentValue || 0) + balance;
-          byBucket[bucketId].netCost       += balance;
-          byBucket[bucketId].currentValue   = (byBucket[bucketId].currentValue || 0) + balance;
-          totalCurrentValue += balance;
+          const b = staticBalanceOf(stream, a, txns, entry.allTxns);        // month filter → only its entries
+          if (Math.abs(b.value) < 0.005) return;                            // nothing in the account
+          byCategory[catName].netCost      += b.invested;
+          byCategory[catName].currentValue  = (byCategory[catName].currentValue || 0) + b.value;
+          byBucket[bucketId].netCost       += b.invested;
+          byBucket[bucketId].currentValue   = (byBucket[bucketId].currentValue || 0) + b.value;
+          totalCurrentValue += b.value;
         });
       return; // skip transaction-based logic for this stream
     }
 
     // ── US Equity (IBKR) — INR cost basis from wires; current value via INR price ──
     if (stream.usEquity) {
+      // Per asset, full history in date order (same day: BUY first), running average INR cost.
+      // A SELL brings its USD back to the broker account: counted as money out of the holding
+      // (an XIRR inflow) at today's USD→INR, with realized = that − the average cost it took out.
+      const usRate = usEquityLiveRate(assets, _usAux.wires, stream);
+      const isUsBuy = t => String(t.txn_type).toUpperCase() === 'BUY';
       const byAsset = {};
-      txns.forEach(t => {
+      [...(entry.assetTxns || txns)].sort((x, y) => (txnDay(x.txn_date) - txnDay(y.txn_date)) || (isUsBuy(y) - isUsBuy(x))).forEach(t => {
         const aid = String(t[stream.assetIdCol]);
-        if (!byAsset[aid]) byAsset[aid] = { buyUnits: 0, buyCostINR: 0, netQty: 0, txns: [] };
+        const d = byAsset[aid] = byAsset[aid] || { buyUnits: 0, buyCostINR: 0, netQty: 0, cost: 0, txns: [], sells: [] };
         const u = parseFloat(t.units || 0);
-        if (String(t.txn_type).toUpperCase() === 'BUY') {
-          byAsset[aid].buyUnits   += u;
-          byAsset[aid].buyCostINR += parseFloat(t[stream.costBasisCol] || 0);
-          byAsset[aid].netQty     += u;
+        if (isUsBuy(t)) {
+          d.buyUnits += u; d.buyCostINR += parseFloat(t[stream.costBasisCol] || 0);
+          d.netQty   += u; d.cost       += parseFloat(t[stream.costBasisCol] || 0);
+        } else if (d.netQty <= 1e-9) {
+          d.oversold = true;                                            // a sell of nothing held (a buy missing?)
         } else {
-          byAsset[aid].netQty -= u;
+          if (u > d.netQty + 1e-6) d.oversold = true;
+          const sold = Math.min(u, d.netQty), costOut = d.cost / d.netQty * sold;
+          const proceeds = (parseFloat(t.usd_amount) || 0) * (u > 0 ? sold / u : 1) * usRate;
+          d.sells.push({ txn: t, cost: costOut, proceeds });
+          d.cost -= costOut; d.netQty -= sold;
+          if (d.netQty < 1e-6) { d.netQty = 0; d.cost = 0; }
         }
-        byAsset[aid].txns.push(t);
+        d.txns.push(t);
       });
 
       Object.entries(byAsset).forEach(([aid, d]) => {
         const asset = assetMap[aid];
-        if (d.buyUnits <= 0 || d.netQty <= 0) return;
-        const netCost   = d.netQty * (d.buyCostINR / d.buyUnits);
+        // Realized on this period's sells (even when the asset is now fully sold)
+        d.sells.forEach(x => {
+          if (entry.inWindow && !entry.inWindow(x.txn)) return;
+          const r = x.proceeds - x.cost;
+          byCategory[catName].realizedPnL += r; totalRealizedPnL += r;
+          byCategory[catName].totalSold   += x.proceeds; totalRedeemed += x.proceeds;
+          const dt = txnDay(x.txn.txn_date);
+          if (!isNaN(dt) && x.proceeds > 0) { byCategory[catName].cashflows.push({ amount: x.proceeds, date: dt }); allCashflows.push({ amount: x.proceeds, date: dt }); }
+          const month = localYMD(x.txn.txn_date).slice(0, 7), year = localYMD(x.txn.txn_date).slice(0, 4);
+          if (month) { if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 }; byMonth[month].redeemed += x.proceeds; allMonthlyNet[month] = (allMonthlyNet[month] || 0) - x.cost; }
+          if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].redeemed  += x.proceeds; }
+        });
+        // INR cashflows for XIRR + monthly/yearly invested — every buy, also of a fully sold asset
+        d.txns.forEach(t => {
+          if (String(t.txn_type).toUpperCase() !== 'BUY') return;
+          if (entry.inWindow && !entry.inWindow(t)) return;               // outside the date filter
+          const inr = parseFloat(t[stream.costBasisCol] || 0);
+          const dt  = txnDay(t.txn_date);
+          if (isNaN(dt) || !inr) return;
+          const cf = { amount: -inr, date: dt };
+          byCategory[catName].cashflows.push(cf);
+          allCashflows.push({ ...cf });
+          totalInvested += inr; byCategory[catName].totalBought += inr;   // every buy of the period, like the rupee streams
+          if (!byCategory[catName].firstBuyDate || dt < byCategory[catName].firstBuyDate) {
+            byCategory[catName].firstBuyDate = dt;
+          }
+          const month = localYMD(t.txn_date).slice(0, 7);
+          const year  = localYMD(t.txn_date).slice(0, 4);
+          if (month) { if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 }; byMonth[month].invested += inr; allMonthlyNet[month] = (allMonthlyNet[month] || 0) + inr; }
+          if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].invested  += inr; }
+        });
+        if (d.oversold) oversoldAssets.push(asset ? asset[stream.assetNameCol] : aid);
+        if (d.buyUnits <= 0 || d.netQty <= 1e-6) return;
+        const netCost   = d.cost;                                       // running average
         const priceINR  = parseFloat(asset?.[stream.currentPriceCol] || 0);
-        const curVal    = priceINR > 0 ? d.netQty * priceINR : 0;
-        const unrealPnL = curVal > 0 ? curVal - netCost : 0;
+        const unpriced  = !(priceINR > 0);                              // no live price → at cost, counted
+        if (unpriced) unpricedAssets.push(asset ? asset[stream.assetNameCol] : aid);
+        const curVal    = unpriced ? netCost : d.netQty * priceINR;
+        const unrealPnL = unpriced ? 0 : curVal - netCost;
 
         const resolvedSubcat = SUBCAT_NAMES[asset?.subcategory_id] || catName;
         if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
@@ -709,36 +798,23 @@ function aggregateInsights(filteredData) {
         byCategory[catName].unrealizedPnL  = (byCategory[catName].unrealizedPnL || 0) + unrealPnL;
         byBucket[bucketId].netCost        += netCost;
         byBucket[bucketId].currentValue    = (byBucket[bucketId].currentValue || 0) + curVal;
-        totalInvested      += d.buyCostINR;
         totalCurrentValue  += curVal;
         totalUnrealizedPnL += unrealPnL;
+        xirrValue          += curVal;
+        byCategory[catName].xirrValue = (byCategory[catName].xirrValue || 0) + curVal;
 
         if (netCost > 100 && asset) {
           topHoldings.push({ name: asset[stream.assetNameCol], catName, account: asset.account_id, netCost, currentValue: curVal });
         }
 
-        // INR cashflows for XIRR + monthly/yearly invested (buys only; USD stays in broker)
-        d.txns.forEach(t => {
-          if (String(t.txn_type).toUpperCase() !== 'BUY') return;
-          const inr = parseFloat(t[stream.costBasisCol] || 0);
-          const dt  = new Date(t.txn_date);
-          if (isNaN(dt) || !inr) return;
-          const cf = { amount: -inr, date: dt };
-          byCategory[catName].cashflows.push(cf);
-          allCashflows.push({ ...cf });
-          if (!byCategory[catName].firstBuyDate || dt < byCategory[catName].firstBuyDate) {
-            byCategory[catName].firstBuyDate = dt;
-          }
-          const month = (t.txn_date || '').substring(0, 7);
-          const year  = (t.txn_date || '').substring(0, 4);
-          if (month) { if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 }; byMonth[month].invested += inr; allMonthlyNet[month] = (allMonthlyNet[month] || 0) + inr; }
-          if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].invested  += inr; }
-        });
       });
 
-      // ── Derived US cash line (snapshot, no P&L) — account-filtered ──
-      const cashUsd = usEquityCashUsd(
-        txns,
+      // ── Derived US cash line (snapshot, no P&L) — account-filtered. Not shown under a date,
+      // subcategory or asset filter: cash belongs to none of those, and wires − window buys is no balance.
+      // Cash = the account's real USD balance: every buy / sell of the account, also of hidden assets.
+      const acctIds = new Set((entry.allAssets || assets).filter(a => ACCOUNTS.matches(a.account_id)).map(a => String(a.id)));
+      const cashUsd = (entry.inWindow || entry.narrowed) ? 0 : usEquityCashUsd(
+        (entry.allTxns || txns).filter(t => acctIds.has(String(t[stream.assetIdCol]))),
         (_usAux.wires  || []).filter(w => ACCOUNTS.matches(w.account_id)),
         (_usAux.repats || []).filter(r => ACCOUNTS.matches(r.account_id)),
         (_usAux.income || []).filter(i => ACCOUNTS.matches(i.account_id)));
@@ -758,15 +834,17 @@ function aggregateInsights(filteredData) {
     }
 
     const txnsByAsset = {};
-    txns.forEach(t => {
+    (entry.assetTxns || txns).forEach(t => {                            // full history per asset
       const aid = String(t[stream.assetIdCol]);
       if (!txnsByAsset[aid]) txnsByAsset[aid] = [];
       txnsByAsset[aid].push(t);
     });
 
-    Object.entries(txnsByAsset).forEach(([assetId, assetTxns]) => {
+    Object.entries(txnsByAsset).forEach(([assetId, fullTxns]) => {
       const asset = assetMap[assetId];
-      const m = computeAssetMetrics(stream, assetTxns);
+      const m = computeAssetMetrics(stream, fullTxns, entry.inWindow);
+      const assetTxns = entry.inWindow ? fullTxns.filter(entry.inWindow) : fullTxns;   // this period's activity
+      if (m.oversold) oversoldAssets.push(asset ? asset[stream.assetNameCol] : assetId);
 
       // Current market value — price is always INR (GAS formula handles FX for USD assets)
       let priceINR = 0;
@@ -779,8 +857,12 @@ function aggregateInsights(filteredData) {
           priceINR = _manualPricesMap[`${stream.manualPriceType}|${assetId}`] || 0;
         }
       }
-      const curVal    = priceINR && m.currentQty > 0 ? m.currentQty * priceINR : 0;
-      const unrealPnL = curVal > 0 ? curVal - m.netCost : 0;
+      // No live price (GOOGLEFINANCE #N/A → 0, no manual price yet) → value at cost and count it,
+      // instead of silently dropping a held asset to ₹0 (the snapshot does the same).
+      const unpriced  = m.currentQty > 0 && !(priceINR > 0);
+      if (unpriced) unpricedAssets.push(asset ? asset[stream.assetNameCol] : assetId);
+      const curVal    = m.currentQty > 0 ? (unpriced ? m.netCost : m.currentQty * priceINR) : 0;
+      const unrealPnL = unpriced ? 0 : curVal - m.netCost;
 
       const resolvedSubcat = subcatName || SUBCAT_NAMES[asset?.subcategory_id] || catName;
       if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
@@ -801,16 +883,20 @@ function aggregateInsights(filteredData) {
       totalRealizedPnL   += m.realizedPnL;
       totalCurrentValue  += curVal;
       totalUnrealizedPnL += unrealPnL;
+      xirrValue          += curVal;                                     // market assets only (XIRR)
+      byCategory[catName].xirrValue = (byCategory[catName].xirrValue || 0) + curVal;
 
       if (m.netCost > 100 && asset) {
         topHoldings.push({ name: asset[stream.assetNameCol], catName, account: asset.account_id, netCost: m.netCost, currentValue: curVal });
       }
 
-      // Collect cashflows for XIRR
+      // Collect cashflows for XIRR — a sell counts only what the units actually held brought in
+      const sellOf = new Map(m.sells.map(x => [x.txn, x]));
       assetTxns.forEach(t => {
-        const d = new Date(t.txn_date);
+        const d = txnDay(t.txn_date);
         if (isNaN(d)) return;
-        const cf = { amount: t.txn_type === 'Buy' ? -getAmtINR(stream, t) : getAmtINR(stream, t), date: d };
+        if (t.txn_type !== 'Buy' && !sellOf.has(t)) return;             // a sell of nothing held
+        const cf = { amount: t.txn_type === 'Buy' ? -getAmtINR(stream, t) : sellOf.get(t).proceeds, date: d };
         byCategory[catName].cashflows.push(cf);
         allCashflows.push({ ...cf });
         if (t.txn_type === 'Buy') {
@@ -820,15 +906,15 @@ function aggregateInsights(filteredData) {
         }
       });
 
+      const costOut = new Map(m.sells.map(x => [x.txn, x.cost]));       // a sell lowers cost by what it took out
       assetTxns.forEach(t => {
-        const amt   = getAmtINR(stream, t);
-        const month = (t.txn_date || '').substring(0, 7);
-        const year  = (t.txn_date || '').substring(0, 4);
-        const sign  = t.txn_type === 'Buy' ? 1 : -1;
+        const amt   = t.txn_type === 'Buy' ? getAmtINR(stream, t) : (sellOf.get(t) || {}).proceeds || 0;
+        const month = localYMD(t.txn_date).slice(0, 7);
+        const year  = localYMD(t.txn_date).slice(0, 4);
         if (month) {
           if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 };
           t.txn_type === 'Buy' ? (byMonth[month].invested += amt) : (byMonth[month].redeemed += amt);
-          allMonthlyNet[month] = (allMonthlyNet[month] || 0) + sign * amt;
+          allMonthlyNet[month] = (allMonthlyNet[month] || 0) + (t.txn_type === 'Buy' ? amt : -(costOut.get(t) || 0));
         }
         if (year) {
           if (!byYear[year]) byYear[year] = { invested: 0, redeemed: 0 };
@@ -841,25 +927,25 @@ function aggregateInsights(filteredData) {
   topHoldings.sort((a, b) => b.netCost - a.netCost);
   const netInvested = Object.values(byCategory).reduce((s, c) => s + c.netCost, 0);
 
-  // Compute per-category XIRR (add terminal current-value cashflow at today)
+  // XIRR: cashflows + today's value of the SAME assets. EPF / bank balances and uninvested US cash
+  // have no cashflows here, so their value would look like free profit — they are left out.
+  // Under a date filter there is no opening value for the window, so no XIRR is shown.
   const today = new Date();
   Object.entries(byCategory).forEach(([, cat]) => {
     const cfs = [...cat.cashflows];
-    if (cat.currentValue > 0) cfs.push({ amount: cat.currentValue, date: today });
-    cat.xirr = computeXIRR(cfs);
+    if ((cat.xirrValue || 0) > 0) cfs.push({ amount: cat.xirrValue, date: today });
+    cat.xirr = dateFiltered ? null : computeXIRR(cfs);
   });
-
-  // Overall XIRR
   const allCfs = [...allCashflows];
-  if (totalCurrentValue > 0) allCfs.push({ amount: totalCurrentValue, date: today });
-  const overallXIRR = computeXIRR(allCfs);
+  if (xirrValue > 0) allCfs.push({ amount: xirrValue, date: today });
+  const overallXIRR = dateFiltered ? null : computeXIRR(allCfs);
 
   return {
     totalInvested, totalRedeemed, totalRealizedPnL, netInvested,
     totalCurrentValue, totalUnrealizedPnL, overallXIRR,
     byCategory, byBucket, bySubcat, byCatSubcat, byMonth, byYear,
     topHoldings: topHoldings.slice(0, 10),
-    allMonthlyNet,
+    allMonthlyNet, xirrValue, unpricedAssets, oversoldAssets, dateFiltered,
   };
 }
 
@@ -882,9 +968,12 @@ function buildPortfolioHero(agg) {
     <div class="portfolio-hero-meta">
       <div class="portfolio-hero-meta-item">Invested <span>${fmtCurrency(agg.netInvested)}</span></div>
       ${hasPrices ? `<div class="portfolio-hero-meta-item">Unrealized <span class="${pnlCls}">${pnlSign}${fmtCurrency(pnl)} (${pnlSign}${pnlPct}%)</span></div>` : ''}
-      ${agg.overallXIRR !== null ? `<div class="portfolio-hero-meta-item">XIRR <span class="${agg.overallXIRR >= 0 ? 'positive' : 'negative'}">${fmtXIRR(agg.overallXIRR)}</span></div>` : ''}
+      ${agg.overallXIRR !== null ? `<div class="portfolio-hero-meta-item" title="Market assets only — EPF, bank and uninvested US cash have no cashflows to measure">XIRR <span class="${agg.overallXIRR >= 0 ? 'positive' : 'negative'}">${fmtXIRR(agg.overallXIRR)}</span></div>` : ''}
       ${agg.totalRealizedPnL !== 0 ? `<div class="portfolio-hero-meta-item">Realized <span class="${agg.totalRealizedPnL >= 0 ? 'positive' : 'negative'}">${agg.totalRealizedPnL >= 0 ? '+' : ''}${fmtCurrency(agg.totalRealizedPnL)}</span></div>` : ''}
     </div>
+    ${agg.dateFiltered ? `<div class="portfolio-hero-note">Date filter: bought / sold / realized are for the period; holdings and value are today's. XIRR is hidden for a partial period.</div>` : ''}
+    ${(agg.unpricedAssets || []).length ? `<div class="portfolio-hero-note">⚠ No live price for ${agg.unpricedAssets.length} holding(s) — valued at cost: ${agg.unpricedAssets.map(snapEsc).join(', ')}</div>` : ''}
+    ${(agg.oversoldAssets || []).length ? `<div class="portfolio-hero-note">⚠ Sells larger than the recorded holding (a buy may be missing): ${agg.oversoldAssets.map(snapEsc).join(', ')}</div>` : ''}
   `;
   return hero;
 }
@@ -934,11 +1023,12 @@ const CAT_ICONS = {
 };
 
 const LIQUIDITY_TIERS = [
-  { label: 'Instant',  color: '#8b5cf6', cats: ['Cryptocurrency'] },
+  { label: 'Instant',  color: '#8b5cf6', cats: ['Bank Accounts', 'Cryptocurrency'] },
   { label: '1 Day',    color: '#22c55e', cats: ['Indian Equity Stocks'] },
   { label: '3-5 Days', color: '#3b82f6', cats: ['Indian EQ MF', 'Debt & Hybrid MF', 'US Equity', 'Precious Metals (Digital)'] },
   { label: 'Weeks',    color: '#f59e0b', cats: ['Precious Metals (Physical)'] },
   { label: 'Months+',  color: '#ef4444', cats: ['Real Estate'] },
+  { label: 'Locked',   color: '#64748b', cats: ['EPF'] },              // retirement — withdrawals are restricted
 ];
 
 const CURRENCY_MAP = {
@@ -1215,11 +1305,14 @@ function drawLiquidityLadder(divId, byCategory, totalInvested) {
   const ladder = document.createElement('div');
   ladder.className = 'liquidity-ladder';
 
+  // What you could get out = today's value (cost where there is no value), share of the tiers' sum.
+  const valueOf = c => (byCategory[c] ? (byCategory[c].currentValue || byCategory[c].netCost || 0) : 0);
+  const allTiers = LIQUIDITY_TIERS.reduce((s, t) => s + t.cats.reduce((a, c) => a + valueOf(c), 0), 0);
   LIQUIDITY_TIERS.forEach(tier => {
-    const tierTotal = tier.cats.reduce((s, c) => s + (byCategory[c]?.netCost || 0), 0);
+    const tierTotal = tier.cats.reduce((s, c) => s + valueOf(c), 0);
     if (tierTotal < 1) return;
-    const pct = totalInvested > 0 ? (tierTotal / totalInvested * 100).toFixed(1) : '0.0';
-    const presentCats = tier.cats.filter(c => byCategory[c]?.netCost > 0).join(', ');
+    const pct = allTiers > 0 ? (tierTotal / allTiers * 100).toFixed(1) : '0.0';
+    const presentCats = tier.cats.filter(c => valueOf(c) > 0).join(', ');
 
     const row = document.createElement('div');
     row.className = 'liquidity-tier';
@@ -1367,6 +1460,414 @@ function makeChartCard(title, canvasId, fullWidth = false) {
     <div class="chart-canvas-wrap"><canvas id="${canvasId}"></canvas></div>
   `;
   return card;
+}
+
+// ── Monthly snapshots (frozen history — gas/snapshot.gs) ─────────────────────
+// Each month is recorded as of the day you take it here (any day; again later = replaced with that
+// day's data). Once the next month starts it is locked, and later sells / edits / deletions never
+// change it; a month never taken stays a gap (history months are as of month-end). Hidden items + account
+// are applied server-side; the card's own filters (category → subcategory → asset, year → month,
+// all multi-select) and the Monthly / Yearly view run here on the compact per-asset rows.
+
+let _snapshotCache = {};         // account → snapshotData payload (this page session)
+let _snapshotFormCache = null;   // snapshotForm: this month's window + manual prices to ask for
+let _snapshotTakeMsg = '';        // result of the last "Take snapshot", shown after the panel redraws
+let _snapshotLinesCache = {};    // account|date → snapshotLines
+let _snapshotGen = 0;            // bumped on every invalidation; a reply from an older generation is not cached
+let _snapshotDay = '';           // calendar day the caches belong to — the window opens / locks by date
+
+// Called wherever the app drops its insights cache (Refresh, saves, hides, account changes).
+function invalidateSnapshots() {
+  _snapshotDay = new Date().toDateString();
+  _snapshotGen++;
+  _snapshotCache = {};
+  _snapshotFormCache = null;
+  _snapshotLinesCache = {};
+}
+const SNAP_UI = { view: 'month', cats: [], subs: [], assets: [], years: [], months: [] };   // survives redraws
+
+function snapshotCachesFresh() {
+  if (_snapshotDay !== new Date().toDateString()) invalidateSnapshots();
+}
+
+function snapEsc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function snapDayLabel(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
+}
+
+// ── "Take snapshot" (any day): asks for the manual prices, then records this month as of today ──
+function buildSnapshotTake() {
+  const el = document.createElement('div');
+  el.id = 'snapshot-take';
+  el.style.display = 'none';
+  return el;
+}
+
+async function drawSnapshotTake() {
+  const el = document.getElementById('snapshot-take');
+  if (!el) return;
+  snapshotCachesFresh();
+  let f = _snapshotFormCache;
+  if (!f) {
+    const gen = _snapshotGen;
+    try { f = await API.snapshot('snapshotForm'); }
+    catch (e) { if (el.isConnected) { el.className = 'snapshot-take'; el.style.display = ''; el.textContent = 'Snapshot panel unavailable: ' + e.message; } return; }
+    if (gen === _snapshotGen) _snapshotFormCache = f;
+  }
+  if (!el.isConnected) return;
+  el.className = 'snapshot-take';
+  el.style.display = '';
+  const month = monthLabel(f.month.slice(0, 7));
+  const tagAcct = ACCOUNTS.list.length > 1;                            // the panel covers every account
+  const unit = type => (Object.values(STREAMS).find(s => s.manualPriceType === type) || {}).manualPriceLabel || 'Price';
+  const fields = (f.manual || []).map((m, i) => `
+    <label class="snapshot-take-field">
+      <span>${snapEsc(m.name)}${tagAcct && ACCOUNTS.name(m.account_id) ? ' · ' + snapEsc(ACCOUNTS.name(m.account_id)) : ''}
+        <small>${snapEsc(unit(m.asset_type))} (₹) · ${m.last_date ? 'last ₹' + Number(m.last_price).toLocaleString('en-IN') + ' on ' + snapEsc(snapDayLabel(m.last_date)) : 'no price yet'}</small></span>
+      <input type="number" step="0.01" min="0" inputmode="decimal" data-i="${i}" value="${m.last_price > 0 ? snapEsc(m.last_price) : ''}" />
+    </label>`).join('');
+  el.innerHTML = `
+    <div class="snapshot-take-title">📸 ${snapEsc(month)} snapshot</div>
+    <div class="snapshot-take-muted">${f.taken
+      ? `Taken as of ${snapEsc(snapDayLabel(f.taken.date))} · ${f.taken.lines} holdings · value ${fmtCurrency(f.taken.value)}${tagAcct ? ' (all accounts)' : ''}. ` +
+        `Take it again to replace it with today's prices.`
+      : `Not taken yet — it records today's holdings at the sheet's current prices (${snapEsc(snapDayLabel(f.today))}).`}
+      It locks when the next month starts; a month you skip stays a gap.</div>
+    ${(f.epfTyped || []).length ? `<div class="snapshot-take-muted">EPF has no passbook entries yet — ${f.epfTyped.map(e => snapEsc(e.name) + ' counts at its typed ' + fmtCurrency(e.balance)).join(', ')}. Add the passbook first if you can: a month you take is not rebuilt later.</div>` : ''}
+    ${fields ? `<div class="snapshot-take-fields">${fields}</div>` : ''}
+    <button type="button" class="btn-primary btn-sm" id="snapshot-take-btn">${f.taken ? 'Update to today' : 'Take snapshot'}</button>
+    <div class="snapshot-take-muted" id="snapshot-take-msg">${snapEsc(_snapshotTakeMsg)}</div>`;
+  const btn = el.querySelector('#snapshot-take-btn');
+  btn.onclick = async () => {
+    const prices = [];
+    for (const inp of el.querySelectorAll('input[data-i]')) {
+      const m = f.manual[Number(inp.dataset.i)];
+      if (inp.validity && inp.validity.badInput) { showToast('Enter a plain number (no commas) for ' + m.name, 'error'); inp.focus(); return; }
+      if (inp.value === '') continue;                                    // blank = keep the last price
+      const v = parseFloat(inp.value);
+      if (!(v > 0)) { showToast('Enter a price above 0 for ' + m.name, 'error'); return; }
+      prices.push({ asset_type: m.asset_type, asset_id: m.asset_id, price: v });
+    }
+    btn.disabled = true;
+    btn.textContent = 'Taking… (fetching prices, ~20 s)';
+    try {
+      const r = await API.takeSnapshot(prices);                          // clears the snapshot caches
+      _snapshotTakeMsg = `✓ ${monthLabel(r.month)} snapshot ${r.updated ? 'saved as of ' + snapDayLabel(r.date) : 'unchanged'} — ${r.lines} holdings · invested ${fmtCurrency(r.invested)} · value ${fmtCurrency(r.value)}${tagAcct ? ' (all accounts)' : ''}` +
+        (r.notes ? ' · ' + r.notes : '');
+      showToast(r.updated ? 'Snapshot saved' : 'Nothing changed');
+    } catch (e) {
+      // Keep what you typed on screen (a rebuilt form would refill the old prices); caches are
+      // already dropped, so the next visit re-reads whatever the server did save.
+      const msg = el.querySelector('#snapshot-take-msg');
+      if (msg) msg.textContent = 'Failed: ' + e.message + ' — your prices are still above; take it again.';
+      showToast('Snapshot failed: ' + e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = f.taken ? 'Update to today' : 'Take snapshot';
+      return;
+    }
+    drawSnapshotTake();
+    drawSnapshotCard();
+  };
+}
+
+// ── Card ──
+function buildSnapshotCard() {
+  const card = document.createElement('div');
+  card.className = 'chart-card chart-card-full snapshot-card';
+  card.innerHTML = `
+    <div class="chart-card-title" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <span>Monthly Snapshots — Invested vs Value</span>
+      <span class="snapshot-view" role="group" aria-label="Chart view" style="display:none">
+        <button type="button" class="btn-sm" data-view="month">Monthly</button>
+        <button type="button" class="btn-sm" data-view="year">Yearly</button>
+      </span>
+    </div>
+    <div class="snapshot-filters"></div>
+    <div class="chart-canvas-wrap"><canvas id="chart-snapshots"></canvas></div>
+    <div id="snapshot-note" style="font-size:11.5px;color:var(--text-muted);margin:8px 0 4px"></div>
+    <div id="snapshot-table"></div>`;
+  return card;
+}
+
+async function drawSnapshotCard() {
+  const note = document.getElementById('snapshot-note');
+  if (!note) return;
+  snapshotCachesFresh();
+  const account = String(ACCOUNTS.current);
+  let data = _snapshotCache[account];
+  if (!data) {
+    note.textContent = 'Loading snapshots…';
+    const gen = _snapshotGen;
+    try { data = await API.snapshot('snapshotData', { account }); }
+    catch (e) { if (note.isConnected) note.textContent = 'Snapshots unavailable: ' + e.message; return; }
+    if ((data.months || []).length && gen === _snapshotGen) _snapshotCache[account] = data;   // never cache "none yet" or a stale reply
+  }
+  // The user may have switched tab / account while this was loading — draw nowhere stale.
+  if (!note.isConnected || String(ACCOUNTS.current) !== account) return;
+  if (!(data.months || []).length) {
+    emptyCard('chart-snapshots', 'No snapshots yet — run setupSnapshots() and backfillSnapshots() in Apps Script.');
+    note.textContent = '';
+    return;
+  }
+  const card = note.closest('.chart-card');
+  const render = () => renderSnapshotView(card, data, account);
+  buildSnapshotFilters(card, data, render);
+  card.querySelector('.snapshot-view').style.display = '';
+  card.querySelectorAll('.snapshot-view button').forEach(b => {
+    b.onclick = () => { SNAP_UI.view = b.dataset.view; render(); };
+  });
+  render();
+}
+
+// Each dropdown's options, cascading off the current SNAP_UI picks (category → subcategory → asset,
+// year → month). Pure — no DOM.
+function snapshotOptions(data) {
+  const catName = id => (CATEGORIES.find(c => String(c.id) === String(id)) || {}).name || ('Category ' + id);
+  const subName = id => SUBCAT_NAMES[id] || SUBCAT_NAMES[Number(id)] || ('Subcategory ' + id);
+  const tagAcct = ACCOUNTS.isAll() && ACCOUNTS.list.length > 1;
+  // rows carry each month's frozen category (r[5]) / subcategory (r[6]) — a later reclassification
+  // never moves a locked month between filters.
+  const inCats = r => !SNAP_UI.cats.length || SNAP_UI.cats.includes(r[5]);
+  const inSubs = r => !SNAP_UI.subs.length || SNAP_UI.subs.includes(r[6]);
+  return {
+    cats: () => {
+      const have = new Set(data.rows.map(r => r[5]));
+      return CATEGORIES.filter(c => have.has(String(c.id))).map(c => ({ value: String(c.id), label: c.name }))
+        .concat([...have].filter(id => !CATEGORIES.some(c => String(c.id) === id)).map(id => ({ value: id, label: catName(id) })));
+    },
+    subs: () => {
+      const catOf = {};
+      data.rows.filter(inCats).forEach(r => { if (r[6]) catOf[r[6]] = r[5]; });
+      const opts = Object.keys(catOf).map(s => ({ value: s, label: subName(s) }));
+      const dup = l => opts.filter(o => o.label === l).length > 1;     // e.g. "Large Cap" under funds AND stocks
+      return opts.map(o => (dup(o.label) ? { value: o.value, label: o.label + ' · ' + catName(catOf[o.value]) } : o))
+        .sort((x, y) => x.label.localeCompare(y.label));
+    },
+    assets: () => [...new Set(data.rows.filter(r => inCats(r) && inSubs(r)).map(r => r[1]))].map(i => data.assets[i])
+      .map(a => ({ value: a.t + '|' + a.id,
+                   label: a.n + (tagAcct && ACCOUNTS.name(a.a) ? ' · ' + ACCOUNTS.name(a.a) : '') }))
+      .sort((x, y) => x.label.localeCompare(y.label)),
+    years: () => [...new Set(data.months.map(m => m.d.slice(0, 4)))].map(y => ({ value: y, label: y })),
+    months: () => data.months.filter(m => !SNAP_UI.years.length || SNAP_UI.years.includes(m.d.slice(0, 4)))
+      .map(m => ({ value: m.d.slice(0, 7), label: monthLabel(m.d.slice(0, 7)) })),   // by month: a re-take moves the as-of day
+  };
+}
+
+// Category → Subcategory → Asset and Year → Month, each multi-select and cascading.
+function buildSnapshotFilters(card, data, render) {
+  const box = card.querySelector('.snapshot-filters');
+  box.innerHTML = '';
+  box.className = 'snapshot-filters insights-filter-bar';
+  const opt = snapshotOptions(data);
+
+  const group = (label, ms) => {
+    const g = document.createElement('div');
+    g.className = 'insights-filter-group';
+    g.innerHTML = `<div class="insights-filter-label">${label}</div>`;
+    g.appendChild(ms.wrapper);
+    return g;
+  };
+  const catMS = makeMultiSelect('All Categories', opt.cats(), () => {
+    SNAP_UI.cats = catMS.getSelected();
+    subMS.setOptions(opt.subs());    SNAP_UI.subs = subMS.getSelected();      // keep picks that still apply
+    assetMS.setOptions(opt.assets()); SNAP_UI.assets = assetMS.getSelected();
+    render();
+  }, SNAP_UI.cats);
+  SNAP_UI.cats = catMS.getSelected();
+  const subMS = makeMultiSelect('All Subcategories', opt.subs(), () => {
+    SNAP_UI.subs = subMS.getSelected();
+    assetMS.setOptions(opt.assets()); SNAP_UI.assets = assetMS.getSelected();
+    render();
+  }, SNAP_UI.subs);
+  SNAP_UI.subs = subMS.getSelected();
+  const assetMS = makeMultiSelect('All Assets', opt.assets(), () => {
+    SNAP_UI.assets = assetMS.getSelected();
+    render();
+  }, SNAP_UI.assets);
+  SNAP_UI.assets = assetMS.getSelected();
+  const yearMS = makeMultiSelect('All Years', opt.years(), () => {
+    SNAP_UI.years = yearMS.getSelected();
+    monthMS.setOptions(opt.months()); SNAP_UI.months = monthMS.getSelected();
+    render();
+  }, SNAP_UI.years);
+  SNAP_UI.years = yearMS.getSelected();
+  const monthMS = makeMultiSelect('All Months', opt.months(), () => {
+    SNAP_UI.months = monthMS.getSelected();
+    render();
+  }, SNAP_UI.months);
+  SNAP_UI.months = monthMS.getSelected();
+
+  const clear = document.createElement('div');
+  clear.className = 'insights-filter-group';
+  clear.innerHTML = '<div class="insights-filter-label">&nbsp;</div>';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary btn-sm insights-clear-btn';
+  btn.textContent = '✕ Clear';
+  btn.onclick = () => {
+    Object.assign(SNAP_UI, { cats: [], subs: [], assets: [], years: [], months: [] });
+    buildSnapshotFilters(card, data, render);
+    render();
+  };
+  clear.appendChild(btn);
+
+  [group('Category', catMS), group('Subcategory', subMS), group('Asset', assetMS),
+   group('Year', yearMS), group('Month', monthMS), clear].forEach(g => box.appendChild(g));
+}
+
+// Filtered points: one per month, or (Yearly) the last selected month of each year.
+function snapshotPoints(data) {
+  const pickA = data.assets.map(a => !SNAP_UI.assets.length || SNAP_UI.assets.includes(a.t + '|' + a.id));
+  const pickR = r => pickA[r[1]] && (!SNAP_UI.cats.length || SNAP_UI.cats.includes(r[5])) &&
+    (!SNAP_UI.subs.length || SNAP_UI.subs.includes(r[6]));
+  const pickM = data.months.map(m => (!SNAP_UI.years.length || SNAP_UI.years.includes(m.d.slice(0, 4))) &&
+    (!SNAP_UI.months.length || SNAP_UI.months.includes(m.d.slice(0, 7))));
+  const pts = data.months.map(m => ({ date: m.d, status: m.st, source: m.src, notes: m.notes, inv: 0, cur: 0, atCost: 0, old: 0 }));
+  data.rows.forEach(r => {
+    const [mi, , inv, cur, flag] = r;
+    if (!pickM[mi] || !pickR(r)) return;
+    const p = pts[mi];
+    p.inv += inv; p.cur += cur;
+    if (flag === 1) p.atCost++;
+    if (flag === 2) p.old++;
+  });
+  const monthly = pts.filter((p, i) => pickM[i]);
+  if (SNAP_UI.view !== 'year') return monthly.map(p => Object.assign(p, { label: monthLabel(p.date.slice(0, 7)) }));
+  const byYear = {};
+  monthly.forEach(p => { byYear[p.date.slice(0, 4)] = p; });            // months are in date order → last wins
+  return Object.keys(byYear).sort().map(y => Object.assign({}, byYear[y], { label: y, year: y }));
+}
+
+function renderSnapshotView(card, data, account) {
+  card.querySelectorAll('.snapshot-view button').forEach(b => {
+    b.className = 'btn-sm ' + (b.dataset.view === SNAP_UI.view ? 'btn-secondary' : 'btn-outline');
+    b.setAttribute('aria-pressed', String(b.dataset.view === SNAP_UI.view));
+  });
+  const yearly = SNAP_UI.view === 'year';
+  const pts = snapshotPoints(data);
+  const old = _insightsCharts.find(c => c.canvas && c.canvas.id === 'chart-snapshots');
+  if (old) { old.destroy(); _insightsCharts = _insightsCharts.filter(c => c !== old); }
+  const wrap = card.querySelector('.chart-canvas-wrap');
+  if (!pts.length) {
+    if (wrap) wrap.innerHTML = '<p class="chart-empty">No snapshots match these filters.</p>';
+  } else if (wrap && !wrap.querySelector('canvas')) {
+    wrap.innerHTML = '<canvas id="chart-snapshots"></canvas>';
+  }
+  const statusText = p => (p.status === 'open' ? 'this month (can update)' : p.source === 'backfill' ? 'from history' : 'taken') +
+    ' · as of ' + snapDayLabel(p.date);
+
+  if (pts.length) {
+    const GRID = 'rgba(255,255,255,0.05)', TICK = '#525252';
+    newChart('chart-snapshots', {
+      type: yearly ? 'bar' : 'line',
+      data: {
+        labels: pts.map(p => p.label),
+        datasets: [
+          { label: 'Current value', data: pts.map(p => Math.round(p.cur)), borderColor: '#22c55e',
+            backgroundColor: yearly ? 'rgba(34,197,94,0.55)' : 'rgba(34,197,94,0.10)',
+            fill: !yearly, tension: 0.25, pointRadius: 2, borderWidth: 2, borderRadius: 4 },
+          { label: 'Invested', data: pts.map(p => Math.round(p.inv)), borderColor: '#f59e0b',
+            backgroundColor: yearly ? 'rgba(245,158,11,0.55)' : 'transparent',
+            tension: 0.25, pointRadius: 2, borderWidth: 2, borderDash: yearly ? [] : [5, 4], borderRadius: 4 },
+        ],
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          datalabels: { display: false },
+          legend: { position: 'top', labels: { color: TICK, padding: 14, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
+          tooltip: { callbacks: {
+            title: items => { const p = pts[items[0].dataIndex]; return yearly ? `${p.year} (as of ${snapDayLabel(p.date)})` : `As of ${snapDayLabel(p.date)}`; },
+            label: ctx => ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}`,
+            afterBody: items => {
+              const p = pts[items[0].dataIndex];
+              const g = p.cur - p.inv;
+              return [`Gain: ${g >= 0 ? '+' : '−'}${fmtCurrency(Math.abs(g))}${p.inv > 0 ? ` (${(g / p.inv * 100).toFixed(1)}%)` : ''}`,
+                      p.status === 'open' ? 'This month — take it again to update it' : '',
+                      p.source === 'backfill' ? 'Rebuilt from historical prices (month-end)' : '',
+                      p.old ? `${p.old} old manual price(s)` : '', p.notes].filter(Boolean);
+            } } },
+        },
+        scales: {
+          x: { ticks: { color: TICK, maxRotation: 45, font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
+          y: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  const backfilled = pts.filter(p => p.source === 'backfill').length;
+  const atCost = pts.reduce((s, p) => s + p.atCost, 0);
+  const note = card.querySelector('#snapshot-note');
+  if (note) note.textContent =
+    `${pts.length} ${yearly ? 'year(s) — each shows its last snapshot' : 'month(s)'} · each month as of the day it was taken (history: month-end), ` +
+    `locked once the next month starts — later sells or edits never change a locked month` +
+    (backfilled ? ` · ${backfilled} rebuilt from historical prices` : '') +
+    (atCost ? ` · ${atCost} asset-month(s) valued at cost (no price on record)` : '');
+
+  const rows = pts.slice().reverse();
+  const tbl = card.querySelector('#snapshot-table');
+  if (!tbl) return;
+  const prevOf = i => rows[i + 1];
+  tbl.innerHTML = !rows.length ? '' : `<div class="report-table-wrap"><table class="report-table">
+    <thead><tr><th style="text-align:left">${yearly ? 'Year' : 'Month'}</th><th>Invested</th><th>Value</th><th>Gain</th><th>Gain %</th>
+      ${yearly ? '<th>Value change</th>' : ''}<th>Status</th></tr></thead>
+    <tbody>${rows.map((p, i) => {
+      const g = p.cur - p.inv, pct = p.inv > 0 ? g / p.inv * 100 : 0, cls = g >= 0 ? 'positive' : 'negative';
+      const prev = prevOf(i), ch = prev ? p.cur - prev.cur : null;
+      return `<tr class="snapshot-row" data-date="${snapEsc(p.date)}" title="${snapEsc(p.notes)}" style="cursor:pointer${!yearly && i >= 12 ? ';display:none' : ''}">
+        <td style="text-align:left">${snapEsc(p.label)}${yearly ? ` <span style="color:var(--text-muted);font-size:11px">as of ${snapEsc(monthLabel(p.date.slice(0, 7)))}</span>` : ''}</td>
+        <td>${fmtCurrency(p.inv)}</td><td>${fmtCurrency(p.cur)}</td>
+        <td class="${cls}">${g >= 0 ? '+' : '−'}${fmtCurrency(Math.abs(g))}</td><td class="${cls}">${pct.toFixed(1)}%</td>
+        ${yearly ? `<td class="${ch === null ? '' : ch >= 0 ? 'positive' : 'negative'}">${ch === null ? '—' : (ch >= 0 ? '+' : '−') + fmtCurrency(Math.abs(ch))}</td>` : ''}
+        <td>${snapEsc(statusText(p))}${p.atCost ? ' · ' + p.atCost + ' at cost' : ''}${p.old ? ' · ' + p.old + ' old price' : ''}</td></tr>`;
+    }).join('')}</tbody></table></div>
+    ${!yearly && rows.length > 12 ? '<button class="btn-outline btn-sm" id="snapshot-more" style="margin-top:8px">Show all ' + rows.length + ' months</button>' : ''}
+    <div id="snapshot-lines"></div>`;
+  const more = tbl.querySelector('#snapshot-more');
+  if (more) more.onclick = () => { tbl.querySelectorAll('.snapshot-row').forEach(r => { r.style.display = ''; }); more.remove(); };
+  tbl.querySelectorAll('.snapshot-row').forEach(r => { r.onclick = () => drawSnapshotLines(tbl, r.dataset.date, account); });
+}
+
+async function drawSnapshotLines(tbl, date, account) {
+  const box = tbl.querySelector('#snapshot-lines');
+  if (!box) return;
+  box.dataset.req = date;                                               // last click wins
+  box.innerHTML = '<p class="chart-empty">Loading ' + monthLabel(date.slice(0, 7)) + '…</p>';
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  let res = _snapshotLinesCache[account + '|' + date];
+  if (!res) {
+    const gen = _snapshotGen;
+    try { res = await API.snapshot('snapshotLines', { date, account }); }
+    catch (e) { if (box.dataset.req === date) box.innerHTML = '<p class="chart-empty">Couldn\'t load: ' + snapEsc(e.message) + '</p>'; return; }
+    if (gen === _snapshotGen) _snapshotLinesCache[account + '|' + date] = res;
+  }
+  if (!box.isConnected || box.dataset.req !== date) return;
+  const lines = (res.lines || []).filter(l => (!SNAP_UI.cats.length || SNAP_UI.cats.includes(String(l.category_id))) &&
+      (!SNAP_UI.subs.length || SNAP_UI.subs.includes(String(l.subcategory_id))) &&
+      (!SNAP_UI.assets.length || SNAP_UI.assets.includes(l.asset_table + '|' + l.asset_id)))
+    .sort((a, b) => (b.current_value || 0) - (a.current_value || 0));
+  const catName = id => (CATEGORIES.find(c => String(c.id) === String(id)) || {}).name || id;
+  const tagAcct = ACCOUNTS.isAll() && ACCOUNTS.list.length > 1;
+  const name = l => snapEsc(l.asset_name) + (tagAcct && ACCOUNTS.name(l.account_id) ? ' · ' + snapEsc(ACCOUNTS.name(l.account_id)) : '');
+  const src = { sheet: 'sheet price', amfi: 'AMFI NAV', yahoo: 'market close', manual: 'your price', cost: 'at cost', epf: 'EPF passbook' };
+  const priceFrom = l => snapEsc(src[l.price_source] || l.price_source) + (l.price_date ? ' · ' + snapEsc(snapDayLabel(l.price_date)) : '') +
+    (l.old ? ' <span class="negative" title="Not updated since last month\'s snapshot locked">· old</span>' : '');
+  box.innerHTML = `<div class="chart-card-title" style="margin-top:14px">As of ${snapEsc(snapDayLabel(date))} — ${lines.length} holdings${res.status === 'open' ? ' (open)' : ''}</div>
+    ${res.notes ? `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">${snapEsc(res.notes)}</div>` : ''}
+    <div class="report-table-wrap"><table class="report-table">
+    <thead><tr><th style="text-align:left">Asset</th><th style="text-align:left">Category</th><th>Units</th><th>Invested</th><th>Value</th><th style="text-align:left">Price from</th></tr></thead>
+    <tbody>${lines.map(l => `<tr><td style="text-align:left">${name(l)}</td><td style="text-align:left">${snapEsc(catName(l.category_id))}</td>
+      <td>${l.units === '' ? '—' : Number(l.units).toLocaleString('en-IN', { maximumFractionDigits: 4 })}</td>
+      <td>${fmtCurrency(l.invested_value)}</td><td>${fmtCurrency(l.current_value)}</td><td style="text-align:left">${priceFrom(l)}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // ── Chart utilities ───────────────────────────────────────────────────────────
@@ -1638,7 +2139,7 @@ function drawPnLChart(byCategory) {
 // ── Indian EQ MF Detailed Report — FIFO engine ───────────────────────────────
 
 function computeFIFOMFMetrics(stream, txns, currentNAV) {
-  const sorted = [...txns].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+  const sorted = [...txns].sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
 
   const lots       = [];   // { remaining: units, costPerUnit }
   let totalInvested  = 0;
@@ -1651,7 +2152,7 @@ function computeFIFOMFMetrics(stream, txns, currentNAV) {
   let hasSells       = false;
 
   sorted.forEach(t => {
-    const date  = new Date(t.txn_date);
+    const date  = txnDay(t.txn_date);
     if (isNaN(date)) return;
     const units = parseFloat(t.units || 0);
     const nav   = parseFloat(t.nav   || 0);
@@ -1763,7 +2264,8 @@ function buildMFReport(rawData) {
   const entry = rawData.find(e => e.catId === 1 && e.stream?.txnTable === 'equity_transactions');
   if (!entry || !entry.assets?.length) return [];
 
-  const { stream, assets, txns } = entry;
+  const { stream, assets } = entry;
+  const txns = entry.assetTxns || entry.txns;                          // each fund's full history (FIFO needs every buy)
 
   const assetMap = {};
   assets.forEach(a => { assetMap[String(a.id)] = a; });
@@ -1930,7 +2432,7 @@ function drawMFReport(divId, rawData) {
 function computeRollingSIP(stream, txns) {
   const buys = (txns || [])
     .filter(t => t.txn_type === 'Buy' && parseFloat(t.units || 0) > 0)
-    .sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+    .sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
   const out = [];
   let cumUnits = 0, cumInv = 0;
   const cfs = [];
@@ -1940,9 +2442,9 @@ function computeRollingSIP(stream, txns) {
     const nav   = parseFloat(t.nav || 0);
     const amt   = getAmtINR(stream, t);
     cumUnits += units; cumInv += amt;
-    cfs.push({ amount: -amt, date: new Date(t.txn_date) });
+    cfs.push({ amount: -amt, date: txnDay(t.txn_date) });
     const value = nav > 0 ? cumUnits * nav : cumInv;
-    const xirr  = computeXIRR([...cfs, { amount: value, date: new Date(t.txn_date) }]);
+    const xirr  = computeXIRR([...cfs, { amount: value, date: txnDay(t.txn_date) }]);
     out.push({
       n: i + 1, from: firstDate, to: t.txn_date,
       invested: cumInv, value, profit: value - cumInv,
@@ -1955,14 +2457,14 @@ function computeRollingSIP(stream, txns) {
 // Units still held (FIFO, sold units excluded) grouped by the year they were bought,
 // valued at today's NAV — "what my money from each year is worth now".
 function computeFundVintage(stream, txns, currentNAV) {
-  const sorted = [...(txns || [])].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+  const sorted = [...(txns || [])].sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
   const lots = [];   // { units, costPerUnit, year }
   sorted.forEach(t => {
     const units = parseFloat(t.units || 0);
     if (units <= 0) return;
     if (t.txn_type === 'Buy') {
       const amt = getAmtINR(stream, t);
-      lots.push({ units, costPerUnit: amt / units, year: (t.txn_date || '').substring(0, 4) });
+      lots.push({ units, costPerUnit: amt / units, year: localYMD(t.txn_date).slice(0, 4) });
     } else {
       let toSell = units;
       while (toSell > 1e-9 && lots.length) {
@@ -2131,14 +2633,14 @@ function computeVintageProfit(filteredData) {
     Object.entries(byAsset).forEach(([aid, list]) => {
       const asset    = assetMap[aid];
       const priceINR = resolvePriceINR(stream, asset, aid);
-      const sorted   = [...list].sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+      const sorted   = [...list].sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
       const lots     = [];   // { units, costPerUnit (INR), year }
 
       sorted.forEach(t => {
         const isBuy = stream.usEquity ? String(t.txn_type).toUpperCase() === 'BUY' : t.txn_type === 'Buy';
         const units = stream.usEquity ? parseFloat(t.units || 0) : getQtyVal(t);
         if (!units || units <= 0) return;
-        const yr = (t.txn_date || '').substring(0, 4);
+        const yr = localYMD(t.txn_date).slice(0, 4);
 
         if (isBuy) {
           const costINR = stream.usEquity ? parseFloat(t[stream.costBasisCol] || 0) : getAmtINR(stream, t);
@@ -2280,7 +2782,7 @@ function buildHealthCheck(agg, filtered, rawData) {
   }
 
   // Underperforming active MF funds (XIRR < 8%)
-  const laggards = buildMFReport(rawData).filter(f => f.isActive && f.xirr !== null && f.xirr < 0.08);
+  const laggards = buildMFReport(filtered).filter(f => f.isActive && f.xirr !== null && f.xirr < 0.08);
   if (laggards.length) {
     const names = laggards.slice(0, 3).map(f => f.name.split(' ').slice(0, 3).join(' ')).join(', ');
     flags.push({ level: 'warn', text: `${laggards.length} active fund${laggards.length > 1 ? 's' : ''} with XIRR under 8% (${names}${laggards.length > 3 ? '…' : ''}) — review vs benchmark.` });
@@ -2370,11 +2872,11 @@ function computeXirrTrend(filteredData) {
     txns.forEach(t => { const aid = String(t[stream.assetIdCol]); (byAsset[aid] = byAsset[aid] || []).push(t); });
 
     Object.entries(byAsset).forEach(([aid, list]) => {
-      const sorted = list.filter(t => t.txn_date).sort((a, b) => new Date(a.txn_date) - new Date(b.txn_date));
+      const sorted = list.filter(t => t.txn_date).sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
       const events = [];
       sorted.forEach(t => {
         const units = getQtyVal(t); if (!units) return;
-        const d = new Date(t.txn_date); if (isNaN(d)) return;
+        const d = txnDay(t.txn_date); if (isNaN(d)) return;
         const amt = getAmtINR(stream, t);
         if (!minDate || d < minDate) minDate = d;
         events.push({ date: d, units: t.txn_type === 'Buy' ? units : -units, price: units > 0 ? amt / units : 0 });

@@ -35,9 +35,10 @@ function usEquityLiveRate(assets, wires, stream) {
 
 // ── Reusable multi-select dropdown (checkbox panel) — shared with insights.js ──
 // options: [{ value, label }]. onChange() fires on every toggle.
+// initial: optional values to start selected (dropped if not among options).
 // Returns { wrapper, getSelected(), clear(), setOptions(opts) }.
-function makeMultiSelect(placeholder, options, onChange) {
-  const selected = new Set();
+function makeMultiSelect(placeholder, options, onChange, initial) {
+  const selected = new Set((initial || []).filter(v => options.some(o => o.value === v)));
   const wrap  = document.createElement('div');
   wrap.className = 'multiselect';
   const btn   = document.createElement('button');
@@ -74,7 +75,12 @@ function makeMultiSelect(placeholder, options, onChange) {
 
   btn.addEventListener('click', e => {
     e.stopPropagation();
-    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    const open = panel.style.display === 'none';
+    panel.style.display = open ? 'block' : 'none';
+    if (open) {                                  // flip to right-aligned if it would run off-screen
+      panel.style.left = '0'; panel.style.right = 'auto';
+      if (panel.getBoundingClientRect().right > window.innerWidth - 8) { panel.style.left = 'auto'; panel.style.right = '0'; }
+    }
   });
   document.addEventListener('click', e => { if (!wrap.contains(e.target)) panel.style.display = 'none'; });
 
@@ -277,20 +283,23 @@ async function buildHoldingsRows() {
   await ACCOUNTS.load();
 
   const allSheets = [...new Set(streamEntries.flatMap(e => [e.stream.assetTable, e.stream.txnTable, ...(e.stream.auxTables || [])]).filter(Boolean)), 'manual_prices'];
-  let res = {};
+  let res = {}, partial = false;
   try {
     res = await API.batchGet(allSheets);
   } catch (_) {
     // batchGet failed (e.g. new sheets not yet created) — fall back to per-stream fetches
     const results = await Promise.allSettled(
       [...new Set(allSheets)].map(async sheet => {
-        const data = await API.get(sheet, { limit: 5000 });
+        const data = await API.get(sheet, { limit: 1000000 });
+        if (!Array.isArray(data.rows) || data.total > data.rows.length) throw new Error(sheet + ' incomplete');
         return [sheet, data];
       })
     );
     results.forEach(r => {
       if (r.status === 'fulfilled') res[r.value[0]] = r.value[1];
+      else partial = true;
     });
+    if (partial) showToast('Some tables failed to load — Holdings may be incomplete (not cached; Refresh to retry)', 'error');
   }
   const manualPricesMap = buildManualPricesMap(res['manual_prices']?.rows || []);
 
@@ -304,16 +313,17 @@ async function buildHoldingsRows() {
     // US equity may have cash (from a wire) before any asset exists — don't skip it.
     if (!assets.length && !stream.usEquity) continue;
 
-    // ── staticBalance streams (EPF, Bank) — no transactions, read balance directly ──
+    // ── staticBalance streams (EPF, Bank) — a balance, no units / prices (EPF: from its entries) ──
     if (stream.staticBalance) {
+      const txns = stream.txnTable ? res[stream.txnTable]?.rows || [] : [];
       assets
         .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
         .forEach(a => {
-          const balance = parseFloat(a[stream.currentBalanceCol] || 0);
-          if (!balance) return;
+          const b = staticBalanceOf(stream, a, txns);
+          if (Math.abs(b.value) < 0.005) return;                            // nothing in the account
           rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
                       subcategory: '', name: a[stream.assetNameCol], account: a.account_id,
-                      invested: balance, currentValue: balance });
+                      invested: b.invested, currentValue: b.value });
         });
       continue;
     }
@@ -322,30 +332,31 @@ async function buildHoldingsRows() {
     if (stream.usEquity) {
       const visibleIds = new Set(assets.map(a => String(a.id)));   // account+hidden filtered
       const usTxns = (res[stream.txnTable]?.rows || []).filter(t => visibleIds.has(String(t[stream.assetIdCol])));
-      const buyUnits = {}, buyCostINR = {}, netQty = {};
-      usTxns.forEach(t => {
+      // Per asset in date order (same day: BUY first): running average INR cost, like the rupee streams.
+      const isUsBuy = t => String(t.txn_type).toUpperCase() === 'BUY';
+      const pos = {};
+      [...usTxns].sort((x, y) => (txnDay(x.txn_date) - txnDay(y.txn_date)) || (isUsBuy(y) - isUsBuy(x))).forEach(t => {
         const aid = String(t[stream.assetIdCol]);
+        const p = pos[aid] = pos[aid] || { qty: 0, cost: 0 };
         const u = parseFloat(t.units || 0);
-        if (String(t.txn_type).toUpperCase() === 'BUY') {
-          buyUnits[aid]   = (buyUnits[aid]   || 0) + u;
-          buyCostINR[aid] = (buyCostINR[aid] || 0) + parseFloat(t[stream.costBasisCol] || 0);
-          netQty[aid]     = (netQty[aid]     || 0) + u;
-        } else {
-          netQty[aid] = (netQty[aid] || 0) - u;
+        if (isUsBuy(t)) { p.qty += u; p.cost += parseFloat(t[stream.costBasisCol] || 0); }
+        else if (p.qty > 0) {
+          const sold = Math.min(u, p.qty);
+          p.cost -= p.cost / p.qty * sold; p.qty -= sold;
+          if (p.qty < 1e-6) { p.qty = 0; p.cost = 0; }
         }
       });
-      assets
-        .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
+      assets                                                       // held units decide, not is_active
         .forEach(a => {
           const aid = String(a.id);
-          const tbu = buyUnits[aid] || 0, tbc = buyCostINR[aid] || 0, nq = netQty[aid] || 0;
-          if (tbu <= 0 || nq <= 0) return;
-          const invested = nq * (tbc / tbu);                          // remaining units × avg INR cost
+          const nq = (pos[aid] || {}).qty || 0;
+          if (nq <= 1e-6) return;
+          const invested = pos[aid].cost;                             // remaining units × running-average INR cost
           const price = parseFloat(a[stream.currentPriceCol] || 0);   // INR/share (GOOGLEFINANCE)
-          const currentValue = price > 0 ? nq * price : 0;
+          const currentValue = price > 0 ? nq * price : invested;     // no live price → at cost, flagged
           rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id,
                       subcategory: SUBCAT_NAMES[a.subcategory_id] || '', account: a.account_id,
-                      name: a[stream.assetNameCol], invested, currentValue });
+                      name: a[stream.assetNameCol] + (price > 0 ? '' : ' (no live price — at cost)'), invested, currentValue });
         });
 
       // ── Derived US cash, PER ACCOUNT (wires − buys + sells − repats + income) ──
@@ -360,11 +371,15 @@ async function buildHoldingsRows() {
       allWires.forEach(w => cashAccts.add(acctOf(w)));
       allRepats.forEach(r => cashAccts.add(acctOf(r)));
       allIncome.forEach(i => cashAccts.add(acctOf(i)));
-      assets.forEach(a => cashAccts.add(String(a.account_id || '')));   // a txn's account = its asset's
+      // Cash is the account's real USD balance: it counts EVERY buy / sell of the account, also of
+      // hidden assets (a hide must not make spent dollars look uninvested again).
+      const acctAssets = (res[stream.assetTable]?.rows || []).filter(a => ACCOUNTS.matches(a.account_id));
+      const acctTxns = res[stream.txnTable]?.rows || [];
+      acctAssets.forEach(a => cashAccts.add(String(a.account_id || '')));   // a txn's account = its asset's
       cashAccts.forEach(acctId => {
-        const acctAssetIds = new Set(assets.filter(a => String(a.account_id || '') === acctId).map(a => String(a.id)));
+        const acctAssetIds = new Set(acctAssets.filter(a => String(a.account_id || '') === acctId).map(a => String(a.id)));
         const cashUsd = usEquityCashUsd(
-          usTxns.filter(t => acctAssetIds.has(String(t[stream.assetIdCol]))),
+          acctTxns.filter(t => acctAssetIds.has(String(t[stream.assetIdCol]))),
           allWires.filter(x => acctOf(x) === acctId),
           allRepats.filter(x => acctOf(x) === acctId),
           allIncome.filter(x => acctOf(x) === acctId));
@@ -379,65 +394,55 @@ async function buildHoldingsRows() {
 
     const txns = res[stream.txnTable]?.rows || [];
 
-    // Per-asset: track buy units + buy amount separately for avg cost method
-    const buyUnitsByAsset = {};
-    const buyAmtByAsset   = {};
-    const netQtyByAsset   = {};
-
-    txns.forEach(t => {
+    // Per asset, in date order (same day: buy first): a sell takes out the AVERAGE cost of what is
+    // held — the same running-average method as Insights and the snapshots.
+    const pos = {};
+    const isBuy = t => t.txn_type === 'Buy';
+    [...txns].sort((x, y) => (new Date(x.txn_date) - new Date(y.txn_date)) || (isBuy(y) - isBuy(x))).forEach(t => {
       const aid = String(t[stream.assetIdCol]);
+      const p = pos[aid] = pos[aid] || { qty: 0, cost: 0 };
       const qty = parseFloat(t.units || t.quantity || 0);
       let amt = 0;
       if (stream.amountCol) {
-        const u = parseFloat(t.units || t.quantity || 0);
         const n = parseFloat(t.nav || t.price_per_unit || 0);
-        amt = (u > 0 && n > 0) ? u * n : parseFloat(t[stream.amountCol] || 0);
+        amt = (qty > 0 && n > 0) ? qty * n : parseFloat(t[stream.amountCol] || 0);
       } else {
         amt = parseFloat(t.quantity || 0) * parseFloat(t.price_per_unit || 0)
             + parseFloat(t.registration_cost || 0)
             + parseFloat(t.other_expenses    || 0);
       }
-      if (t.txn_type === 'Buy') {
-        buyUnitsByAsset[aid] = (buyUnitsByAsset[aid] || 0) + qty;
-        buyAmtByAsset[aid]   = (buyAmtByAsset[aid]   || 0) + amt;
-        netQtyByAsset[aid]   = (netQtyByAsset[aid]   || 0) + qty;
-      } else {
-        netQtyByAsset[aid] = (netQtyByAsset[aid] || 0) - qty;
+      if (isBuy(t)) { p.qty += qty; p.cost += amt; }
+      else if (p.qty > 0) {
+        const sold = Math.min(qty, p.qty);
+        p.cost -= p.cost / p.qty * sold;
+        p.qty  -= sold;
+        if (p.qty < 1e-6) { p.qty = 0; p.cost = 0; }                     // fully sold — no ghost row
       }
     });
 
-    // Only active assets; skip fully-exited (netQty ≤ 0)
+    // Every asset still held (units decide — not is_active, which Insights / snapshots ignore too)
     assets
-      .filter(a => String(a.is_active).toUpperCase() === 'TRUE')
       .forEach(a => {
-        const aid           = String(a.id);
-        const totalBuyUnits = buyUnitsByAsset[aid] || 0;
-        const totalBuyAmt   = buyAmtByAsset[aid]   || 0;
-        const netQty        = netQtyByAsset[aid]    || 0;
-
-        if (totalBuyUnits <= 0 || netQty <= 0) return;
-
-        // Invested = remaining units × average buy cost
-        const avgCost = totalBuyAmt / totalBuyUnits;
-        const invested = netQty * avgCost;
+        const aid      = String(a.id);
+        const netQty   = (pos[aid] || {}).qty || 0;
+        const invested = (pos[aid] || {}).cost || 0;
+        if (netQty <= 1e-6) return;
 
         const resolvedSubcat = subcatName || SUBCAT_NAMES[a.subcategory_id] || '';
 
-        let currentValue = 0;
+        let price = 0;
         if (stream.currentPriceCol) {
-          const price = parseFloat(a[stream.currentPriceCol] || 0);
-          if (price > 0) currentValue = netQty * price;
+          price = parseFloat(a[stream.currentPriceCol] || 0);
         } else if (stream.manualPriceType) {
-          let price = 0;
-          if (a.price_fetch_way === 'formula') {
-            price = parseFloat(a['current_price'] || 0);
-          } else {
-            price = manualPricesMap[`${stream.manualPriceType}|${aid}`] || 0;
-          }
-          if (price > 0) currentValue = netQty * price;
+          price = a.price_fetch_way === 'formula' ? parseFloat(a['current_price'] || 0)
+                                                  : manualPricesMap[`${stream.manualPriceType}|${aid}`] || 0;
         }
+        // No live price (GOOGLEFINANCE #N/A → 0, no manual price yet) → at cost, flagged —
+        // never a silent ₹0 that reads as a total loss.
+        const unpriced     = !(price > 0);
+        const currentValue = unpriced ? invested : netQty * price;
 
-        rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol], account: a.account_id, invested, currentValue });
+        rows.push({ catId: cat.id, catName: cat.name, bucketId: cat.bucket_id, subcategory: resolvedSubcat, name: a[stream.assetNameCol] + (unpriced ? ' (no live price — at cost)' : ''), account: a.account_id, invested, currentValue });
       });
   }
 
@@ -451,7 +456,7 @@ async function buildHoldingsRows() {
     String(a.account || '').localeCompare(String(b.account || ''))
   );
 
-  LSC.set('holdings', rows);
+  if (!partial) LSC.set('holdings', rows);                             // never cache a partial view
   return rows;
 }
 

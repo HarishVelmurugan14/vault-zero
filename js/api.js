@@ -21,11 +21,12 @@ const API = {
     if (!res.ok) throw new Error(`GET ${sheet} failed: ${res.status}`);
     const data = await res.json();
     if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
+    if (data.error) throw new Error(sheet + ': ' + data.error);   // a server error is never an empty table
     return data;
   },
 
-  async insert(sheet, row) {
-    return this._post({ action: 'insert', sheet, row });
+  async insert(sheet, row, requestId) {
+    return this._post({ action: 'insert', sheet, row, request_id: requestId || undefined });
   },
 
   async update(sheet, id, row) {
@@ -41,15 +42,26 @@ const API = {
   },
 
   async _post(payload) {
-    const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
-      method: 'POST',
-      body: JSON.stringify({ ...payload, token: AUTH.get() }),
-    });
-    if (!res.ok) throw new Error(`POST failed: ${res.status}`);
-    const data = await res.json();
-    if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
-    if (data.error) throw new Error(data.error);
-    return data;
+    try {
+      const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ ...payload, token: AUTH.get() }),
+      });
+      if (!res.ok) throw new Error(`POST failed: ${res.status}`);
+      const data = await res.json();
+      if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
+      if (data.error) throw new Error(data.error);
+      return data;
+    } finally {
+      // Any write can change Holdings, Insights and the snapshot chart / panel — drop them all here,
+      // even when the request failed (it may have saved part of its work, e.g. a Take snapshot
+      // that logged your prices before a download failed).
+      if (typeof _insightsCache !== 'undefined') _insightsCache = null;
+      if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
+      try { LSC.clear('insights', 'holdings'); } catch (_) {}
+      if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
+      if (typeof _historyFull !== 'undefined') _historyFull = {};
+    }
   },
 
   // Fetch all assets for a given stream (for name dropdown)
@@ -77,20 +89,32 @@ const API = {
   },
 
   // Insert a new transaction
-  async createTransaction(stream, txnData) {
-    return this.insert(stream.txnTable, txnData);
+  async createTransaction(stream, txnData, requestId) {
+    return this.insert(stream.txnTable, txnData, requestId);
   },
 
   // Update manual price entry
-  async updateManualPrice(assetType, assetId, pricePerUnit, priceDate) {
+  async updateManualPrice(assetType, assetId, pricePerUnit, priceDate, requestId) {
     return this.insert('manual_prices', {
       asset_type: assetType,
       asset_id: assetId,
       price_per_unit: pricePerUnit,
       price_date: priceDate,
-    });
+    }, requestId);
   },
 };
+
+// Duplicate-save protection: one id per form submission, sent with the insert. Pressing Save again
+// after an error resends the SAME id for the same values, so a save whose reply was lost is not
+// written twice (the server remembers ids for 6 h). Changed values or a successful save → new id.
+function requestIdFor(el, row) {
+  if (!el.dataset.reqBase) el.dataset.reqBase = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  const json = JSON.stringify(row);
+  let h = 5381;
+  for (let i = 0; i < json.length; i++) h = ((h << 5) + h + json.charCodeAt(i)) | 0;
+  return el.dataset.reqBase + ':' + (h >>> 0).toString(36);
+}
+function requestDone(el) { delete el.dataset.reqBase; }
 
 // Simple in-memory cache for asset dropdowns (cleared on new asset)
 const CACHE = {
@@ -159,6 +183,7 @@ const ACCOUNTS = {
   _clearCaches() {
     if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
     if (typeof _insightsCache  !== 'undefined') _insightsCache  = null;
+    if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
     try { CACHE._store = {}; } catch (_) {}
     try { LSC.clear('insights', 'holdings'); } catch (_) {}
   },
@@ -229,30 +254,55 @@ const HIDDEN = {
   _clearCaches() {
     if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
     if (typeof _insightsCache  !== 'undefined') _insightsCache  = null;
+    if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
     try { LSC.clear('insights', 'holdings'); } catch (_) {}
   },
 };
 
 // ── Batch read (single request for Insights / Holdings) ────────────────────────
-API.batchGet = async function(sheets, limit = 5000) {
-  const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), limit, token: AUTH.get() });
+API.batchGet = async function(sheets) {
+  const params = new URLSearchParams({ action: 'batchGet', sheets: sheets.join(','), token: AUTH.get() });   // every row
   const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?${params}`);
   if (!res.ok) throw new Error('batchGet failed: ' + res.status);
+  const data = await res.json();
+  if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
+  if (data.error) throw new Error(data.error);
+  Object.entries(data).forEach(([t, r]) => {           // never compute from a partial table
+    if (r && Array.isArray(r.rows) && r.total > r.rows.length) throw new Error(t + ': only ' + r.rows.length + ' of ' + r.total + ' rows loaded');
+  });
+  return data;
+};
+
+// ── Monthly snapshots — read endpoints (gas/snapshot.gs) ───────────────
+// action: 'snapshotData' ({ account }), 'snapshotLines' ({ date, account }) or 'snapshotForm' (no params).
+API.snapshot = async function(action, params = {}) {
+  const q = new URLSearchParams(Object.assign({ action, token: AUTH.get() }, params));
+  const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?${q}`);
+  if (!res.ok) throw new Error(action + ' failed: ' + res.status);
   const data = await res.json();
   if (data.error === 'unauthorized') { showTokenModal(); throw new Error('unauthorized'); }
   if (data.error) throw new Error(data.error);
   return data;
 };
 
+// "Take snapshot" (Insights): saves the manual prices and builds this month's snapshot (8th–14th).
+API.takeSnapshot = function(prices) {
+  return this._post({ action: 'takeSnapshot', prices });
+};
+
 // ── localStorage cache with 30-minute TTL ──────────────────────────────────────
 // Build a map of "asset_type|asset_id" → latest price from manual_prices rows
 function buildManualPricesMap(rows) {
   const latest = {};
+  const today = localYMD(new Date());
   rows.forEach(r => {
+    if (localYMD(r.price_date) > today) return;          // a mistyped future date must not override every later price
     const key = `${r.asset_type}|${String(r.asset_id)}`;
-    const d = new Date(r.price_date);
-    if (!latest[key] || d > new Date(latest[key].date)) {
-      latest[key] = { price: parseFloat(r.price_per_unit), date: r.price_date };
+    const d = new Date(r.price_date), id = Number(r.id) || 0;
+    const cur = latest[key], cd = cur && new Date(cur.date);
+    // Same date twice → the later entry (higher id) is the correction — same rule as gas/snapshot.gs.
+    if (!cur || d > cd || (d.getTime() === cd.getTime() && id > cur.id)) {
+      latest[key] = { price: parseFloat(r.price_per_unit), date: r.price_date, id };
     }
   });
   const result = {};
@@ -262,7 +312,7 @@ function buildManualPricesMap(rows) {
 
 const LSC = {
   TTL: 30 * 60 * 1000,
-  PREFIX: 'vz_v2_',   // bump when cached shapes/ids change (v2: range-scheme category ids)
+  PREFIX: 'vz_v3_',   // bump when cached shapes/ids change (v2: range-scheme ids; v3: dates as calendar days)
   get(key) {
     try {
       const raw = localStorage.getItem(this.PREFIX + key);

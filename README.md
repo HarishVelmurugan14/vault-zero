@@ -24,6 +24,7 @@ gas/
   schema.gs         relational constraints (PK / UNIQUE / FK / CHECK) + checkConstraints()
   import_from_coin.gs       Zerodha Coin import      ┐ live in the separate TRADEBOOK Apps Script
   import_from_tradebook.gs  Zerodha tradebook import ┘ project; write to VaultZero via the web app
+  snapshot.gs               frozen monthly snapshots (setupSnapshots / backfillSnapshots; monthly via the app's "Take snapshot")
   cleanup_vaultzero.gs      one-off Nov 2026 data cleanup / migration (dry run first)
   stylize_sheets.gs         cosmetic tab colours for the spreadsheet
 ```

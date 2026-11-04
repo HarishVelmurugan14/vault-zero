@@ -33,14 +33,20 @@ function doGet(e) {
   try {
     if (!checkToken(e.parameter.token)) return respond({ error: 'unauthorized' });
 
-    // Batch read: ?action=batchGet&sheets=table1,table2,...&limit=5000
+    // Batch read: ?action=batchGet&sheets=table1,table2,... — every row (no cap: a cap would
+    // silently drop the OLDEST transactions and corrupt units, cost and XIRR).
     if (e.parameter.action === 'batchGet') {
       const sheets = e.parameter.sheets.split(',');
-      const limit  = parseInt(e.parameter.limit) || 5000;
+      const limit  = parseInt(e.parameter.limit) || Infinity;
       const result = {};
       sheets.forEach(s => { result[s] = readSheet(s, limit, 0, {}); });
       return respond(result);
     }
+
+    // Monthly snapshots (gas/snapshot.gs): chart data, one month's lines, and the "Take snapshot" form.
+    if (e.parameter.action === 'snapshotData')   return respond(vzsData_(e.parameter.account || 'all'));
+    if (e.parameter.action === 'snapshotLines')  return respond(vzsLinesFor_(e.parameter.date, e.parameter.account || 'all'));
+    if (e.parameter.action === 'snapshotForm')   return respond(vzsForm_());
 
     const sheet = e.parameter.sheet;
     const limit = parseInt(e.parameter.limit) || 10;
@@ -63,12 +69,16 @@ function doPost(e) {
 
     if (!checkToken(payload.token)) return respond({ error: 'unauthorized' });
 
+    // Monthly snapshot, taken from the app (gas/snapshot.gs) — the only way snapshots are written.
+    if (action === 'takeSnapshot') return respond(vzsTake_(payload.prices || []));
+
     if (!sheet) return respond({ error: 'sheet required' }, 400);
     // Only VaultZero tables (gas/schema.gs) are writable — StockIQ / staging tabs are not.
     if (!VZ_SCHEMA[sheet]) return respond({ error: 'writes are not allowed to "' + sheet + '"' }, 400);
+    if (VZ_SCHEMA[sheet].serverOnly) return respond({ error: '"' + sheet + '" is written only by the snapshot code (Take snapshot / backfillSnapshots)' }, 400);
 
     if (action === 'insert') {
-      const newId = appendRow(sheet, row);
+      const newId = appendRow(sheet, row, payload.request_id);
       return respond({ id: newId });
     }
 
@@ -107,10 +117,13 @@ function readSheet(sheetName, limit, offset, filters) {
   const data = sheet.getDataRange().getValues();
   if (data.length <= 1) return { rows: [], total: 0 };
 
+  // Date cells go out as the calendar day in the sheet's timezone ('yyyy-MM-dd'), not as a UTC
+  // instant — '2026-10-31T18:30:00Z' would make a 1 Nov SIP look like October to any client.
+  const tz = ss.getSpreadsheetTimeZone();
   const headers = data[0];
   let rows = data.slice(1).map(r => {
     const obj = {};
-    headers.forEach((h, i) => obj[h] = r[i]);
+    headers.forEach((h, i) => { obj[h] = r[i] instanceof Date ? Utilities.formatDate(r[i], tz, 'yyyy-MM-dd') : r[i]; });
     return obj;
   });
 
@@ -138,12 +151,19 @@ function withWriteLock_(fn) {
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
-function appendRow(sheetName, row) {
+// requestId (optional, from the app): the same form submission sent twice — e.g. Save pressed
+// again after a reply was lost on a weak network — is written once; the retry gets the first id.
+function appendRow(sheetName, row, requestId) {
   const ss = getSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) throw new Error('Sheet not found: ' + sheetName);
 
   return withWriteLock_(() => {
+    const seenKey = requestId ? 'vzreq:' + sheetName + ':' + String(requestId).slice(0, 200) : '';
+    const cache = seenKey ? CacheService.getScriptCache() : null;
+    const seen = cache ? cache.get(seenKey) : null;
+    if (seen) return Number(seen);                       // already written by the first attempt
+
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
 
     // PRIMARY KEY: next value of the table's sequence (never reuses a deleted id), assigned
@@ -170,6 +190,7 @@ function appendRow(sheetName, row) {
     const newRowNum = sheet.getLastRow();
     writePriceFormula(sheet, sheetName, headers, newRowNum);
     SpreadsheetApp.flush();   // commit before the next waiting insert reads MAX(id)
+    if (cache) cache.put(seenKey, String(newId), 21600);   // remembered for 6 hours
     return newId;
   });
 }
@@ -242,6 +263,7 @@ function upsertBySourceRef(sheetName, items) {
     const seen = {};
     const inserts = [];
     let updated = 0;
+    const ids = vzIdBlock_(sheetName, maxId);           // one sequence read/write for the whole batch
     (items || []).forEach(it => {
       const f = it.fields || {};
       const ref = vzKey_(f.source_ref);
@@ -257,8 +279,7 @@ function upsertBySourceRef(sheetName, items) {
         data[rowIdx] = merged;
         updated++;
       } else {
-        maxId = vzNextId_(sheetName, maxId);
-        const all = Object.assign({}, it.onInsert || {}, f, { id: maxId, created_at: new Date().toISOString() });
+        const all = Object.assign({}, it.onInsert || {}, f, { id: ids.next(), created_at: new Date().toISOString() });
         const arr = headers.map(h => (all[h] !== undefined ? all[h] : ''));
         const obj = vzRowObj_(headers, arr);
         vzAssertRow_(ctx, sheetName, obj, null);
@@ -269,10 +290,14 @@ function upsertBySourceRef(sheetName, items) {
 
     // One block write for updates (transaction tabs hold no formulas), one for inserts.
     if (updated) sheet.getRange(2, 1, data.length - 1, headers.length).setValues(vzCoerceDates_(sheetName, headers, data.slice(1), tz));
-    if (inserts.length) sheet.getRange(sheet.getLastRow() + 1, 1, inserts.length, headers.length).setValues(vzCoerceDates_(sheetName, headers, inserts, tz));
+    if (inserts.length) {
+      vzEnsureRows_(sheet, sheet.getLastRow() + inserts.length);
+      sheet.getRange(sheet.getLastRow() + 1, 1, inserts.length, headers.length).setValues(vzCoerceDates_(sheetName, headers, inserts, tz));
+    }
     const dateCol = headers.indexOf('txn_date');
     if (dateCol >= 0 && sheet.getLastRow() > 1) sheet.getRange(2, dateCol + 1, sheet.getLastRow() - 1, 1).setNumberFormat('yyyy-mm-dd');
     SpreadsheetApp.flush();
+    if (inserts.length) ids.commit();
     return { inserted: inserts.length, updated };
   });
 }
@@ -526,6 +551,7 @@ function setupAllSheets() {
     manual_prices: ['id', 'asset_type', 'asset_id', 'price_per_unit', 'price_date', 'created_at'],
 
     epf_assets:  ['id', 'account_id', 'account_name', 'uan', 'current_balance', 'is_active', 'created_at'],
+    epf_transactions: ['id', 'account_id', 'txn_type', 'txn_date', 'amount', 'notes', 'created_at'],
     bank_assets: ['id', 'account_id', 'account_name', 'bank_name', 'account_type', 'current_balance', 'is_active', 'created_at'],
 
     hidden_items: ['id', 'account_id', 'kind', 'ref', 'name', 'created_at'],

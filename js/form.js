@@ -78,7 +78,8 @@ function renderAssetDropdown(assets, stream, selectedId = '') {
     .forEach(a => {
       const o = document.createElement('option');
       o.value = a.id;
-      o.textContent = a[stream.assetNameCol];
+      const owner = (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.list.length > 1) ? ACCOUNTS.name(a.account_id) : '';
+      o.textContent = a[stream.assetNameCol] + (owner ? ' · ' + owner : '');      // same fund in two family accounts
       o.dataset.asset = JSON.stringify(a);
       if (String(a.id) === String(selectedId)) o.selected = true;
       select.appendChild(o);
@@ -232,6 +233,7 @@ function renderAssetForm(container, stream, category, subcategory) {
     }
   });
 
+  const owner = accountPicker(form);                    // All view with family accounts → pick whose
   const actions = document.createElement('div');
   actions.className = 'form-actions';
 
@@ -254,13 +256,15 @@ function renderAssetForm(container, stream, category, subcategory) {
     e.preventDefault();
     const data = collectFormData(form, stream.assetFields);
     if (subcategory) data.subcategory_id = subcategory.id;
+    if (!owner.value()) { showToast('Pick whose account this is', 'error'); return; }
+    data.account_id = owner.value();
 
     try {
       save.disabled = true;
       save.textContent = 'Saving...';
       const result = await API.createAsset(stream, data);
       CACHE.clear(stream.assetTable);
-      _insightsCache = null;
+      _insightsCache = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
       overlay.remove();
@@ -343,7 +347,10 @@ function renderTxnRow(txn, stream, editMode = false) {
 
     stream.txnFields.forEach(f => {
       if (f.readonly) return;
-      const group = renderField(f, txn[f.id] || '');
+      if (stream.usEquity && f.id !== 'notes') return;   // US: cost basis + wire come from the log form — delete & re-log to change
+      // A date comes back as an ISO timestamp; <input type="date"> needs yyyy-mm-dd (local day) or it blanks.
+      const raw = txn[f.id] ?? '';                       // keep a stored 0 (bonus shares) — not blank
+      const group = renderField(f, f.type === 'date' && raw ? localYMD(raw) : raw);
       group.classList.add('inline');
       const input = group.querySelector('input, select');
       if (input) {
@@ -364,8 +371,9 @@ function renderTxnRow(txn, stream, editMode = false) {
     row.appendChild(delBtn);
   } else {
     const badge = document.createElement('span');
-    badge.className = `txn-badge ${txn.txn_type === 'Buy' ? 'badge-buy' : 'badge-sell'}`;
-    badge.textContent = txn.txn_type === 'Buy' ? '↑' : '↓';
+    const out = /^(sell|withdrawal)$/i.test(String(txn.txn_type));   // money out ↓; buys, contributions, interest ↑
+    badge.className = `txn-badge ${out ? 'badge-sell' : 'badge-buy'}`;
+    badge.textContent = out ? '↓' : '↑';
     badge.title = txn.txn_type;
 
     const info = document.createElement('div');
@@ -454,13 +462,15 @@ async function renderManualPricePanel(container, stream, assetId) {
   let latestPrice = '', latestDate = '';
   try {
     const data = await API.get('manual_prices', {
-      limit: 100,
+      limit: 1000000,
       filters: { asset_type: stream.manualPriceType, asset_id: assetId },
     });
-    if (data.rows?.length) {
-      const sorted = [...data.rows].sort((a, b) => new Date(b.price_date) - new Date(a.price_date));
+    const today = localYMD(new Date());
+    const rows = (data.rows || []).filter(r => localYMD(r.price_date) <= today);   // a future-dated row is ignored everywhere
+    if (rows.length) {
+      const sorted = [...rows].sort((a, b) => (new Date(b.price_date) - new Date(a.price_date)) || ((Number(b.id) || 0) - (Number(a.id) || 0)));
       latestPrice = sorted[0].price_per_unit;
-      latestDate  = sorted[0].price_date?.substring(0, 10) || '';
+      latestDate  = localYMD(sorted[0].price_date);
     }
   } catch (_) {}
 
@@ -500,12 +510,14 @@ async function renderManualPricePanel(container, stream, assetId) {
 
     if (!price || price <= 0) { showToast('Enter a valid price', 'error'); return; }
     if (!date)                 { showToast('Enter a date', 'error'); return; }
+    if (date > localYMD(new Date())) { showToast('The price date is in the future', 'error'); return; }
 
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
     try {
-      await API.updateManualPrice(stream.manualPriceType, assetId, price, date);
-      _insightsCache   = null;
+      await API.updateManualPrice(stream.manualPriceType, assetId, price, date, requestIdFor(panel, { assetId, price, date }));
+      requestDone(panel);
+      _insightsCache   = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
       status.textContent = `✓ Saved ₹${formatINR(price)}`;
@@ -516,6 +528,74 @@ async function renderManualPricePanel(container, stream, assetId) {
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Update Price';
+    }
+  });
+}
+
+// ── EPF entry form: Account (default Self) · Type (default Contribution) · Date · Amount · Notes ──
+// Entries belong to the account; its one EPF row is created on the first entry if missing.
+async function renderEpfEntryForm(container, stream) {
+  const accounts = (ACCOUNTS.list || []).filter(a => String(a.is_active).toUpperCase() !== 'FALSE');
+  const self = accounts.find(a => String(a.name).trim().toLowerCase() === 'self') || accounts[0] || {};
+  const initial = ACCOUNTS.isAll() ? String(self.id || '') : String(ACCOUNTS.current);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'form-fields';
+  const acctGroup = renderField({ id: 'account_id', label: 'Account', type: 'select', options: [], required: true });
+  const acctSel = acctGroup.querySelector('select');
+  acctSel.innerHTML = '';
+  accounts.forEach(a => {
+    const o = document.createElement('option');
+    o.value = String(a.id); o.textContent = a.name;
+    if (String(a.id) === initial) o.selected = true;
+    acctSel.appendChild(o);
+  });
+  wrap.appendChild(acctGroup);
+  stream.txnFields.forEach(f => wrap.appendChild(renderField(f, f.id === 'txn_type' ? 'Contribution' : f.type === 'date' ? todayStr() : '')));
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-primary';
+  btn.textContent = 'Save Entry';
+  wrap.appendChild(btn);
+  container.appendChild(wrap);
+
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    const values = {};
+    stream.txnFields.forEach(f => { const el = wrap.querySelector(`#field-${f.id}`); if (el) values[f.id] = el.value; });
+    const errors = validateTxn(stream.txnFields, values);
+    if (!acctSel.value) errors.unshift('Pick an account');
+    if (errors.length) { showToast(errors[0], 'error'); return; }
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const accountId = acctSel.value;
+      // Fresh, unfiltered lookup (not the cached active-only list): the account's one EPF row.
+      const epf = ((await API.get(stream.assetTable, { limit: 5, filters: { account_id: accountId } })).rows || [])[0];
+      if (epf && String(epf.is_active).toUpperCase() === 'FALSE') {
+        showToast(`${epf[stream.assetNameCol] || 'This EPF'} is marked inactive — set is_active TRUE in the epf_assets tab first`, 'error');
+        return;
+      }
+      if (!epf) {                                                        // first EPF for this account
+        await API.insert(stream.assetTable, { account_id: accountId, account_name: 'EPF · ' + (ACCOUNTS.name(accountId) || accountId), is_active: true });
+        CACHE.clear(stream.assetTable);
+      } else {
+        const typed = parseFloat(epf[stream.currentBalanceCol] || 0) || 0;
+        const have = typed > 0 ? await API.get(stream.txnTable, { limit: 1, filters: { account_id: accountId } }) : { total: 1 };
+        if (!(have.total > 0) && !confirm(`This is the first passbook entry for ${epf[stream.assetNameCol] || 'this EPF'}. ` +
+            `From now on its balance is calculated from entries — the typed ₹${formatINR(typed)} will no longer count. ` +
+            `Add your full passbook history so the balance stays right. Continue?`)) return;
+      }
+      const entry = Object.assign({}, values, { account_id: accountId });
+      await API.createTransaction(stream, entry, requestIdFor(wrap, entry));
+      requestDone(wrap);
+      showToast('EPF entry saved!');
+      ['amount', 'notes'].forEach(id => { const el = wrap.querySelector('#field-' + id); if (el) el.value = ''; });
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save Entry';
     }
   });
 }
@@ -580,13 +660,13 @@ async function renderBalanceUpdateForm(container, stream) {
       const status  = panel.querySelector('.manual-price-status');
       const saveBtn = panel.querySelector('.balance-save');
       const val = parseFloat(input.value);
-      if (!val || val < 0) { showToast('Enter a valid balance', 'error'); return; }
+      if (input.value.trim() === '' || isNaN(val) || val < 0) { showToast('Enter a valid balance (0 or more)', 'error'); return; }
 
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
       try {
         await API.update(stream.assetTable, assetId, { [stream.currentBalanceCol]: val });
-        _insightsCache   = null;
+        _insightsCache   = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
         _holdingsAllRows = null;
         LSC.clear('insights', 'holdings');
         status.textContent = `✓ Updated to ₹${formatINR(val)}`;
@@ -617,6 +697,7 @@ function renderNewAssetForm(container, stream) {
 
   const form = document.createElement('form');
   stream.assetFields.forEach(f => form.appendChild(renderField(f)));
+  const owner = accountPicker(form);                    // All view with family accounts → pick whose
 
   const actions = document.createElement('div');
   actions.className = 'form-actions';
@@ -640,12 +721,14 @@ function renderNewAssetForm(container, stream) {
     e.preventDefault();
     const data = collectFormData(form, stream.assetFields);
     data.is_active = true;
+    if (!owner.value()) { showToast('Pick whose account this is', 'error'); return; }
+    data.account_id = owner.value();
     try {
       save.disabled = true;
       save.textContent = 'Saving...';
       await API.createAsset(stream, data);
       CACHE.clear(stream.assetTable);
-      _insightsCache   = null;
+      _insightsCache   = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
       overlay.remove();
@@ -669,7 +752,7 @@ function renderNewAssetForm(container, stream) {
 // ── US Equity (IBKR) log form ─────────────────────────────────────────────────
 
 async function fetchWires(stream) {
-  try { const r = await API.get(stream.wireTable, { limit: 500 }); return r.rows || []; }
+  try { const r = await API.get(stream.wireTable, { limit: 1000000 }); return r.rows || []; }
   catch (_) { return []; }
 }
 
@@ -761,6 +844,7 @@ async function submitUsTxn(stream, assetId, body, btn) {
   const notes   = body.querySelector('#field-us-notes').value;
 
   if (!txnDate)            { showToast('Select a date', 'error'); return; }
+  if (txnDate > localYMD(new Date(Date.now() + 86400000))) { showToast('The date is in the future', 'error'); return; }
   if (!units || units <= 0) { showToast('Enter valid units', 'error'); return; }
   if (!price || price <= 0) { showToast('Enter a valid price', 'error'); return; }
   const usdAmount = Math.round(units * price * 100) / 100;
@@ -778,9 +862,10 @@ async function submitUsTxn(stream, assetId, body, btn) {
   btn.disabled = true; btn.textContent = 'Saving...';
   try {
     if (txnType === 'BUY') {
-      const wire = latestWireOnOrBefore(await fetchWires(stream), txnDate);
+      const asset = (await fetchAssetsCached(stream)).find(a => String(a.id) === String(assetId)) || {};
+      const wire = latestWireOnOrBefore((await fetchWires(stream)).filter(w => String(w.account_id) === String(asset.account_id)), txnDate);
       if (!wire) {
-        showToast('No wire on/before this date — add one via 💵 Wires first.', 'error');
+        showToast(`No wire on/before this date for ${ACCOUNTS.name(asset.account_id) || 'this account'} — add one via 💵 Wires first.`, 'error');
         btn.disabled = false; btn.textContent = 'Save Transaction'; return;
       }
       row.wire_id = wire.id;
@@ -794,8 +879,9 @@ async function submitUsTxn(stream, assetId, body, btn) {
       const avgUsd = bu > 0 ? ba / bu : 0;
       row.realized_pnl_usd = Math.round((price - avgUsd) * units * 100) / 100;
     }
-    await API.insert(stream.txnTable, row);
-    _insightsCache = null; _holdingsAllRows = null; LSC.clear('insights', 'holdings');
+    await API.insert(stream.txnTable, row, requestIdFor(body, row));
+    requestDone(body);
+    _insightsCache = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots(); _holdingsAllRows = null; LSC.clear('insights', 'holdings');
     showToast('Transaction saved!');
     ['#field-us-units', '#field-us-price', '#field-us-usd', '#field-us-notes'].forEach(s => { body.querySelector(s).value = ''; });
   } catch (err) {
@@ -806,6 +892,24 @@ async function submitUsTxn(stream, assetId, body, btn) {
 }
 
 // ── Wires overlay (INR → USD) ─────────────────────────────────────────────────
+
+// ' · Thulasi' after a row in the All view with several accounts (else nothing).
+function ownerTag(accountId) {
+  const n = ACCOUNTS.isAll() && ACCOUNTS.list.length > 1 ? ACCOUNTS.name(accountId) : '';
+  return n ? ` <small>· ${String(n).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))}</small>` : '';
+}
+
+// Whose wire / repatriation / income this is. Viewing one account → that account; in the All view
+// with several accounts → you must pick (it would otherwise be filed under the first account).
+function accountPicker(box) {
+  const many = ACCOUNTS.isAll() && ACCOUNTS.list.length > 1;
+  if (!many) return { value: () => ACCOUNTS.writeAccountId() };
+  const g = renderField({ id: 'owner_account', label: 'Account', type: 'select', options: [], required: true });
+  const sel = g.querySelector('select');
+  ACCOUNTS.list.forEach(a => { const o = document.createElement('option'); o.value = String(a.id); o.textContent = a.name; sel.appendChild(o); });
+  box.appendChild(g);
+  return { value: () => sel.value };
+}
 
 async function renderWiresOverlay(stream) {
   const overlay = document.createElement('div'); overlay.className = 'asset-form-overlay';
@@ -820,6 +924,7 @@ async function renderWiresOverlay(stream) {
   const listWrap = document.createElement('div'); listWrap.className = 'us-ledger-list'; box.appendChild(listWrap);
 
   const addTitle = document.createElement('div'); addTitle.className = 'goal-manage-add-title'; addTitle.textContent = 'Add Wire'; box.appendChild(addTitle);
+  const owner = accountPicker(box);
   stream.wireFields.forEach(f => box.appendChild(renderField(f, f.id === 'wire_date' ? todayStr() : '')));
 
   const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn-primary btn-sm'; addBtn.textContent = '+ Add Wire'; box.appendChild(addBtn);
@@ -831,13 +936,13 @@ async function renderWiresOverlay(stream) {
   function val(id) { return box.querySelector('#field-' + id).value; }
 
   async function loadWires() {
-    const wires = await fetchWires(stream);
+    const wires = (await fetchWires(stream)).filter(w => ACCOUNTS.matches(w.account_id));
     listWrap.innerHTML = '';
     if (!wires.length) { listWrap.innerHTML = '<div class="goal-manage-empty">No wires yet.</div>'; return; }
     wires.sort((a, b) => new Date(b.wire_date) - new Date(a.wire_date));
     wires.forEach(w => {
       const row = document.createElement('div'); row.className = 'us-ledger-row';
-      row.innerHTML = `<span>${w.wire_date}</span>
+      row.innerHTML = `<span>${formatDate(w.wire_date)}${ownerTag(w.account_id)}</span>
         <span>$${parseFloat(w.usd_received || 0).toLocaleString('en-US')}</span>
         <span>@ ₹${parseFloat(w.effective_rate || 0).toFixed(2)}${w.actual_rate ? ` <small>(mkt ₹${parseFloat(w.actual_rate).toFixed(2)})</small>` : ''}</span>
         <span class="us-ledger-status">${w.status || ''}</span>`;
@@ -848,6 +953,8 @@ async function renderWiresOverlay(stream) {
   addBtn.addEventListener('click', async () => {
     const usdReceived = num('usd_received');
     if (!val('wire_date'))         { showToast('Enter wire date', 'error'); return; }
+    if (!owner.value()) { showToast('Pick whose account this is', 'error'); return; }
+    if (val('wire_date') > localYMD(new Date(Date.now() + 86400000))) { showToast('The wire date is in the future', 'error'); return; }
     if (num('inr_principal') <= 0) { showToast('Enter INR principal', 'error'); return; }
     if (usdReceived <= 0)          { showToast('Enter USD received', 'error'); return; }
 
@@ -858,8 +965,8 @@ async function renderWiresOverlay(stream) {
 
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
-      await API.insert(stream.wireTable, {
-        account_id: ACCOUNTS.writeAccountId(),
+      const newRow = {
+        account_id: owner.value(),
         wire_date: val('wire_date'),
         payment_reference: val('payment_reference'),
         inr_principal: num('inr_principal'),
@@ -873,7 +980,9 @@ async function renderWiresOverlay(stream) {
         actual_rate: actualRate,
         status: val('status') || 'received',
         notes: val('notes'),
-      });
+      };
+      await API.insert(stream.wireTable, newRow, requestIdFor(box, newRow));
+      requestDone(box);
       showToast(`Wire added — effective ₹${effRate.toFixed(2)}/USD`);
       stream.wireFields.forEach(f => { const el = box.querySelector('#field-' + f.id); if (el) el.value = f.id === 'wire_date' ? todayStr() : ''; });
       await loadWires();
@@ -904,6 +1013,7 @@ async function renderRepatOverlay(stream) {
   const listWrap = document.createElement('div'); listWrap.className = 'us-ledger-list'; box.appendChild(listWrap);
 
   const addTitle = document.createElement('div'); addTitle.className = 'goal-manage-add-title'; addTitle.textContent = 'Add Repatriation'; box.appendChild(addTitle);
+  const owner = accountPicker(box);
   stream.repatFields.forEach(f => box.appendChild(renderField(f, f.id === 'repat_date' ? todayStr() : '')));
 
   const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn-primary btn-sm'; addBtn.textContent = '+ Add Repatriation'; box.appendChild(addBtn);
@@ -916,13 +1026,13 @@ async function renderRepatOverlay(stream) {
 
   async function loadRepats() {
     let repats = [];
-    try { const r = await API.get(stream.repatTable, { limit: 500 }); repats = r.rows || []; } catch (_) {}
+    try { const r = await API.get(stream.repatTable, { limit: 1000000 }); repats = (r.rows || []).filter(x => ACCOUNTS.matches(x.account_id)); } catch (_) {}
     listWrap.innerHTML = '';
     if (!repats.length) { listWrap.innerHTML = '<div class="goal-manage-empty">No repatriations yet.</div>'; return; }
     repats.sort((a, b) => new Date(b.repat_date) - new Date(a.repat_date));
     repats.forEach(r => {
       const row = document.createElement('div'); row.className = 'us-ledger-row';
-      row.innerHTML = `<span>${r.repat_date}</span>
+      row.innerHTML = `<span>${formatDate(r.repat_date)}${ownerTag(r.account_id)}</span>
         <span>$${parseFloat(r.usd_withdrawn || 0).toLocaleString('en-US')}</span>
         <span>@ ₹${parseFloat(r.effective_rate_back || 0).toFixed(2)}${r.actual_rate_back ? ` <small>(mkt ₹${parseFloat(r.actual_rate_back).toFixed(2)})</small>` : ''}</span>
         <span class="us-ledger-status">${r.status || ''}</span>`;
@@ -934,6 +1044,8 @@ async function renderRepatOverlay(stream) {
     const usdWithdrawn = num('usd_withdrawn');
     const inrReceived  = num('inr_received');
     if (!val('repat_date')) { showToast('Enter repat date', 'error'); return; }
+    if (!owner.value()) { showToast('Pick whose account this is', 'error'); return; }
+    if (val('repat_date') > localYMD(new Date(Date.now() + 86400000))) { showToast('The date is in the future', 'error'); return; }
     if (usdWithdrawn <= 0)  { showToast('Enter USD withdrawn', 'error'); return; }
     if (inrReceived <= 0)   { showToast('Enter INR received', 'error'); return; }
 
@@ -944,8 +1056,8 @@ async function renderRepatOverlay(stream) {
       : 0;
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
-      await API.insert(stream.repatTable, {
-        account_id: ACCOUNTS.writeAccountId(),
+      const newRow = {
+        account_id: owner.value(),
         repat_date: val('repat_date'),
         usd_withdrawn: usdWithdrawn,
         ibkr_withdrawal_fee: num('ibkr_withdrawal_fee'),
@@ -955,7 +1067,9 @@ async function renderRepatOverlay(stream) {
         actual_rate_back: actualBack,
         status: val('status') || 'received',
         notes: val('notes'),
-      });
+      };
+      await API.insert(stream.repatTable, newRow, requestIdFor(box, newRow));
+      requestDone(box);
       showToast(`Repatriation added — ₹${effBack.toFixed(2)}/USD back`);
       stream.repatFields.forEach(f => { const el = box.querySelector('#field-' + f.id); if (el) el.value = f.id === 'repat_date' ? todayStr() : ''; });
       await loadRepats();
@@ -986,6 +1100,7 @@ async function renderIncomeOverlay(stream) {
   const listWrap = document.createElement('div'); listWrap.className = 'us-ledger-list'; box.appendChild(listWrap);
 
   const addTitle = document.createElement('div'); addTitle.className = 'goal-manage-add-title'; addTitle.textContent = 'Add Income'; box.appendChild(addTitle);
+  const owner = accountPicker(box);
   stream.incomeFields.forEach(f => box.appendChild(renderField(f, f.id === 'income_date' ? todayStr() : '')));
 
   const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.className = 'btn-primary btn-sm'; addBtn.textContent = '+ Add Income'; box.appendChild(addBtn);
@@ -998,13 +1113,13 @@ async function renderIncomeOverlay(stream) {
 
   async function loadIncome() {
     let rows = [];
-    try { const r = await API.get(stream.incomeTable, { limit: 500 }); rows = r.rows || []; } catch (_) {}
+    try { const r = await API.get(stream.incomeTable, { limit: 1000000 }); rows = (r.rows || []).filter(x => ACCOUNTS.matches(x.account_id)); } catch (_) {}
     listWrap.innerHTML = '';
     if (!rows.length) { listWrap.innerHTML = '<div class="goal-manage-empty">No income logged yet.</div>'; return; }
     rows.sort((a, b) => new Date(b.income_date) - new Date(a.income_date));
     rows.forEach(r => {
       const row = document.createElement('div'); row.className = 'us-ledger-row';
-      row.innerHTML = `<span>${r.income_date}</span>
+      row.innerHTML = `<span>${formatDate(r.income_date)}${ownerTag(r.account_id)}</span>
         <span>${r.income_type || ''}</span>
         <span>$${parseFloat(r.usd_amount || 0).toLocaleString('en-US')}</span>
         <span class="us-ledger-status"></span>`;
@@ -1014,17 +1129,21 @@ async function renderIncomeOverlay(stream) {
 
   addBtn.addEventListener('click', async () => {
     if (!val('income_date')) { showToast('Enter a date', 'error'); return; }
+    if (!owner.value()) { showToast('Pick whose account this is', 'error'); return; }
+    if (val('income_date') > localYMD(new Date(Date.now() + 86400000))) { showToast('The date is in the future', 'error'); return; }
     if (num('usd_amount') <= 0) { showToast('Enter a USD amount', 'error'); return; }
     addBtn.disabled = true; addBtn.textContent = 'Adding…';
     try {
-      await API.insert(stream.incomeTable, {
-        account_id: ACCOUNTS.writeAccountId(),
+      const newRow = {
+        account_id: owner.value(),
         income_type: val('income_type') || 'Dividend',
         income_date: val('income_date'),
         usd_amount: num('usd_amount'),
         notes: val('notes'),
-      });
-      _insightsCache = null; _holdingsAllRows = null; LSC.clear('insights', 'holdings');
+      };
+      await API.insert(stream.incomeTable, newRow, requestIdFor(box, newRow));
+      requestDone(box);
+      _insightsCache = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots(); _holdingsAllRows = null; LSC.clear('insights', 'holdings');
       showToast('Income added');
       stream.incomeFields.forEach(f => { const el = box.querySelector('#field-' + f.id); if (el) el.value = f.id === 'income_date' ? todayStr() : ''; });
       await loadIncome();
@@ -1042,12 +1161,12 @@ async function renderIncomeOverlay(stream) {
 
 // Utility helpers
 function todayStr() {
-  return new Date().toISOString().split('T')[0];
+  return localYMD(new Date());                    // the local day (toISOString is UTC: yesterday before 05:30 IST)
 }
 
 function formatDate(d) {
-  if (!d) return '';
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const day = localDate(d);
+  return day ? day.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
 }
 
 function formatINR(n) {

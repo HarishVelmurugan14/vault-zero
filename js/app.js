@@ -245,6 +245,8 @@ function renderCategories(page) {
     item.textContent = c.name;
     item.addEventListener('click', () => {
       STATE.category = c;
+      STATE.subcategory = null;                     // a new category → resolve its own stream
+      STATE.stream = null;                          // (else EPF could open the last category's form)
       if (page === 'log') {
         if (c.hasSubcategories) renderSubcategories('log');
         else startLogForm();
@@ -290,11 +292,20 @@ function renderSubcategories(page) {
 async function startLogForm() {
   STATE.stream = STATE.stream || resolveStream(STATE.category, STATE.subcategory?.name);
 
-  if (STATE.stream?.staticBalance) {
+  if (STATE.stream?.staticBalance && !STATE.stream.ledger) {         // Bank: a typed balance; EPF logs entries
     const container = document.getElementById('log-content');
     container.innerHTML = '';
     setHeader('log-content', STATE.category.name, () => renderCategories('log'));
     await renderBalanceUpdateForm(container, STATE.stream);
+    return;
+  }
+
+  // EPF — Account (default Self) · Type · Date · Amount · Notes
+  if (STATE.stream?.ledger) {
+    const epfContainer = document.getElementById('log-content');
+    epfContainer.innerHTML = '';
+    setHeader('log-content', STATE.category.name, () => renderCategories('log'));
+    await renderEpfEntryForm(epfContainer, STATE.stream);
     return;
   }
 
@@ -336,13 +347,15 @@ async function startLogForm() {
     }
 
     const btn = document.getElementById('txn-submit-btn');
+    if (btn.disabled) return;                                           // a save is already in progress
     btn.disabled = true;
     btn.textContent = 'Saving...';
 
     try {
       values[STATE.stream.assetIdCol] = assetId;
-      await API.createTransaction(STATE.stream, values);
-      _insightsCache = null;
+      await API.createTransaction(STATE.stream, values, requestIdFor(formEl, values));
+      requestDone(formEl);
+      _insightsCache = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
       showToast('Transaction saved!');
@@ -361,6 +374,7 @@ async function startLogForm() {
 // ─── HISTORY PAGE ──────────────────────────────────────────────────────────────
 
 async function renderHistoryPage() {
+  _historyFull = {};                                    // fresh full tables for this History visit
   const container = document.getElementById('history-content');
   const header = document.getElementById('history-header');
   if (header) header.innerHTML = '<h2>History</h2>';
@@ -480,9 +494,8 @@ function streamCategory(streamKey) {
   return cat || null;
 }
 
-// Every stream that has a real transaction table with a txn_date column.
-// Static-balance streams (EPF / Bank, txnTable: null) have no
-// per-txn log, so they're naturally excluded. Hidden categories are skipped.
+// Every stream that has a real transaction table with a txn_date column (incl. EPF entries;
+// Bank has no txnTable, so it is naturally excluded). Hidden categories are skipped.
 function recentTxnStreams() {
   const seen = new Set();
   const out = [];
@@ -550,7 +563,7 @@ async function loadRecentLogs(nDays, area) {
     // Asset names + account mapping (cached per table across the app).
     const assetMap = {};
     try {
-      (await fetchAssetsCached(stream)).forEach(a => { assetMap[a.id] = a; STATE.assetMap[a.id] = a; });
+      (await fetchAssetsCached(stream)).forEach(a => { assetMap[assetKey(stream, a)] = a; STATE.assetMap[assetKey(stream, a)] = a; });
     } catch (_) {}
 
     let offset = 0, done = false, guard = 0;
@@ -565,10 +578,10 @@ async function loadRecentLogs(nDays, area) {
         const d = txn.txn_date ? new Date(txn.txn_date) : null;
         if (!d || isNaN(d.getTime())) continue;
         if (d < cutoff) { done = true; break; }        // desc order → the rest are older
-        const assetId = String(txn[stream.assetIdCol]);
-        if (HIDDEN.isAsset(stream.assetTable, assetId)) continue;      // hidden asset
-        if (!ACCOUNTS.matches(assetMap[assetId]?.account_id)) continue; // other account
-        txn._assetName = assetMap[assetId]?.[stream.assetNameCol] || '';
+        const asset = assetMap[String(txn[stream.assetIdCol])];
+        if (HIDDEN.isAsset(stream.assetTable, asset ? asset.id : txn[stream.assetIdCol])) continue;   // hidden asset
+        if (!ACCOUNTS.matches(asset?.account_id)) continue;            // other account
+        txn._assetName = assetLabel(stream, asset);
         results.push({ txn, stream, catName, when: d });
       }
 
@@ -585,7 +598,7 @@ function renderRecentList(area, results, nDays) {
   area.innerHTML = '';
 
   const cats = new Set(results.map(r => r.catName));
-  const IN = ['Buy', 'BUY'], OUT = ['Sell', 'SELL'];
+  const IN = ['Buy', 'BUY', 'Contribution'], OUT = ['Sell', 'SELL', 'Withdrawal'];   // EPF interest is neither
   let inAmt = 0, outAmt = 0;
   results.forEach(({ txn }) => {
     const amt = parseFloat(txn.amount_inr || txn.amount || 0) || 0;
@@ -723,14 +736,14 @@ async function loadTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
 
   try {
     const assets = await fetchAssetsCached(stream);
-    assets.forEach(a => { STATE.assetMap[a.id] = a; });
+    assets.forEach(a => { STATE.assetMap[assetKey(stream, a)] = a; });
   } catch (_) {}
 
   const subcatAssetIds = STATE.subcategory
     ? new Set(
         Object.values(STATE.assetMap)
           .filter(a => String(a.subcategory_id) === String(STATE.subcategory.id))
-          .map(a => String(a.id))
+          .map(a => assetKey(stream, a))
       )
     : null;
 
@@ -739,10 +752,11 @@ async function loadTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
 
   data.rows.forEach(txn => {
     const assetId = String(txn[stream.assetIdCol]);
+    const asset = STATE.assetMap[assetId];
     if (subcatAssetIds && !subcatAssetIds.has(assetId)) return;
-    if (HIDDEN.isAsset(stream.assetTable, assetId)) return;   // hidden asset — excluded
-    if (!ACCOUNTS.matches(STATE.assetMap[assetId]?.account_id)) return;   // other account
-    txn._assetName = STATE.assetMap[txn[stream.assetIdCol]]?.[stream.assetNameCol] || '';
+    if (HIDDEN.isAsset(stream.assetTable, asset ? asset.id : assetId)) return;   // hidden asset — excluded
+    if (!ACCOUNTS.matches(asset?.account_id)) return;   // other account
+    txn._assetName = assetLabel(stream, asset);
     STATE.historyRows.push(txn);
   });
 
@@ -835,41 +849,90 @@ function toggleEditMode(txnList, editBtn, summaryEl) {
 
 // ─── History summary ────────────────────────────────────────────────────────
 
-function renderHistorySummary(el, rows, stream) {
+// EPF passbook entries: net contributed, interest, balance (same rule as staticBalanceOf).
+function renderLedgerSummary(el, rows, stream) {
+  let invested = 0, value = 0;
+  [...new Set(rows.map(t => String(t[stream.assetIdCol])))].forEach(id => {
+    const b = staticBalanceOf(stream, { [stream.assetKeyCol || 'id']: id }, rows, rows);
+    invested += b.invested; value += b.value;
+  });
+  const items = [
+    { label: 'Contributed (net)', value: '₹' + formatINR(invested) },
+    { label: 'Interest', value: '₹' + formatINR(value - invested) },
+    { label: 'Balance', value: '₹' + formatINR(value) },
+  ];
+  const card = document.createElement('div');
+  card.className = 'history-summary-card';
+  card.innerHTML = `<div class="history-summary-grid">${items.map(it => `
+      <div class="history-summary-item">
+        <span class="history-summary-label">${it.label}</span>
+        <span class="history-summary-value">${it.value}</span>
+      </div>`).join('')}</div>`;
+  el.appendChild(card);
+}
+
+// Summary over ALL of the stream's entries that pass this page's filters (account, subcategory,
+// hidden, asset) — not just the rows loaded so far. Running average per asset, like Holdings.
+// An asset's name, with ' · owner' when more than one account exists (two accounts can hold the same fund).
+function assetLabel(stream, asset) {
+  const name = asset?.[stream.assetNameCol] || '';
+  const owner = asset && ACCOUNTS.list.length > 1 ? ACCOUNTS.name(asset.account_id) : '';
+  return owner ? name + ' · ' + owner : name;
+}
+
+// History view's full tables (cleared on every write — API._post — and when History reopens).
+let _historyFull = {};
+function historyFull(table) {
+  if (!_historyFull[table]) _historyFull[table] = API.get(table, { limit: 1000000 }).then(r => r.rows)
+    .catch(e => { delete _historyFull[table]; throw e; });
+  return _historyFull[table];
+}
+
+async function renderHistorySummary(el, rows, stream) {
+  const gen = el._summaryGen = (el._summaryGen || 0) + 1;              // a newer selection wins
+  if (!rows.length) { el.innerHTML = ''; return; }
+  let all, assetRows;
+  try { [all, assetRows] = await Promise.all([historyFull(stream.txnTable), historyFull(stream.assetTable)]); }
+  catch (e) {
+    if (el._summaryGen === gen) el.innerHTML = '<div class="history-summary-card">Summary unavailable: ' + snapEsc(e.message) + '</div>';
+    return;
+  }
+  if (!el.isConnected || el._summaryGen !== gen) return;
   el.innerHTML = '';
-  if (!rows.length) return;
+  const assetsByKey = {};                                               // every asset, also inactive ones still held
+  assetRows.forEach(a => { assetsByKey[assetKey(stream, a)] = a; });
+  const subIds = STATE.subcategory ? new Set(assetRows
+    .filter(a => String(a.subcategory_id) === String(STATE.subcategory.id)).map(a => assetKey(stream, a))) : null;
+  all = all.filter(t => {
+    const k = String(t[stream.assetIdCol]), a = assetsByKey[k];
+    if (subIds && !subIds.has(k)) return false;
+    if (HIDDEN.isAsset(stream.assetTable, a ? a.id : k) || (a && HIDDEN.isSub(a.subcategory_id))) return false;
+    if (!ACCOUNTS.matches(a?.account_id)) return false;
+    return !STATE.assetFilter || k === STATE.assetFilter;
+  });
+  if (!all.length) return;
+  if (stream.ledger) { renderLedgerSummary(el, all, stream); return; }   // EPF: no units / prices
 
   const qtyField = stream.txnFields?.find(f => ['units', 'quantity'].includes(f.id));
-  const qtyCol   = qtyField?.id || null;
-  const amtCol   = stream.amountCol || 'amount';
-  const BUY      = ['Buy'];
-  const SELL     = ['Sell'];
-
-  // Per-asset aggregation so current value is computed correctly across assets
-  const byAsset = {};
-  rows.forEach(txn => {
-    const aid = String(txn[stream.assetIdCol]);
-    if (!byAsset[aid]) byAsset[aid] = { buyQty: 0, sellQty: 0, buyAmt: 0 };
-    const qty = qtyCol ? (parseFloat(txn[qtyCol]) || 0) : 0;
-    const amt = parseFloat(txn[amtCol]) || 0;
-    if (BUY.includes(txn.txn_type))  { byAsset[aid].buyQty  += qty; byAsset[aid].buyAmt  += amt; }
-    if (SELL.includes(txn.txn_type)) { byAsset[aid].sellQty += qty; }
+  const isBuy = t => /^buy$/i.test(String(t.txn_type));
+  const amtOf = t => (stream.usEquity ? parseFloat(t[stream.costBasisCol]) || 0 : getAmtINR(stream, t));   // INR
+  const pos = {};
+  [...all].sort((x, y) => (new Date(x.txn_date) - new Date(y.txn_date)) || (isBuy(y) - isBuy(x))).forEach(t => {
+    const k = String(t[stream.assetIdCol]);
+    const p = pos[k] = pos[k] || { qty: 0, cost: 0, bought: 0, boughtQty: 0 };
+    const qty = getQtyVal(t), amt = amtOf(t);
+    if (isBuy(t)) { p.qty += qty; p.cost += amt; p.bought += amt; p.boughtQty += qty; }
+    else if (p.qty > 0) { const sold = Math.min(qty, p.qty); p.cost -= p.cost / p.qty * sold; p.qty -= sold; if (p.qty < 1e-6) { p.qty = 0; p.cost = 0; } }
+  });
+  let totalNetQty = 0, invested = 0, totalCurVal = 0, hasPrice = false;
+  Object.entries(pos).forEach(([k, p]) => {
+    const price = stream.currentPriceCol ? parseFloat(assetsByKey[k]?.[stream.currentPriceCol]) || 0 : 0;
+    totalNetQty += p.qty;
+    invested    += p.cost;
+    if (p.qty > 0 && stream.currentPriceCol) { totalCurVal += price > 0 ? p.qty * price : p.cost; hasPrice = true; }   // no live price → at cost
   });
 
-  let totalNetQty = 0, totalBuyQty = 0, totalBuyAmt = 0, totalCurVal = 0, hasPrice = false;
-  Object.entries(byAsset).forEach(([aid, d]) => {
-    const netQty = d.buyQty - d.sellQty;
-    const price  = stream.currentPriceCol
-      ? parseFloat(STATE.assetMap[aid]?.[stream.currentPriceCol]) || 0 : 0;
-    totalNetQty += netQty;
-    totalBuyQty += d.buyQty;
-    totalBuyAmt += d.buyAmt;
-    if (price > 0) { totalCurVal += netQty * price; hasPrice = true; }
-  });
-
-  const avgPrice = totalBuyQty > 0 ? totalBuyAmt / totalBuyQty : 0;
-  // Remaining invested = net qty × avg buy price
-  const invested = totalBuyQty > 0 ? totalNetQty * avgPrice : totalBuyAmt;
+  const avgPrice = totalNetQty > 0 ? invested / totalNetQty : 0;
   const pnl      = hasPrice ? totalCurVal - invested : null;
   const pnlPct   = pnl !== null && invested > 0 ? (pnl / invested) * 100 : null;
   const qtyLabel = qtyField?.label || 'Quantity';
@@ -912,6 +975,14 @@ async function saveEdits(txnList, area) {
   if (!edited.length) {
     showToast('No changes to save.');
     return;
+  }
+
+  for (const e of edited) {                                             // same checks as a new entry
+    const orig = STATE.historyRows.find(r => String(r.id) === String(e.id)) || {};
+    const merged = {};
+    stream.txnFields.forEach(f => { merged[f.id] = e.data[f.id] !== undefined ? e.data[f.id] : (f.type === 'date' ? localYMD(orig[f.id]) : orig[f.id]); });
+    const errors = validateTxn(stream.txnFields, merged);
+    if (errors.length) { showToast(`Row ${orig._assetName || e.id}: ${errors[0]}`, 'error'); return; }
   }
 
   const saveBtn = document.getElementById('edit-save-btn');
