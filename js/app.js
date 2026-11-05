@@ -247,6 +247,7 @@ function renderBuckets(page) {
     const card = document.createElement('div');
     card.className = 'bucket-card';
     card.innerHTML = `<span class="bucket-icon">${b.icon}</span><span class="bucket-name">${b.name}</span>`;
+    card.dataset.bucket = b.id;                                         // Modern draws its own icon per bucket
     card.style.setProperty('--accent', b.color);
     card.addEventListener('click', () => {
       STATE.bucket = b;
@@ -492,7 +493,7 @@ async function renderHistoryPage() {
   recentEntry.className = 'recent-entry';
   recentEntry.innerHTML = `
     <div class="recent-entry-main">
-      <span class="recent-entry-title">🕑 Last N days</span>
+      <span class="recent-entry-title"><span class="vz-emoji">🕑</span> Last N days</span>
       <span class="recent-entry-sub">All logs across every category in one feed</span>
     </div>
     <span class="recent-entry-go">→</span>`;

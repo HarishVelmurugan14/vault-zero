@@ -598,7 +598,7 @@ function makeBucketRow(bucket, totals) {
   row.innerHTML = `
     <div class="ht-bucket-name">
       <span class="ht-toggle">▾</span>
-      <span>${bucket.icon || ''} ${bucket.name}</span>
+      <span class="ht-name-text">${bucket.icon || ''} ${bucket.name}</span>
     </div>
     <div class="ht-bucket-num">${htAmt(totals.invested)}</div>
     <div class="ht-bucket-num">${totals.currentValue > 0 ? htAmt(totals.currentValue) : '—'}</div>
@@ -613,7 +613,7 @@ function makeCategoryRow(catName, totals) {
   const row    = document.createElement('div');
   row.className = 'ht-category';
   row.innerHTML = `
-    <div class="ht-category-name"><span class="ht-toggle">▾</span>${catName}</div>
+    <div class="ht-category-name"><span class="ht-toggle">▾</span><span class="ht-name-text">${catName}</span></div>
     <div class="ht-category-num">${htAmt(totals.invested)}</div>
     <div class="ht-category-num">${totals.currentValue > 0 ? htAmt(totals.currentValue) : '—'}</div>
     <div class="ht-category-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>
@@ -627,7 +627,7 @@ function makeSubcatRow(subcatName, totals) {
   const row    = document.createElement('div');
   row.className = 'ht-subcat';
   row.innerHTML = `
-    <div class="ht-subcat-name"><span class="ht-toggle">▾</span>${subcatName}</div>
+    <div class="ht-subcat-name"><span class="ht-toggle">▾</span><span class="ht-name-text">${subcatName}</span></div>
     <div class="ht-subcat-num">${htAmt(totals.invested)}</div>
     <div class="ht-subcat-num">${totals.currentValue > 0 ? htAmt(totals.currentValue) : '—'}</div>
     <div class="ht-subcat-num ${pnlCls}">${pnl !== null ? (pnl >= 0 ? '+' : '-') + '₹' + formatINR(Math.abs(pnl)) : '—'}</div>

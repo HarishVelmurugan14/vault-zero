@@ -47,6 +47,75 @@ function CT() {
            surface: v('--chart-surface', '#111111') };
 }
 
+const isModernTheme = () => document.documentElement.getAttribute('data-theme') === 'modern';
+
+// Series hues: the charts are written with Classic's palette; Modern swaps each one for its
+// Apple system colour (alpha suffixes and rgba() forms included) on the chart's config.
+// Neither side's values appear on the other, so the swap runs both ways unambiguously; neighbouring
+// CAT_COLORS stay at least as far apart (CIELAB ΔE) as Classic's, so pie slices stay distinct.
+const MODERN_HUES = {
+  '#f59e0b': '#ff9f0a', '#22c55e': '#34c759', '#a855f7': '#af52de', '#ef4444': '#ff3b30',
+  '#0ea5e9': '#32ade6', '#818cf8': '#7d7aff', '#7c3aed': '#7a4fe0', '#fb923c': '#ff7a45',
+  '#f97316': '#ff6a00', '#ec4899': '#ff2d92', '#8b5cf6': '#bf5af2', '#64748b': '#8e8e93',
+  '#6366f1': '#5856d6', '#3b82f6': '#007aff', '#14b8a6': '#00c7be', '#10b981': '#26c281',
+  '#0891b2': '#0a84ff',
+};
+function hueMapper(toModern) {
+  const hex = {}, rgb = {};
+  const trip = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(',');
+  Object.entries(MODERN_HUES).forEach(([c, m]) => {
+    const [a, b] = toModern ? [c, m] : [m, c];
+    hex[a] = b; rgb[trip(a)] = trip(b);
+  });
+  return s => {
+    const t = s.trim().toLowerCase();
+    if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/.test(t)) { const m = hex[t.slice(0, 7)]; return m ? m + t.slice(7) : s; }
+    const r = t.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/);
+    if (r) { const m = rgb[`${r[1]},${r[2]},${r[3]}`]; if (m) return `rgba(${m},${r[4] !== undefined ? r[4] : 1})`; }
+    return s;
+  };
+}
+
+// Rewrite every colour string in a chart config with fn. Arrays are replaced, never edited,
+// as they may be shared constants (e.g. CAT_COLORS); functions and DOM nodes are skipped.
+function mapColours(o, fn, depth = 0) {
+  if (!o || typeof o !== 'object' || depth > 8) return;
+  for (const k of Object.keys(o)) {
+    const v = o[k];
+    if (typeof v === 'string') { const n = fn(v); if (n !== v) o[k] = n; }
+    else if (Array.isArray(v)) {
+      if (v.some(x => typeof x === 'string')) {
+        const n = v.map(x => (typeof x === 'string' ? fn(x) : x));
+        if (n.some((x, i) => x !== v[i])) o[k] = n;
+      }
+      v.forEach(x => { if (x && typeof x === 'object') mapColours(x, fn, depth + 1); });
+    }
+    else if (v && typeof v === 'object' && !(v instanceof Node)) mapColours(v, fn, depth + 1);
+  }
+}
+
+// Chart.js defaults that follow the theme: text and grid colours, font, and (Modern) a light
+// rounded tooltip. Classic gets Chart.js's own tooltip back.
+let _tipDefaults = null;
+function applyChartDefaults() {
+  if (typeof Chart === 'undefined') return;
+  const t = CT(), d = Chart.defaults;
+  d.color = t.tick;
+  d.borderColor = t.grid;
+  d.font.family = getComputedStyle(document.body).fontFamily || "Inter, -apple-system, BlinkMacSystemFont, sans-serif";   // the theme's font
+  d.font.size = 11;
+  const tip = d.plugins && d.plugins.tooltip;
+  if (!tip) return;
+  const keys = ['backgroundColor', 'titleColor', 'bodyColor', 'borderColor', 'borderWidth', 'cornerRadius', 'padding', 'boxPadding', 'usePointStyle', 'caretSize'];
+  if (!_tipDefaults) { _tipDefaults = {}; keys.forEach(k => { _tipDefaults[k] = tip[k]; }); }
+  Object.assign(tip, _tipDefaults);
+  if (isModernTheme()) {
+    const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+    Object.assign(tip, { backgroundColor: v('--chart-tip-bg'), titleColor: v('--chart-tip-title'), bodyColor: v('--chart-tip-body'),
+      borderColor: v('--chart-tip-border'), borderWidth: 1, cornerRadius: 12, padding: 12, boxPadding: 5, usePointStyle: true, caretSize: 0 });
+  }
+}
+
 function fmtXIRR(r) {
   return r !== null ? (r * 100).toFixed(1) + '%' : '—';
 }
@@ -382,26 +451,20 @@ function redrawCharts(chartsArea, rawData) {
 // (Each theme keeps its CT() values distinct, so the swap is unambiguous.)
 let _ctDrawn = null;                                                   // the CT() the current charts used
 function restyleInsightsCharts() {
-  const to = CT(), from = _ctDrawn;
-  if (typeof Chart !== 'undefined') { Chart.defaults.color = to.tick; Chart.defaults.borderColor = to.grid; }
-  if (!from) return;
+  const to = CT(), from = _ctDrawn, modern = isModernTheme();
+  applyChartDefaults();
   const map = {};
-  Object.keys(to).forEach(k => { if (from[k] !== to[k]) map[from[k]] = to[k]; });
-  const swap = (o, depth) => {
-    if (!o || typeof o !== 'object' || depth > 8) return;
-    for (const k of Object.keys(o)) {
-      const v = o[k];
-      if (typeof v === 'string') { if (map[v] !== undefined) o[k] = map[v]; }
-      else if (v && typeof v === 'object' && !(v instanceof Node)) swap(v, depth + 1);
-    }
-  };
+  if (from) Object.keys(to).forEach(k => { if (from[k] !== to[k]) map[from[k]] = to[k]; });
   // Walk the plain config, not c.options: reading through Chart.js's option resolver runs
   // scriptable options (e.g. the pie datalabels formatter) and can throw. A full update()
   // re-resolves shared element options (update('none') leaves them stale); animation is
   // switched off for it so the new colours land at once.
   _insightsCharts.forEach(c => {
-    try { swap(c.config.options, 0); } catch (_) {}
-    try { (c.data.datasets || []).forEach(d => swap(d, 0)); } catch (_) {}
+    const hue = c._vzModern !== modern ? hueMapper(modern) : null;   // series hues, if the theme family changed
+    const swap = s => { const n = map[s] !== undefined ? map[s] : s; return hue ? hue(n) : n; };
+    c._vzModern = modern;
+    try { mapColours(c.config.options, swap); } catch (_) {}
+    try { (c.data.datasets || []).forEach(d => mapColours(d, swap)); } catch (_) {}
     try {
       const o = c.config.options, had = Object.prototype.hasOwnProperty.call(o, 'animation'), anim = o.animation;
       o.animation = false;
@@ -441,10 +504,7 @@ function drawCharts(chartsArea, rawData) {
   chartsArea.innerHTML = '';
   if (typeof Chart !== 'undefined') {
     _ctDrawn = CT();
-    Chart.defaults.color = CT().tick;
-    Chart.defaults.borderColor = CT().grid;
-    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily || "Inter, -apple-system, BlinkMacSystemFont, sans-serif";   // the theme's font
-    Chart.defaults.font.size = 11;
+    applyChartDefaults();
   }
 
   chartsArea.appendChild(buildPortfolioHero(agg));
@@ -465,12 +525,25 @@ function drawCharts(chartsArea, rawData) {
       _insightsActiveTab = t.id;
       nav.querySelectorAll('.insights-subnav-tab').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
+      b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
       renderInsightsTab(tabContent, agg, filtered, rawData);
     });
     nav.appendChild(b);
   });
 
   chartsArea.appendChild(nav);
+  // Where the tabs scroll sideways (Modern on phones): bring the active one back into view after
+  // a redraw, and mark the end of the strip so its edge fade can drop.
+  const markEnd = () => nav.classList.toggle('at-end', nav.scrollLeft + nav.clientWidth >= nav.scrollWidth - 2);
+  nav.addEventListener('scroll', markEnd, { passive: true });
+  requestAnimationFrame(() => {
+    const a = nav.querySelector('.insights-subnav-tab.active');
+    if (a && nav.scrollWidth > nav.clientWidth) {
+      const off = a.getBoundingClientRect().left - nav.getBoundingClientRect().left;
+      nav.scrollLeft += off - (nav.clientWidth - a.offsetWidth) / 2;
+    }
+    markEnd();
+  });
   chartsArea.appendChild(tabContent);
   renderInsightsTab(tabContent, agg, filtered, rawData);
 }
@@ -1577,7 +1650,7 @@ async function drawSnapshotTake() {
   el.innerHTML = `
     <div class="snapshot-take-row">
       <div>
-        <span class="snapshot-take-title">📸 ${snapEsc(month)} snapshot</span>
+        <span class="snapshot-take-title"><span class="vz-emoji">📸</span> ${snapEsc(month)} snapshot</span>
         <span class="snapshot-take-muted">${f.taken
           ? `· taken as of ${snapEsc(snapDayLabel(f.taken.date))} · value ${fmtCurrency(f.taken.value)}${tagAcct ? ' (all accounts)' : ''}`
           : '· not taken yet'}</span>
@@ -1975,7 +2048,13 @@ function newChart(id, config) {
   if (!canvas) return null;
   const prev = Chart.getChart(canvas);                                  // a quick re-render may have drawn here already
   if (prev) { prev.destroy(); _insightsCharts = _insightsCharts.filter(c => c !== prev); }
+  const modern = isModernTheme();
+  if (modern) {
+    const hue = hueMapper(true);
+    try { mapColours(config.options, hue); ((config.data || {}).datasets || []).forEach(d => mapColours(d, hue)); } catch (_) {}
+  }
   const chart = new Chart(canvas, config);
+  chart._vzModern = modern;
   _insightsCharts.push(chart);
   return chart;
 }
