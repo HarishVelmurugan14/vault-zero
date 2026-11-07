@@ -9,9 +9,13 @@
  *   5. Deploy → Manage deployments → New version (the app's snapshot endpoints live in Code.gs).
  *
  * EVERY MONTH — no automation: in the app, Insights → Factsheet → "Take snapshot", ANY day of the
- * month. It asks for the manual prices (land, physical gold), saves them, and records THIS month
- * as of that day. Taking it again later in the month replaces it with that day's data. Once the
- * next month starts the month is locked; a month you never took stays a gap.
+ * month. It asks for the physical gold / silver prices, saves them, and records THIS month as of
+ * that day. Taking it again later in the month replaces it with that day's data. Once the next
+ * month starts the month is locked; a month you never took stays a gap. LAND is never asked: add a
+ * land price whenever you hear one (Log → manual price) and every month since your previous land
+ * price — taken months included — is re-valued on the straight line between the two
+ * (vzsRespreadLand_; respreadLandPrices() does it by hand). That is the one change a locked month
+ * ever gets.
  *
  *   setupSnapshots()       tabs (incl. epf_transactions), isin + amfi_code on the fund tabs; removes
  *                          the old daily trigger if one exists.
@@ -52,7 +56,8 @@
  *   Bank balances are not part of snapshots.
  * Every line records the date of the price it used; a manual price from before the previous month
  * is noted as "old". Asset names are copied into every line and lines carry no foreign key to the
- * asset tabs, so later sells, edits or deletions never change a month. The tabs are SERVER-ONLY
+ * asset tabs, so later sells, edits or deletions never change a month — except land lines, which
+ * vzsRespreadLand_ re-values when a land price or purchase changes (see above). The tabs are SERVER-ONLY
  * (schema.gs). A price that does not exist (e.g. land you have never priced) is valued at cost
  * (price_source 'cost'). A price that FAILED to download writes nothing. Writes are
  * commit-ordered: new lines first, then the month's header row (the commit marker), then the
@@ -287,8 +292,15 @@ function vzsTake_(prices) {
     const b = vzsRecordBenchmarks_(ss, [vzsMonthEnd_(vzsPrevMonth_(month)), today].concat(recent), log, Date.now() - VZS_TIME_BUDGET_MS + VZS_BENCH_TAKE_BUDGET_MS);
     if (b.failed.length) log.push('warning: benchmark values not recorded for ' + b.failed.join(', ') + ' — run backfillBenchmarks() later');
   } catch (e) { log.push('warning: benchmark values not recorded (' + e.message + ') — run backfillBenchmarks() later'); }
+  let spread = [];
+  try {                                                                 // a land price saved while the spread failed
+    const r = vzsRespreadLand_(ss);
+    spread = r.months;
+    if (spread.length) log.push('land spread across ' + spread.join(', '));
+    if (r.skipped.length) log.push('warning: land not spread in ' + r.skipped.join(', ') + ' (changed meanwhile) — run respreadLandPrices()');
+  } catch (e) { log.push('warning: land prices not spread over the months (' + e.message + ') — run respreadLandPrices()'); }
   const head = vzsRows_(ss, VZS_SNAPSHOTS).find(h => vzsMonthOf_(h.month, tz) === month) || {};
-  return { month, date: vzsIso_(head.snapshot_date, tz), updated: res.wrote > 0, pricesSaved: add.length,
+  return { month, date: vzsIso_(head.snapshot_date, tz), updated: res.wrote > 0 || spread.indexOf(month) >= 0, pricesSaved: add.length,
            lines: Number(head.lines) || 0, invested: Number(head.invested_total) || 0, value: Number(head.current_total) || 0,
            notes: String(head.notes || ''), warnings: log.filter(l => /^warning/.test(l)) };
 }
@@ -341,9 +353,10 @@ function vzsBuild_(ss, data, plan, source, existing, log, liveDay) {
   return finish(true);
 }
 
-// The assets the Take snapshot popup asks a price for: real estate and physical gold / silver
-// (no market price exists) that are held at the end of `dateStr` — unless the asset is set to
-// Price Source = formula (its price is in the sheet). With their latest price up to that day.
+// The manually priced assets held at the end of `dateStr`: real estate and physical gold / silver
+// (no market price exists) — unless the asset is set to Price Source = formula (its price is in the
+// sheet). With their latest price up to that day. The Take snapshot popup asks only the metals
+// (vzsForm_); land is priced whenever you hear a rate and spread over the months (vzsRespreadLand_).
 function vzsManualHeld_(data, dateStr, tz) {
   const out = [];
   VZS_STREAMS.filter(st => st.manual).forEach(st => {
@@ -359,6 +372,98 @@ function vzsManualHeld_(data, dateStr, tz) {
   });
   return out;
 }
+
+// ── Land: your occasional prices spread over the months ──────────────────────
+
+// Land is never asked for at Take snapshot. Each price you record (manual_prices) and each purchase
+// is a point; every snapshot month between two points — taken or history — gets the straight line
+// between them (vzsEstimate_), so a new price never lands as one month's jump. After the last
+// point a month holds at it until your next price; with no price of yours left it falls back to
+// the plain rule (latest manual price, else cost). The units and invested come from your current
+// transactions, so an edited purchase corrects them too. Only land lines change, under the same
+// commit-ordered write as any month; a month whose land lines already match is left alone.
+// Runs after every app write to manual_prices / real_estate_transactions (vzsAfterWrite_), at each
+// Take snapshot, and by hand (respreadLandPrices).
+//   → { months: ['yyyy-mm' rewritten], skipped: ['yyyy-mm' changed by another run meanwhile] }
+function vzsRespreadLand_(ss) {
+  const tz = ss.getSpreadsheetTimeZone();
+  const st = VZS_STREAMS.find(s => s.manual === 'real_estate');
+  const data = vzsLoad_(ss);
+  const assets = {};
+  (data[st.assets] || []).forEach(a => { assets[vzKey_(a.id)] = a; });
+  const existing = vzsExisting_(ss);
+  const done = [], skipped = [];
+  Object.keys(existing.byMonth).sort().forEach(month => {
+    const e = existing.byMonth[month];
+    const pos = vzsPositions_(st, data[st.txns] || [], vzsCutoff_(e.date, tz));
+    let changed = false;
+    const lines = existing.lines(month).map(l => {
+      const a = l.asset_table === st.assets ? assets[vzKey_(l.asset_id)] : null;
+      const p = a ? pos[vzKey_(a.id)] : null;
+      if (!a || String(a.price_fetch_way || '') === 'formula' || !p || p.netQty <= 1e-6) return l;
+      const px = vzsLandPrice_(st, data, a, e.date, tz);
+      const invested = vzsRound_(p.cost, 2);
+      const upd = Object.assign({}, l, { units: vzsRound_(p.netQty, 6), invested_value: invested,
+        price: px.price > 0 ? vzsRound_(px.price, 4) : '', current_value: vzsRound_(px.price > 0 ? p.netQty * px.price : invested, 2),
+        price_source: px.price > 0 ? px.source : 'cost', price_date: px.price > 0 ? px.date : '' });
+      if (vzsSameLines_([l], [upd])) return l;
+      changed = true;
+      return upd;
+    });
+    if (!changed) return;
+    const notes = vzsSpreadNotes_(e.notes, lines, e.date);
+    if (vzsWriteMonth_(ss, { month, date: e.date, source: e.source, lines, notes, expectId: e.id })) done.push(month);
+    else skipped.push(month);
+  });
+  return { months: done, skipped };
+}
+
+// Land's price on a snapshot day — the same in a Take, a backfill and the spread: the straight
+// line between your points (vzsEstimate_), else your latest manual price, else none (at cost).
+function vzsLandPrice_(st, data, a, iso, tz) {
+  const est = vzsEstimate_(st, data, a, iso, tz, null);
+  if (est && est.price > 0) return est;
+  const m = vzsManualPrice_(data, st.manual, a.id, iso, tz);
+  return { price: m.p, source: 'manual', date: m.d };
+}
+
+// A month's notes with the "old manual price" and "estimated" parts worked out again from its lines
+// (same wording and order as vzsBuildLines_); every other note is kept as written.
+function vzsSpreadNotes_(notes, lines, dateStr) {
+  const oldBefore = vzsOldBefore_(dateStr);
+  const old = lines.filter(l => l.price_source === 'manual' && l.asset_table !== 'real_estate_assets' && l.price_date && l.price_date < oldBefore)
+    .map(l => l.asset_name + ' (' + l.price_date + ')');
+  const est = lines.filter(l => l.price_source === 'estimate').map(l => l.asset_name);
+  // An asset name may itself contain ' · ': a piece that starts no known note belongs to the one before.
+  const known = /^(no market price|no USD→INR rate|old manual price: |estimated from your recorded prices|EPF at its typed balance)/;
+  const pieces = [];
+  String(notes || '').split(' · ').forEach(n => {
+    if (pieces.length && !known.test(n)) pieces[pieces.length - 1] += ' · ' + n; else if (n) pieces.push(n);
+  });
+  const parts = pieces.filter(n => !/^old manual price: /.test(n) && !/^estimated from your recorded prices/.test(n));
+  const add = [];
+  if (old.length) add.push('old manual price: ' + old.join(', '));
+  if (est.length) add.push('estimated from your recorded prices (land: straight line; metals: ETF moves): ' + est.join(', '));
+  let at = parts.findIndex(n => /^EPF at its typed balance/.test(n));
+  if (at < 0) at = parts.length;
+  return parts.slice(0, at).concat(add, parts.slice(at)).join(' · ');
+}
+
+// After an app write (doPost insert / update / delete): a land price or purchase changed → spread
+// it over the months. Never fails the write. → null (nothing to do) | { months } | { error }
+function vzsAfterWrite_(sheet, row) {
+  const land = sheet === 'real_estate_transactions' ||
+    (sheet === 'manual_prices' && (!row || !row.asset_type || String(row.asset_type) === 'real_estate'));
+  if (!land) return null;
+  try { return vzsRespreadLand_(getSpreadsheet()); } catch (e) { return { error: e.message }; }
+}
+
+// Run by hand (Apps Script editor): spread every land price you have recorded over the months.
+function respreadLandPrices() {
+  const r = vzsRespreadLand_(getSpreadsheet());
+  vzsNotify_('Land prices spread', [r.months.length ? 'months updated: ' + r.months.join(', ') : 'every month already matches your land prices']);
+}
+
 
 // ── Lines ────────────────────────────────────────────────────────────────────
 
@@ -383,7 +488,7 @@ function vzsBuildLines_(data, dateStr, tz, prices, liveDay) {
         current_value: vzsRound_(px.price > 0 ? p.netQty * px.price : invested, 2),
         price_source: px.price > 0 ? px.source : 'cost', price_date: px.price > 0 ? px.date : '' });
       out.push(line);
-      if (st.manual && px.price > 0 && px.date < oldBefore) old.push(line.asset_name + ' (' + px.date + ')');
+      if (st.manual && st.manual !== 'real_estate' && px.price > 0 && px.date < oldBefore) old.push(line.asset_name + ' (' + px.date + ')');   // land waits for your next price
       if (px.source === 'estimate') est.push(line.asset_name);
       if (st.hist && !(px.price > 0)) noPrice.push(line.asset_name + ' (' + (liveDay ? 'sheet ' + st.live + ' is 0 / #N/A — check its GOOGLEFINANCE cell'
         : st.hist === 'amfi' ? 'AMFI ' + (vzKey_(a.amfi_code) || 'code missing') : st.symbol(a)) + ')');
@@ -655,7 +760,7 @@ function vzsPriceSource_(data, tz, started) {
     },
   };
 }
-// History only: a price for a manually priced asset on a day between the prices on record —
+// History months, and land in any month (vzsRespreadLand_): a price for a manually priced asset on a day between the prices on record —
 // your manual prices and what you paid on each buy (land: cost per unit incl. registration and
 // expenses). Land runs in a straight line between those points and stays at the last one after
 // it; a physical metal follows its ETF proxy (proxy = { state, v } from prefetch), corrected
@@ -750,6 +855,7 @@ function vzsSheetPriceSource_(data, day, tz, started) {
         const p = Number(a.current_price) || 0;
         return { price: p > 0 ? p : 0, source: 'sheet', date: day };
       }
+      if (st.manual === 'real_estate') return vzsLandPrice_(st, data, a, iso, tz);   // as the spread values it
       if (st.manual) {
         const m = vzsManualPrice_(data, st.manual, a.id, iso, tz);
         return { price: m.p, source: 'manual', date: m.d };
@@ -1297,7 +1403,7 @@ function vzsDeleteWhere_(sh, match) {
 //   months: [{ d: as-of date, st: 'open' (this month) | 'locked', src: 'backfill' | 'manual', notes }]   assets: [{ t, id, n: latest name, a: account }]
 //   rows:   [monthIdx, assetIdx, invested ₹, value ₹, flag, category, subcategory] — category /
 //           subcategory as frozen in that month's line; flag 1 = valued at cost, 2 = old manual price,
-//           3 = estimated between your recorded prices (history only)
+//           3 = estimated between your recorded prices (history; land in any month)
 function vzsData_(account) {
   const ss = getSpreadsheet();
   const tz = ss.getSpreadsheetTimeZone();
@@ -1365,7 +1471,7 @@ function vzsForm_() {
   return { today, month,
     taken: head ? { date: vzsIso_(head.snapshot_date, tz), source: String(head.source || ''), lines: Number(head.lines) || 0,
                     invested: Number(head.invested_total) || 0, value: Number(head.current_total) || 0, notes: String(head.notes || '') } : null,
-    manual: vzsManualHeld_(data, today, tz),
+    manual: vzsManualHeld_(data, today, tz).filter(m => m.asset_type !== 'real_estate'),   // land: priced whenever you hear, then spread
     epfTyped: (data.epf_assets || []).filter(a => String(a.is_active).toUpperCase() === 'TRUE' && Number(a.current_balance) &&
       !(data.epf_transactions || []).some(t => vzKey_(t.account_id) === vzKey_(a.account_id)))
       .map(a => ({ name: String(a.account_name || ''), balance: Number(a.current_balance) })) };
@@ -1373,7 +1479,7 @@ function vzsForm_() {
 
 // A manual price from before the previous month → "old" for this month.
 function vzsIsOld_(l, dateStr, tz) {
-  if (String(l.price_source) !== 'manual') return false;
+  if (String(l.price_source) !== 'manual' || String(l.asset_table) === 'real_estate_assets') return false;   // land: spread when priced
   const pd = vzsIso_(l.price_date, tz);
   return !!pd && pd < vzsOldBefore_(String(dateStr));
 }

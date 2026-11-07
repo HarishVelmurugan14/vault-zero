@@ -1407,8 +1407,9 @@ async function drawSnapshotTake() {
   el.querySelector('#snapshot-take-btn').onclick = () => openSnapshotDialog(f);
 }
 
-// The popup: today's date, the prices that have no live source (land, physical gold — see
-// vzsManualHeld_ in gas/snapshot.gs), then "Take snapshot". Everything else is priced from the sheet.
+// The popup: today's date, the physical gold / silver prices (no live source — see vzsForm_ in
+// gas/snapshot.gs), then "Take snapshot". Everything else is priced from the sheet; land is never
+// asked — a land price saved from the Log form is spread over the months by the server.
 function openSnapshotDialog(f) {
   const month = monthLabel(f.month.slice(0, 7));
   const tagAcct = ACCOUNTS.list.length > 1;
@@ -1712,7 +1713,7 @@ function renderSnapshotView(card, data, account) {
   const note = card.querySelector('#snapshot-note');
   if (note) note.textContent =
     `${pts.length} ${yearly ? 'year(s) — each shows its last snapshot' : 'month(s)'} · each month as of the day it was taken (history: month-end), ` +
-    `locked once the next month starts — later sells or edits never change a locked month` +
+    `locked once the next month starts — later sells or edits never change a locked month, except land, which is re-valued when you add a land price or change a land purchase` +
     (backfilled ? ` · ${backfilled} rebuilt from historical prices` : '') +
     (atCost ? ` · ${atCost} asset-month(s) valued at cost (no price on record)` : '') +
     (estimated ? ` · ${estimated} asset-month(s) estimated from your recorded prices (land: straight line; physical gold / silver: Gold / Silver BeES moves)` : '');

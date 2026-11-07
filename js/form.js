@@ -515,14 +515,20 @@ async function renderManualPricePanel(container, stream, assetId) {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
     try {
-      await API.updateManualPrice(stream.manualPriceType, assetId, price, date, requestIdFor(panel, { assetId, price, date }));
+      const res = await API.updateManualPrice(stream.manualPriceType, assetId, price, date, requestIdFor(panel, { assetId, price, date }));
       requestDone(panel);
       _insightsCache   = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
-      status.textContent = `✓ Saved ₹${formatINR(price)}`;
+      // Land: the server spreads the new price over the snapshot months since the previous one.
+      const spread = (res && res.spread) || {};
+      const months = spread.months || [];
+      status.textContent = `✓ Saved ₹${formatINR(price)}` +
+        (months.length ? ` · spread over ${months.length} snapshot month${months.length === 1 ? '' : 's'} (${monthLabel(months[0])} – ${monthLabel(months[months.length - 1])})` : '');
       status.className = 'manual-price-status saved';
-      showToast('Price updated!');
+      if (spread.error) showToast(`Price saved; spreading it over the snapshot months failed (${spread.error}) — it retries at the next Take snapshot`, 'error');
+      else if ((spread.skipped || []).length) showToast('Price saved; some snapshot months were busy — they update at the next Take snapshot', 'error');
+      else showToast('Price updated!');
     } catch (err) {
       showToast('Failed: ' + err.message, 'error');
     } finally {

@@ -166,7 +166,7 @@ const GUIDE = {
   snapshots: {
     title: 'Monthly snapshots',
     what: 'Every snapshot taken so far: what the holdings had cost (Invested) and what they were worth (Value), month by month or year by year.',
-    how: 'It adds up every category the snapshots record — EPF, debt funds and land included — unless its own filters narrow it. Invested = the cost of the units still held (average cost); Value = their price at the snapshot.',
+    how: 'It adds up every category the snapshots record — EPF, debt funds and land included — unless its own filters narrow it. Invested = the cost of the units still held (average cost); Value = their price at the snapshot. Physical gold uses the price you confirm at each Take snapshot. Land is never asked: whenever you save a land price, every month since your previous land price (taken months too) is re-valued on the straight line between the two, so the rise is spread over those months instead of landing in one.',
     read: 'This is why its numbers differ from the Fund above, which counts only the fund\'s categories. Invested also differs from "Net money put in": after a sale, Invested drops by the cost of the units sold, while Net money put in drops by the amount taken out (estimated from the holding\'s average gain that month).',
   },
   nw_growth: {

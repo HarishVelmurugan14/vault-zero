@@ -79,24 +79,25 @@ function doPost(e) {
     if (!VZ_SCHEMA[sheet]) return respond({ error: 'writes are not allowed to "' + sheet + '"' }, 400);
     if (VZ_SCHEMA[sheet].serverOnly) return respond({ error: '"' + sheet + '" is written only by the snapshot code (Take snapshot / backfillSnapshots)' }, 400);
 
+    // A land price or purchase changed → gas/snapshot.gs spreads it over the snapshot months.
     if (action === 'insert') {
       const newId = appendRow(sheet, row, payload.request_id);
-      return respond({ id: newId });
+      return respond({ id: newId, spread: vzsAfterWrite_(sheet, row) });
     }
 
     if (action === 'update') {
       updateRows(sheet, [{ id, data: row }]);
-      return respond({ success: true });
+      return respond({ success: true, spread: vzsAfterWrite_(sheet, row) });
     }
 
     if (action === 'batchUpdate') {
       updateRows(sheet, rows);          // all rows validated before any is written
-      return respond({ success: true });
+      return respond({ success: true, spread: vzsAfterWrite_(sheet, null) });
     }
 
     if (action === 'delete') {
       deleteRow(sheet, id);
-      return respond({ success: true });
+      return respond({ success: true, spread: vzsAfterWrite_(sheet, null) });
     }
 
     // Used by the Coin / Tradebook importers (separate Apps Script project) so every

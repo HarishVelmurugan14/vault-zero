@@ -384,12 +384,13 @@ async function startLogForm() {
 
     try {
       values[STATE.stream.assetIdCol] = assetId;
-      await API.createTransaction(STATE.stream, values, requestIdFor(formEl, values));
+      const res = await API.createTransaction(STATE.stream, values, requestIdFor(formEl, values));
       requestDone(formEl);
       _insightsCache = null; if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
       _holdingsAllRows = null;
       LSC.clear('insights', 'holdings');
       showToast('Transaction saved!');
+      warnLandSpread(res);
       // Reset form
       fieldsDiv.innerHTML = '';
       await renderTransactionForm(fieldsDiv, STATE.stream, STATE.category, STATE.subcategory);
@@ -847,12 +848,21 @@ function renderFilteredList(txnList, summaryEl) {
   renderHistorySummary(summaryEl, rows, stream);
 }
 
+// A land purchase changed: the server re-values the snapshot months (gas/snapshot.gs
+// vzsRespreadLand_). Say so only when that part failed — the save itself went through.
+function warnLandSpread(res) {
+  const s = res && res.spread;
+  if (!s) return;
+  if (s.error) showToast(`Saved; re-valuing land in the snapshot months failed (${s.error}) — it retries at the next Take snapshot`, 'error');
+  else if (s.skipped && s.skipped.length) showToast('Saved; some snapshot months were busy — land in them updates at the next Take snapshot', 'error');
+}
+
 function wireDeleteButtons(txnList, stream, summaryEl) {
   txnList.querySelectorAll('[data-action="delete"]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this transaction? This cannot be undone.')) return;
       try {
-        await API.delete(stream.txnTable, btn.dataset.id);
+        warnLandSpread(await API.delete(stream.txnTable, btn.dataset.id));
         btn.closest('.txn-row').remove();
         STATE.historyRows = STATE.historyRows.filter(r => String(r.id) !== String(btn.dataset.id));
         const filtered = STATE.assetFilter
@@ -1021,8 +1031,9 @@ async function saveEdits(txnList, area) {
   saveBtn.textContent = 'Saving...';
 
   try {
-    await API.batchUpdate(stream.txnTable, edited);
+    const res = await API.batchUpdate(stream.txnTable, edited);
     showToast(`${edited.length} transaction(s) saved.`);
+    warnLandSpread(res);
     STATE.editMode = false;
     if (area) renderHistoryInArea(area);
   } catch (err) {
