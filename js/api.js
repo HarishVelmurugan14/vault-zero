@@ -41,7 +41,8 @@ const API = {
     return this._post({ action: 'delete', sheet, id });
   },
 
-  async _post(payload) {
+  // invalidate: false only for writes that change nothing the app has cached (the monthly note).
+  async _post(payload, { invalidate = true } = {}) {
     try {
       const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
         method: 'POST',
@@ -56,11 +57,13 @@ const API = {
       // Any write can change Holdings, Insights and the snapshot chart / panel — drop them all here,
       // even when the request failed (it may have saved part of its work, e.g. a Take snapshot
       // that logged your prices before a download failed).
-      if (typeof _insightsCache !== 'undefined') _insightsCache = null;
-      if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
-      try { LSC.clear('insights', 'holdings'); } catch (_) {}
-      if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
-      if (typeof _historyFull !== 'undefined') _historyFull = {};
+      if (invalidate) {
+        if (typeof _insightsCache !== 'undefined') _insightsCache = null;
+        if (typeof _holdingsAllRows !== 'undefined') _holdingsAllRows = null;
+        try { LSC.clear('insights', 'holdings'); } catch (_) {}
+        if (typeof invalidateSnapshots === 'function') invalidateSnapshots();
+        if (typeof _historyFull !== 'undefined') _historyFull = {};
+      }
     }
   },
 
@@ -132,6 +135,15 @@ async function fetchAssetsCached(stream) {
   if (cached) return cached;
   const data = await API.getAssets(stream);
   CACHE.set(stream.assetTable, { is_active: true }, data.rows);
+  return data.rows;
+}
+
+// Every asset, active or not — past transactions (History, Recent) still need their names
+async function fetchAllAssetsCached(stream) {
+  const cached = CACHE.get(stream.assetTable, { all: true });
+  if (cached) return cached;
+  const data = await API.get(stream.assetTable, { limit: 1000000 });
+  CACHE.set(stream.assetTable, { all: true }, data.rows);
   return data.rows;
 }
 
@@ -288,6 +300,16 @@ API.snapshot = async function(action, params = {}) {
 // "Take snapshot" (Insights): saves the manual prices and builds this month's snapshot (8th–14th).
 API.takeSnapshot = function(prices) {
   return this._post({ action: 'takeSnapshot', prices });
+};
+
+// The Factsheet's monthly note, saved right after a Take snapshot (gas/snapshot.gs vzsSaveNote_).
+API.saveManagerNote = function(month, account, note) {
+  return this._post({ action: 'saveManagerNote', month, account, note }, { invalidate: false });
+};
+
+// That month's "What's happening" feed, saved with the note (gas/snapshot.gs vzsSavePatterns_).
+API.savePatternHistory = function(month, account, rows) {
+  return this._post({ action: 'savePatternHistory', month, account, rows }, { invalidate: false });
 };
 
 // ── localStorage cache with 30-minute TTL ──────────────────────────────────────

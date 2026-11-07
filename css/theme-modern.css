@@ -451,22 +451,17 @@ html[data-theme="modern"] .insights-subnav::-webkit-scrollbar { display: none; }
 html[data-theme="modern"] .insights-subnav-tab { flex: 0 0 auto; }
 
 /* Small labels: sentence case, no tracking — Classic's uppercase captions don't belong here. */
-html[data-theme="modern"] :is(.ht-subcat-name, .mf-badge, .cg-lbl, .proj-mile-y, .history-summary-label, .recent-day-head,
+html[data-theme="modern"] :is(.ht-subcat-name, .mf-badge, .history-summary-label, .recent-day-head,
   .liquidity-tier-label, .holdings-acct-breakdown .hab-title, .mf-drill-title, .summary-card-label) {
   text-transform: none; letter-spacing: 0;
 }
-html[data-theme="modern"] :is(.cg-lbl, .proj-mile-y, .history-summary-label, .summary-card-label, .holdings-acct-breakdown .hab-title, .mf-drill-title) {
+html[data-theme="modern"] :is(.history-summary-label, .summary-card-label, .holdings-acct-breakdown .hab-title, .mf-drill-title) {
   font-size: 12px; font-weight: 500; color: var(--text-muted);
 }
 html[data-theme="modern"] .recent-day-head { font-size: 13px; font-weight: 600; color: var(--text-sub); margin: 20px 2px 8px; }
 html[data-theme="modern"] .mf-badge { font-size: 11px; font-weight: 600; padding: 2px 9px; }
 
-/* Plan milestones: borderless tiles, the target one tinted green */
-html[data-theme="modern"] .proj-mile { border: none; border-radius: var(--radius-sm); background: var(--fill-2); padding: 10px 14px; }
-html[data-theme="modern"] .proj-mile-tgt { background: color-mix(in srgb, var(--positive) 12%, transparent); }
-html[data-theme="modern"] .proj-mile-v { font-weight: 650; }
-
-/* Liquidity ladder: a list like Health Check, each tier marked by a coloured dot */
+/* Liquidity ladder: a plain list, each tier marked by a coloured dot */
 html[data-theme="modern"] .liquidity-ladder { gap: 0; }
 html[data-theme="modern"] .liquidity-tier {
   background: none; border: none; border-radius: 0; padding: 13px 2px; box-shadow: inset 0 -0.5px 0 var(--border);
@@ -483,19 +478,6 @@ html[data-theme="modern"] .liquidity-tier-label::before {
 html[data-theme="modern"] .liquidity-tier-streams { font-size: 13px; }
 html[data-theme="modern"] .liquidity-tier-amount { font-weight: 650; }
 
-/* Health check: a clean list, each status dot with a soft halo */
-html[data-theme="modern"] .healthcheck-list { gap: 0; }
-html[data-theme="modern"] .hc-item {
-  background: none; border-left: none; border-radius: 0; padding: 13px 2px; gap: 12px; font-size: 14px;
-  box-shadow: inset 0 -0.5px 0 var(--border);
-}
-html[data-theme="modern"] .hc-item:last-child { box-shadow: none; }
-html[data-theme="modern"] .hc-dot { margin-top: 6px; background: var(--hc-c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--hc-c) 18%, transparent); }
-html[data-theme="modern"] .hc-good { --hc-c: var(--positive); }
-html[data-theme="modern"] .hc-warn { --hc-c: #ff9f0a; }
-html[data-theme="modern"] .hc-bad  { --hc-c: var(--negative); }
-html[data-theme="modern"] .hc-info { --hc-c: #7d7aff; }
-
 /* Tables: hairline rows, quiet headers, no box inside the card */
 html[data-theme="modern"] .report-table-wrap { border: none; border-radius: 0; }
 html[data-theme="modern"] .report-table th {
@@ -506,8 +488,6 @@ html[data-theme="modern"] .report-table td { border-bottom: 0.5px solid var(--bo
 html[data-theme="modern"] .report-table td:first-child { font-weight: 500; }
 html[data-theme="modern"] .report-table tr:hover td { background: var(--fill-2); }
 html[data-theme="modern"] .report-table .total-row td { background: transparent; font-weight: 650; border-top: 0.5px solid var(--border-2); }
-html[data-theme="modern"] .comp-bar { height: 6px; border-radius: 999px; background: var(--fill); }
-html[data-theme="modern"] .comp-bar-fill { border-radius: 999px; background: linear-gradient(90deg, #2997ff, #5e5ce6); }
 
 /* Holdings tree */
 html[data-theme="modern"] .holdings-tree { overflow: hidden; }
@@ -556,6 +536,31 @@ html[data-theme="modern"] .toast {
   background: rgba(28,28,30,0.88); color: #fff; border: none; border-radius: 999px;
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: var(--shadow-lg); font-weight: 500;
 }
+
+/* ── Factsheet (js/factsheet.js) ──────────────────────────────────────────────── */
+
+html[data-theme="modern"] .fs-scope { font-size: 12.5px; }
+html[data-theme="modern"] .fs-value { font-weight: 700; letter-spacing: -0.03em; }
+html[data-theme="modern"] .fs-ret { background: var(--fill-2); border: none; border-radius: var(--radius-sm); padding: 12px 14px; }
+html[data-theme="modern"] .fs-ret-label { letter-spacing: 0.02em; text-transform: none; font-size: 12px; font-weight: 600; }
+html[data-theme="modern"] .fs-ret-value { font-size: 20px; letter-spacing: -0.02em; }
+html[data-theme="modern"] .fs-stats span { letter-spacing: 0.02em; text-transform: none; font-size: 12px; font-weight: 600; }
+html[data-theme="modern"] .fs-note-month { letter-spacing: 0.02em; text-transform: none; font-size: 12px; }
+html[data-theme="modern"] .fs-note-lines li { font-size: 14px; color: var(--text); }
+html[data-theme="modern"] .attr-custom { background: transparent; box-shadow: none; border-radius: 0; padding: 0; }
+html[data-theme="modern"] .attr-picker { padding-top: 14px; padding-bottom: 14px; }
+html[data-theme="modern"] .wh-card { background: var(--fill-2); border: none; border-left: 3px solid var(--wh-c); border-radius: var(--radius-sm); }
+html[data-theme="modern"] .wh-who { text-transform: none; letter-spacing: 0.01em; font-size: 12px; font-weight: 600; }
+html[data-theme="modern"] .wh-headline { font-size: 14.5px; }
+html[data-theme="modern"] .tr-card { background: var(--fill-2); border: none; }
+html[data-theme="modern"] .tr-card.tr-stagnant { border-left: 3px solid var(--accent); }
+html[data-theme="modern"] .tr-win > span { text-transform: none; letter-spacing: 0.01em; font-size: 11px; font-weight: 600; }
+html[data-theme="modern"] .fs-help { background: var(--fill-2); border-radius: var(--radius-sm); font-size: 13px; }
+html[data-theme="modern"] .fs-help-btn { width: 20px; height: 20px; font-size: 15px; vertical-align: -2px; }
+html[data-theme="modern"] .wh-card .fs-help { background: var(--surface); }
+html[data-theme="modern"] .gd-entry summary { font-size: 14.5px; }
+html[data-theme="modern"] :is(.gd-lead, .gd-p) { font-size: 14px; color: var(--text); }
+html[data-theme="modern"] .gd-terms dt { font-size: 14px; }
 
 /* ── Manage: inset grouped list with iOS switches ──────────────────────────── */
 

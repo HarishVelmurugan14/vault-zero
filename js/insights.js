@@ -124,6 +124,8 @@ let _insightsCache = null;
 let _insightsCharts = [];
 let _manualPricesMap = {};
 let _usAux = { wires: [], repats: [], income: [] };
+let _benchCheckDone = false;   // the "no benchmark" toast shows once per page load
+let _insightsPartial = false;  // the last load missed tables (its own toast is showing)
 
 const INSIGHT_FILTERS = {
   catNames:    [],
@@ -170,9 +172,30 @@ async function renderInsights() {
     _insightsCharts.forEach(c => { try { c.destroy(); } catch (_) {} });
     _insightsCharts = [];
     renderInsightsPage(container, _insightsCache);
+    if (!_benchCheckDone && !_insightsPartial) {               // never cover the partial-load warning
+      _benchCheckDone = true;
+      const missing = computeUnbenchmarked(_insightsCache);
+      if (missing.length) showToast('No benchmark for: ' + missing.join(', ') + ' — add a rule to BENCHMARK_MAP (js/data.js)', 'error');
+    }
   } catch (err) {
     container.innerHTML = `<div class="insights-empty">Failed to load: ${err.message}</div>`;
   }
+}
+
+// Held, visible, in-scope assets that no BENCHMARK_MAP rule covers → their names.
+function computeUnbenchmarked(rawData) {
+  const names = [];
+  (rawData || []).forEach(entry => {
+    if (!isInFundScope(entry.catId) || HIDDEN.isCat(entry.catId)) return;
+    const { stream } = entry;
+    entry.assets.forEach(a => {
+      if (String(a.is_active).toUpperCase() !== 'TRUE') return;
+      if (HIDDEN.isAsset(stream.assetTable, a.id) || HIDDEN.isSub(a.subcategory_id)) return;
+      const name = String(a[stream.assetNameCol] || '').trim();
+      if (!benchmarkFor(entry.catId, name)) names.push(name || `${stream.assetTable} #${a.id}`);
+    });
+  });
+  return names;
 }
 
 // ── Page layout ───────────────────────────────────────────────────────────────
@@ -476,26 +499,30 @@ function restyleInsightsCharts() {
 }
 
 
-function makeReportCard(title, divId, fullWidth = false) {
+// help: a GUIDE key (js/guide.js) — an ⓘ in the title opens its plain-English note.
+function makeReportCard(title, divId, fullWidth = false, help = '') {
   const card = document.createElement('div');
   card.className = 'chart-card' + (fullWidth ? ' chart-card-full' : '');
   card.innerHTML = `
-    <div class="chart-card-title">${title}</div>
+    <div class="chart-card-title">${title}${help ? buildHelpButton(GUIDE[help].title) : ''}</div>
+    ${help ? buildHelpPanel(help) : ''}
     <div id="${divId}"></div>
   `;
   return card;
 }
 
 const INSIGHT_TABS = [
-  { id: 'overview',    label: 'Overview' },
-  { id: 'allocation',  label: 'Allocation' },
-  { id: 'performance', label: 'Performance' },
-  { id: 'plan',        label: 'Plan' },
+  { id: 'factsheet',   label: 'Factsheet' },
+  { id: 'happening',   label: 'What\'s happening' },
+  { id: 'trends',      label: 'Trends' },
+  { id: 'attribution', label: 'Attribution' },
+  { id: 'positions',   label: 'Positions' },
   { id: 'funds',       label: 'Funds' },
-  { id: 'risk',        label: 'Risk' },
   { id: 'tax',         label: 'Tax' },
+  { id: 'networth',    label: 'Net worth' },
+  { id: 'guide',       label: 'Guide' },
 ];
-let _insightsActiveTab = 'overview';
+let _insightsActiveTab = 'factsheet';
 
 function drawCharts(chartsArea, rawData) {
   const filtered = applyFilters(rawData);
@@ -562,90 +589,47 @@ function renderInsightsTab(container, agg, filtered, rawData) {
 
   const row2 = () => { const d = document.createElement('div'); d.className = 'insights-grid-2'; return d; };
   const tab  = _insightsActiveTab;
-  if (tab === 'plan') { renderPlanTab(container, agg, filtered, rawData); return; }
+  if (tab === 'factsheet') { renderFactsheetTab(container, rawData); return; }   // js/factsheet.js — snapshots, not the filters
+  if (tab === 'happening') { renderHappeningTab(container, rawData); return; }   // js/happening.js — pattern feed
+  if (tab === 'trends') { renderTrendsTab(container); return; }   // js/trends.js — holdings vs own benchmark
+  if (tab === 'attribution') { renderAttributionTab(container); return; }   // js/attribution.js — same data
+  if (tab === 'positions') { renderPositionsTab(container, rawData); return; }   // js/positions.js — + transactions
+  if (tab === 'tax') { renderTaxTab(container, rawData); return; }   // js/tax.js — FIFO lots, current rules
+  if (tab === 'guide') { renderGuideTab(container); return; }   // js/guide.js — what every number means
 
-  if (tab === 'overview') {
-    container.appendChild(buildSnapshotTake());
-    container.appendChild(buildHealthCheck(agg, filtered, rawData));
-    container.appendChild(makeChartCard('Portfolio Growth', 'chart-cumulative', true));
-    container.appendChild(buildSnapshotCard());
+  if (tab === 'networth') {
+    // Everything, not only the fund: EPF, bank, debt funds and land included; the filters apply.
+    container.appendChild(makeChartCard('Portfolio Growth', 'chart-cumulative', true, 'nw_growth'));
     const r = row2();
-    r.appendChild(makeChartCard('Portfolio by Bucket', 'chart-bucket'));
-    r.appendChild(makeChartCard('Portfolio by Category', 'chart-category'));
+    r.appendChild(makeChartCard('Portfolio by Bucket', 'chart-bucket', false, 'nw_split'));
+    r.appendChild(makeChartCard('Portfolio by Category', 'chart-category', false, 'nw_split'));
     container.appendChild(r);
+    const r2 = row2();
+    r2.appendChild(makeChartCard('Currency Exposure', 'chart-currency', false, 'nw_currency'));
+    r2.appendChild(makeChartCard('Yearly Summary', 'chart-yearly', false, 'nw_yearly'));
+    container.appendChild(r2);
+    container.appendChild(makeReportCard('Stream-wise P&L', 'report-stream-table', true, 'nw_streams'));
+    container.appendChild(makeReportCard('Liquidity Ladder', 'report-liquidity', true, 'nw_liquidity'));
     requestAnimationFrame(() => {
       drawCumulativeChart(agg.allMonthlyNet, agg.xirrValue);         // same scope as the cost line (market assets)
-      drawSnapshotTake();
-      drawSnapshotCard();
       drawBucketChart(agg.byBucket);
       drawCategoryChart(agg.byCategory);
-    });
-
-  } else if (tab === 'allocation') {
-    const r1 = row2();
-    r1.appendChild(makeChartCard('Portfolio by Subcategory', 'chart-subcat'));
-    r1.appendChild(makeChartCard('Allocation by Current Value', 'chart-alloc-cv'));
-    container.appendChild(r1);
-    container.appendChild(makeReportCard('Core vs Satellite', 'report-core-sat', true));
-    container.appendChild(makeReportCard('Composition by Category', 'report-comp-cat', true));
-    container.appendChild(makeReportCard('Subcategory Composition (within category)', 'report-comp-subcat', true));
-    const r2 = row2();
-    r2.appendChild(makeChartCard('Currency Exposure', 'chart-currency'));
-    r2.appendChild(makeChartCard('Equity Cap Split (Actual vs Target)', 'chart-capsplit'));
-    container.appendChild(r2);
-    requestAnimationFrame(() => {
-      drawSubcatChart(agg.bySubcat);
-      drawAllocCvChart(agg.byCategory);
-      drawCoreSatellite('report-core-sat', agg);
-      drawCategoryComposition('report-comp-cat', agg);
-      drawSubcatComposition('report-comp-subcat', agg);
       drawCurrencyChart('chart-currency', agg.byCategory);
-      drawCapSplitChart('chart-capsplit', agg.bySubcat);
-      enhanceReportTables(container);
-    });
-
-  } else if (tab === 'performance') {
-    container.appendChild(makeReportCard('Stream-wise P&L', 'report-stream-table', true));
-    container.appendChild(makeChartCard('Rolling XIRR Trend', 'chart-xirr-trend', true));
-    container.appendChild(makeChartCard('Profit by Investment Year (Vintage)', 'chart-vintage', true));
-    const r = row2();
-    r.appendChild(makeChartCard('Monthly Investment', 'chart-monthly'));
-    r.appendChild(makeChartCard('Yearly Summary', 'chart-yearly'));
-    container.appendChild(r);
-    container.appendChild(makeReportCard('Monthly Contributions', 'report-monthly-table', true));
-    requestAnimationFrame(() => {
-      drawStreamTable('report-stream-table', agg);
-      drawXirrTrend('chart-xirr-trend', filtered);
-      drawVintageChart('chart-vintage', filtered);
-      drawMonthlyChart(agg.byMonth);
       drawYearlyChart(agg.byYear);
-      drawMonthlyTable('report-monthly-table', agg);
+      drawStreamTable('report-stream-table', agg);
+      drawLiquidityLadder('report-liquidity', agg.byCategory, agg.netInvested);
       enhanceReportTables(container);
     });
 
   } else if (tab === 'funds') {
-    container.appendChild(makeReportCard('Indian EQ Mutual Funds — Per-Fund P&L (FIFO)', 'report-mf-detail', true));
-    container.appendChild(makeChartCard('Realized P&L by Category', 'chart-pnl', true));
+    container.appendChild(makeReportCard('Indian EQ Mutual Funds — Per-Fund P&L (FIFO)', 'report-mf-detail', true, 'funds_mf'));
+    container.appendChild(makeChartCard('Realized P&L by Category', 'chart-pnl', true, 'funds_realized'));
     requestAnimationFrame(() => {
       drawMFReport('report-mf-detail', filtered);                     // selected account, hides respected
       drawPnLChart(agg.byCategory);
       enhanceReportTables(container);
     });
 
-  } else if (tab === 'risk') {
-    container.appendChild(makeReportCard('Liquidity Ladder', 'report-liquidity', true));
-    container.appendChild(makeChartCard('Top 10 Holdings', 'chart-top-holdings', true));
-    requestAnimationFrame(() => {
-      drawLiquidityLadder('report-liquidity', agg.byCategory, agg.netInvested);
-      drawTopHoldingsChart(agg.topHoldings);
-    });
-
-  } else if (tab === 'tax') {
-    container.appendChild(makeReportCard('Estimated Tax Liability', 'report-tax-table', true));
-    requestAnimationFrame(() => {
-      drawTaxTable('report-tax-table', agg.byCategory);
-      enhanceReportTables(container);
-    });
   }
 }
 
@@ -668,6 +652,7 @@ async function fetchAllInsightsData() {
   await HIDDEN.load();
   await ACCOUNTS.load();
   const cached = LSC.get('insights');
+  _insightsPartial = false;
   if (cached) {
     _manualPricesMap = cached.manualPrices || {};
     _usAux = cached.usAux || { wires: [], repats: [], income: [] };
@@ -723,6 +708,7 @@ async function fetchAllInsightsData() {
     } catch (_) {}
   }
 
+  _insightsPartial = partial;
   if (partial) showToast('Some tables failed to load — Insights may be incomplete (not cached; Refresh to retry)', 'error');
   else LSC.set('insights', { entries: data, manualPrices: _manualPricesMap, usAux: _usAux });   // never cache a partial view
   return data;
@@ -787,30 +773,19 @@ function computeAssetMetrics(stream, txns, inWindow) {
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 function aggregateInsights(filteredData) {
-  let totalInvested = 0, totalRedeemed = 0, totalRealizedPnL = 0;
+  let totalRealizedPnL = 0;
   let totalCurrentValue = 0, totalUnrealizedPnL = 0;
   const byCategory    = {};
   const byBucket      = {};
-  const bySubcat      = {};
-  const byCatSubcat   = {};   // catName → { subcatName → { netCost, currentValue } }
-  const byMonth       = {};
   const byYear        = {};
   const allMonthlyNet = {};
-  const topHoldings   = [];
   const allCashflows  = [];
   const unpricedAssets = [], oversoldAssets = [];
   let xirrValue = 0;                    // value of the assets whose cashflows XIRR sees (not EPF / bank / US cash)
   const dateFiltered = filteredData.some(e => e.inWindow);
 
-  const addCatSub = (cat, sub, nc, cv) => {
-    if (!byCatSubcat[cat]) byCatSubcat[cat] = {};
-    if (!byCatSubcat[cat][sub]) byCatSubcat[cat][sub] = { netCost: 0, currentValue: 0 };
-    byCatSubcat[cat][sub].netCost      += nc;
-    byCatSubcat[cat][sub].currentValue += cv;
-  };
-
   filteredData.forEach(entry => {
-    const { catName, bucketId, subcatName, stream, assets, txns } = entry;
+    const { catName, bucketId, stream, assets, txns } = entry;
     const bucket = BUCKETS.find(b => b.id === bucketId);
 
     if (!byCategory[catName]) byCategory[catName] = { netCost: 0, realizedPnL: 0, totalBought: 0, totalSold: 0, cashflows: [], firstBuyDate: null };
@@ -870,11 +845,11 @@ function aggregateInsights(filteredData) {
           if (entry.inWindow && !entry.inWindow(x.txn)) return;
           const r = x.proceeds - x.cost;
           byCategory[catName].realizedPnL += r; totalRealizedPnL += r;
-          byCategory[catName].totalSold   += x.proceeds; totalRedeemed += x.proceeds;
+          byCategory[catName].totalSold   += x.proceeds;
           const dt = txnDay(x.txn.txn_date);
           if (!isNaN(dt) && x.proceeds > 0) { byCategory[catName].cashflows.push({ amount: x.proceeds, date: dt }); allCashflows.push({ amount: x.proceeds, date: dt }); }
           const month = localYMD(x.txn.txn_date).slice(0, 7), year = localYMD(x.txn.txn_date).slice(0, 4);
-          if (month) { if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 }; byMonth[month].redeemed += x.proceeds; allMonthlyNet[month] = (allMonthlyNet[month] || 0) - x.cost; }
+          if (month) allMonthlyNet[month] = (allMonthlyNet[month] || 0) - x.cost;
           if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].redeemed  += x.proceeds; }
         });
         // INR cashflows for XIRR + monthly/yearly invested — every buy, also of a fully sold asset
@@ -887,13 +862,13 @@ function aggregateInsights(filteredData) {
           const cf = { amount: -inr, date: dt };
           byCategory[catName].cashflows.push(cf);
           allCashflows.push({ ...cf });
-          totalInvested += inr; byCategory[catName].totalBought += inr;   // every buy of the period, like the rupee streams
+          byCategory[catName].totalBought += inr;   // every buy of the period, like the rupee streams
           if (!byCategory[catName].firstBuyDate || dt < byCategory[catName].firstBuyDate) {
             byCategory[catName].firstBuyDate = dt;
           }
           const month = localYMD(t.txn_date).slice(0, 7);
           const year  = localYMD(t.txn_date).slice(0, 4);
-          if (month) { if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 }; byMonth[month].invested += inr; allMonthlyNet[month] = (allMonthlyNet[month] || 0) + inr; }
+          if (month) allMonthlyNet[month] = (allMonthlyNet[month] || 0) + inr;
           if (year)  { if (!byYear[year])   byYear[year]   = { invested: 0, redeemed: 0 }; byYear[year].invested  += inr; }
         });
         if (d.oversold) oversoldAssets.push(asset ? asset[stream.assetNameCol] : aid);
@@ -905,12 +880,6 @@ function aggregateInsights(filteredData) {
         const curVal    = unpriced ? netCost : d.netQty * priceINR;
         const unrealPnL = unpriced ? 0 : curVal - netCost;
 
-        const resolvedSubcat = SUBCAT_NAMES[asset?.subcategory_id] || catName;
-        if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
-        bySubcat[resolvedSubcat].netCost      += netCost;
-        bySubcat[resolvedSubcat].currentValue += curVal;
-        addCatSub(catName, resolvedSubcat, netCost, curVal);
-
         byCategory[catName].netCost       += netCost;
         byCategory[catName].currentValue   = (byCategory[catName].currentValue  || 0) + curVal;
         byCategory[catName].unrealizedPnL  = (byCategory[catName].unrealizedPnL || 0) + unrealPnL;
@@ -920,10 +889,6 @@ function aggregateInsights(filteredData) {
         totalUnrealizedPnL += unrealPnL;
         xirrValue          += curVal;
         byCategory[catName].xirrValue = (byCategory[catName].xirrValue || 0) + curVal;
-
-        if (netCost > 100 && asset) {
-          topHoldings.push({ name: asset[stream.assetNameCol], catName, account: asset.account_id, netCost, currentValue: curVal });
-        }
 
       });
 
@@ -942,10 +907,6 @@ function aggregateInsights(filteredData) {
         byCategory[catName].currentValue  = (byCategory[catName].currentValue || 0) + cashInr;
         byBucket[bucketId].netCost       += cashInr;
         byBucket[bucketId].currentValue   = (byBucket[bucketId].currentValue || 0) + cashInr;
-        if (!bySubcat['Cash']) bySubcat['Cash'] = { netCost: 0, currentValue: 0 };
-        bySubcat['Cash'].netCost      += cashInr;
-        bySubcat['Cash'].currentValue += cashInr;
-        addCatSub(catName, 'Cash', cashInr, cashInr);
         totalCurrentValue += cashInr;
       }
       return;
@@ -982,12 +943,6 @@ function aggregateInsights(filteredData) {
       const curVal    = m.currentQty > 0 ? (unpriced ? m.netCost : m.currentQty * priceINR) : 0;
       const unrealPnL = unpriced ? 0 : curVal - m.netCost;
 
-      const resolvedSubcat = subcatName || SUBCAT_NAMES[asset?.subcategory_id] || catName;
-      if (!bySubcat[resolvedSubcat]) bySubcat[resolvedSubcat] = { netCost: 0, currentValue: 0 };
-      bySubcat[resolvedSubcat].netCost      += m.netCost;
-      bySubcat[resolvedSubcat].currentValue += curVal;
-      addCatSub(catName, resolvedSubcat, m.netCost, curVal);
-
       byCategory[catName].netCost        += m.netCost;
       byCategory[catName].realizedPnL    += m.realizedPnL;
       byCategory[catName].totalBought    += m.totalBought;
@@ -996,17 +951,11 @@ function aggregateInsights(filteredData) {
       byCategory[catName].unrealizedPnL  = (byCategory[catName].unrealizedPnL || 0) + unrealPnL;
       byBucket[bucketId].netCost         += m.netCost;
       byBucket[bucketId].currentValue    = (byBucket[bucketId].currentValue || 0) + curVal;
-      totalInvested      += m.totalBought;
-      totalRedeemed      += m.totalSold;
       totalRealizedPnL   += m.realizedPnL;
       totalCurrentValue  += curVal;
       totalUnrealizedPnL += unrealPnL;
       xirrValue          += curVal;                                     // market assets only (XIRR)
       byCategory[catName].xirrValue = (byCategory[catName].xirrValue || 0) + curVal;
-
-      if (m.netCost > 100 && asset) {
-        topHoldings.push({ name: asset[stream.assetNameCol], catName, account: asset.account_id, netCost: m.netCost, currentValue: curVal });
-      }
 
       // Collect cashflows for XIRR — a sell counts only what the units actually held brought in
       const sellOf = new Map(m.sells.map(x => [x.txn, x]));
@@ -1030,8 +979,6 @@ function aggregateInsights(filteredData) {
         const month = localYMD(t.txn_date).slice(0, 7);
         const year  = localYMD(t.txn_date).slice(0, 4);
         if (month) {
-          if (!byMonth[month]) byMonth[month] = { invested: 0, redeemed: 0 };
-          t.txn_type === 'Buy' ? (byMonth[month].invested += amt) : (byMonth[month].redeemed += amt);
           allMonthlyNet[month] = (allMonthlyNet[month] || 0) + (t.txn_type === 'Buy' ? amt : -(costOut.get(t) || 0));
         }
         if (year) {
@@ -1042,7 +989,6 @@ function aggregateInsights(filteredData) {
     });
   });
 
-  topHoldings.sort((a, b) => b.netCost - a.netCost);
   const netInvested = Object.values(byCategory).reduce((s, c) => s + c.netCost, 0);
 
   // XIRR: cashflows + today's value of the SAME assets. EPF / bank balances and uninvested US cash
@@ -1059,10 +1005,9 @@ function aggregateInsights(filteredData) {
   const overallXIRR = dateFiltered ? null : computeXIRR(allCfs);
 
   return {
-    totalInvested, totalRedeemed, totalRealizedPnL, netInvested,
+    totalRealizedPnL, netInvested,
     totalCurrentValue, totalUnrealizedPnL, overallXIRR,
-    byCategory, byBucket, bySubcat, byCatSubcat, byMonth, byYear,
-    topHoldings: topHoldings.slice(0, 10),
+    byCategory, byBucket, byYear,
     allMonthlyNet, xirrValue, unpricedAssets, oversoldAssets, dateFiltered,
   };
 }
@@ -1158,17 +1103,6 @@ const CURRENCY_MAP = {
   'Real Estate':               'INR',
   'US Equity':                 'USD',
   'Cryptocurrency':            'Crypto',
-};
-
-const TAX_CONFIG = {
-  'Indian EQ MF':              { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
-  'Indian Equity Stocks':      { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
-  'US Equity':                 { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
-  'Debt & Hybrid MF':          { ltcgMonths: null, rate: 'income', note: 'Taxed as income' },
-  'Precious Metals (Digital)': { ltcgMonths: 12, ltcgRate: 0.10, stcgRate: 0.15 },
-  'Precious Metals (Physical)':{ ltcgMonths: 36, ltcgRate: 0.20, stcgRate: 0.30 },
-  'Real Estate':               { ltcgMonths: 24, ltcgRate: 0.20, stcgRate: 0.30 },
-  'Cryptocurrency':            { ltcgMonths: null, rate: 0.30, note: 'Flat 30%' },
 };
 
 // ── Stream-wise P&L table ─────────────────────────────────────────────────────
@@ -1319,101 +1253,6 @@ function makeTableSortable(table) {
   });
 }
 
-// ── Composition % tables ──────────────────────────────────────────────────────
-
-function _compVal(x) { return (x && x.currentValue > 0) ? x.currentValue : (x && x.netCost) || 0; }
-
-// Category-wise composition: each category's share of the whole portfolio.
-function drawCategoryComposition(divId, agg) {
-  const wrap = document.getElementById(divId);
-  if (!wrap) return;
-  const rows = Object.entries(agg.byCategory)
-    .map(([name, c]) => ({ name, val: _compVal(c) }))
-    .filter(r => r.val > 0)
-    .sort((a, b) => b.val - a.val);
-  const total = rows.reduce((s, r) => s + r.val, 0);
-  if (!total) { wrap.innerHTML = '<p class="chart-empty">No data.</p>'; return; }
-
-  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
-    <th style="text-align:left">Category</th><th>Value</th><th>% of Portfolio</th><th></th>
-  </tr></thead><tbody>`;
-  rows.forEach(r => {
-    const pct = r.val / total * 100;
-    html += `<tr>
-      <td>${CAT_ICONS[r.name] ? `<span class="stream-icon">${CAT_ICONS[r.name]}</span>` : ''}${r.name}</td>
-      <td>${fmtCurrency(r.val)}</td>
-      <td>${pct.toFixed(1)}%</td>
-      <td style="width:130px"><div class="comp-bar"><div class="comp-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div></td>
-    </tr>`;
-  });
-  html += `<tr class="total-row"><td>Total</td><td>${fmtCurrency(total)}</td><td>100%</td><td></td></tr>`;
-  html += `</tbody></table></div>`;
-  wrap.innerHTML = html;
-}
-
-// Within each category, the subcategory composition (only multi-subcat categories).
-function drawSubcatComposition(divId, agg) {
-  const wrap = document.getElementById(divId);
-  if (!wrap) return;
-  const cats = Object.entries(agg.byCatSubcat || {})
-    .map(([cat, subs]) => {
-      const rows = Object.entries(subs)
-        .map(([sub, v]) => ({ sub, val: _compVal(v) }))
-        .filter(r => r.val > 0)
-        .sort((a, b) => b.val - a.val);
-      return { cat, rows, total: rows.reduce((s, r) => s + r.val, 0) };
-    })
-    .filter(c => c.rows.length > 1 && c.total > 0)
-    .sort((a, b) => b.total - a.total);
-
-  if (!cats.length) { wrap.innerHTML = '<p class="chart-empty">No multi-subcategory data.</p>'; return; }
-
-  let html = '';
-  cats.forEach(c => {
-    html += `<div class="comp-group"><div class="comp-group-title">${CAT_ICONS[c.cat] ? `<span class="stream-icon">${CAT_ICONS[c.cat]}</span>` : ''}${c.cat}</div>
-      <div class="report-table-wrap"><table class="report-table"><thead><tr>
-        <th style="text-align:left">Subcategory</th><th>Value</th><th>% of category</th><th></th>
-      </tr></thead><tbody>`;
-    c.rows.forEach(r => {
-      const pct = r.val / c.total * 100;
-      html += `<tr>
-        <td>${r.sub}</td><td>${fmtCurrency(r.val)}</td><td>${pct.toFixed(1)}%</td>
-        <td style="width:130px"><div class="comp-bar"><div class="comp-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div></td>
-      </tr>`;
-    });
-    html += `</tbody></table></div></div>`;
-  });
-  wrap.innerHTML = html;
-}
-
-// Amount contributed per month (invested / redeemed / net), newest first.
-function drawMonthlyTable(divId, agg) {
-  const wrap = document.getElementById(divId);
-  if (!wrap) return;
-  const months = Object.keys(agg.byMonth).sort((a, b) => b.localeCompare(a));
-  if (!months.length) { wrap.innerHTML = '<p class="chart-empty">No transactions.</p>'; return; }
-
-  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
-    <th style="text-align:left">Month</th><th>Invested</th><th>Redeemed</th><th>Net</th>
-  </tr></thead><tbody>`;
-  let tInv = 0, tRed = 0;
-  months.forEach(m => {
-    const inv = agg.byMonth[m].invested || 0, red = agg.byMonth[m].redeemed || 0, net = inv - red;
-    tInv += inv; tRed += red;
-    html += `<tr>
-      <td data-sort="${m}">${monthLabel(m)}</td>
-      <td>${fmtCurrency(inv)}</td>
-      <td>${red > 0 ? fmtCurrency(red) : '—'}</td>
-      <td class="${net >= 0 ? 'positive' : 'negative'}">${net >= 0 ? '+' : '-'}${fmtCurrency(Math.abs(net))}</td>
-    </tr>`;
-  });
-  const tNet = tInv - tRed;
-  html += `<tr class="total-row"><td>Total</td><td>${fmtCurrency(tInv)}</td><td>${tRed > 0 ? fmtCurrency(tRed) : '—'}</td>
-    <td class="${tNet >= 0 ? 'positive' : 'negative'}">${tNet >= 0 ? '+' : '-'}${fmtCurrency(Math.abs(tNet))}</td></tr>`;
-  html += `</tbody></table></div>`;
-  wrap.innerHTML = html;
-}
-
 // ── Liquidity Ladder ──────────────────────────────────────────────────────────
 
 function drawLiquidityLadder(divId, byCategory, totalInvested) {
@@ -1473,108 +1312,15 @@ function drawCurrencyChart(canvasId, byCategory) {
   });
 }
 
-// ── Equity Cap Split bar ──────────────────────────────────────────────────────
-
-function drawCapSplitChart(canvasId, bySubcat) {
-  const capCats = ['Large Cap', 'Mid Cap', 'Small Cap'];
-  const equityTotal = capCats.reduce((s, c) => s + (bySubcat[c]?.netCost || 0), 0);
-  if (equityTotal < 1) return emptyCard(canvasId, 'No equity mutual fund subcategory data.');
-
-  const actual  = capCats.map(c => equityTotal > 0 ? (bySubcat[c]?.netCost || 0) / equityTotal * 100 : 0);
-  const targets = [47, 35, 17];
-  const colors  = ['#f59e0b', '#a855f7', '#0ea5e9'];
-
-  newChart(canvasId, {
-    type: 'bar',
-    data: {
-      labels: capCats,
-      datasets: [
-        { label: 'Actual %',  data: actual.map(v => parseFloat(v.toFixed(1))),  backgroundColor: colors.map(c => c + 'cc'), borderRadius: 4 },
-        { label: 'Target %',  data: targets, backgroundColor: colors.map(c => c + '44'), borderRadius: 4, borderColor: colors, borderWidth: 1 },
-      ],
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        datalabels: { display: false },
-        legend: { position: 'top', labels: { color: CT().legend, padding: 12, usePointStyle: true } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%` } },
-      },
-      scales: {
-        x: { ticks: { color: CT().tick, font: { size: 11 } }, grid: { color: CT().grid, drawBorder: false } },
-        y: { ticks: { color: CT().tick, callback: v => v + '%', font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false }, beginAtZero: true, max: 70 },
-      },
-    },
-  });
-}
-
-// ── Tax Liability Table ───────────────────────────────────────────────────────
-
-function drawTaxTable(divId, byCategory) {
-  const wrap = document.getElementById(divId);
-  if (!wrap) return;
-
-  const today = new Date();
-  let hasData = false;
-  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
-    <th>Category</th><th>Unrealized Gain</th><th>First Buy</th><th>Holding Period</th><th>Type</th><th>Est. Tax</th>
-  </tr></thead><tbody>`;
-
-  Object.entries(byCategory).forEach(([name, cat]) => {
-    const gain = cat.currentValue ? cat.currentValue - cat.netCost : null;
-    if (!gain || gain <= 0) return;
-    const cfg = TAX_CONFIG[name];
-    if (!cfg) return;
-
-    const firstBuy = cat.firstBuyDate;
-    const holdMonths = firstBuy ? Math.floor((today - firstBuy) / (30.44 * 86400000)) : null;
-    const holdLabel = holdMonths !== null ? `${holdMonths}m` : '—';
-
-    let type = '—', estTax = null;
-
-    if (cfg.rate === 'income') {
-      type    = 'Income tax';
-      estTax  = null;
-    } else if (cfg.ltcgMonths === null) {
-      type   = `Flat ${(cfg.rate * 100).toFixed(0)}%`;
-      estTax = gain * cfg.rate;
-    } else if (holdMonths !== null) {
-      const isLTCG = holdMonths >= cfg.ltcgMonths;
-      type    = isLTCG ? 'LTCG' : 'STCG';
-      estTax  = gain * (isLTCG ? cfg.ltcgRate : cfg.stcgRate);
-    } else {
-      type = 'Unknown';
-    }
-
-    const taxCls = estTax !== null ? 'negative' : '';
-    html += `<tr>
-      <td><span class="stream-icon">${CAT_ICONS[name] || ''}</span>${name}</td>
-      <td class="positive">+${fmtCurrency(gain)}</td>
-      <td>${firstBuy ? firstBuy.toLocaleDateString('en-IN', { month:'short', year:'2-digit' }) : '—'}</td>
-      <td>${holdLabel}</td>
-      <td>${type}</td>
-      <td class="${taxCls}">${estTax !== null ? fmtCurrency(estTax) : cfg.note || '—'}</td>
-    </tr>`;
-    hasData = true;
-  });
-
-  if (!hasData) {
-    wrap.innerHTML = '<p class="chart-empty">No unrealized gains to estimate tax on.</p>';
-    return;
-  }
-
-  html += `</tbody></table></div>
-  <p class="report-disclaimer">Estimated only. Consult a tax professional. Does not account for indexation or ₹1L LTCG exemption on equity.</p>`;
-  wrap.innerHTML = html;
-}
-
 // ── Chart card wrapper ────────────────────────────────────────────────────────
 
-function makeChartCard(title, canvasId, fullWidth = false) {
+// help: a GUIDE key (js/guide.js) — an ⓘ in the title opens its plain-English note.
+function makeChartCard(title, canvasId, fullWidth = false, help = '') {
   const card = document.createElement('div');
   card.className = 'chart-card' + (fullWidth ? ' chart-card-full' : '');
   card.innerHTML = `
-    <div class="chart-card-title">${title}</div>
+    <div class="chart-card-title">${title}${help ? buildHelpButton(GUIDE[help].title) : ''}</div>
+    ${help ? buildHelpPanel(help) : ''}
     <div class="chart-canvas-wrap"><canvas id="${canvasId}"></canvas></div>
   `;
   return card;
@@ -1709,7 +1455,7 @@ function openSnapshotDialog(f) {
       showToast(r.updated ? 'Snapshot saved' : 'Nothing changed');
       overlay.remove();
       drawSnapshotTake();
-      drawSnapshotCard();
+      saveManagerNoteAfterTake();                                        // js/factsheet.js — redraws factsheet + card, saves the note
     } catch (e) {
       msg.textContent = 'Failed: ' + e.message + ' — your prices are still here; try again.';   // keep what you typed
       showToast('Snapshot failed: ' + e.message, 'error');
@@ -1725,7 +1471,7 @@ function buildSnapshotCard() {
   card.className = 'chart-card chart-card-full snapshot-card';
   card.innerHTML = `
     <div class="chart-card-title" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <span class="snapshot-card-title">${SNAP_UI.view === 'year' ? 'Yearly' : 'Monthly'} Snapshots — Invested vs Value</span>
+      <span><span class="snapshot-card-title">${SNAP_UI.view === 'year' ? 'Yearly' : 'Monthly'} Snapshots — Invested vs Value</span>${buildHelpButton(GUIDE.snapshots.title)}</span>
       <span class="snapshot-controls" style="display:none">
         <span class="snapshot-view" role="group" aria-label="Period">
           <button type="button" class="btn-sm" data-view="month">Monthly</button>
@@ -1737,6 +1483,7 @@ function buildSnapshotCard() {
         </span>
       </span>
     </div>
+    ${buildHelpPanel('snapshots')}
     <div class="snapshot-filters"></div>
     <div class="chart-canvas-wrap"><canvas id="chart-snapshots"></canvas></div>
     <div id="snapshot-note" style="font-size:11.5px;color:var(--text-muted);margin:8px 0 4px"></div>
@@ -1878,7 +1625,7 @@ function snapshotPoints(data) {
     (!SNAP_UI.subs.length || SNAP_UI.subs.includes(r[6]));
   const pickM = data.months.map(m => (!SNAP_UI.years.length || SNAP_UI.years.includes(m.d.slice(0, 4))) &&
     (!SNAP_UI.months.length || SNAP_UI.months.includes(m.d.slice(0, 7))));
-  const pts = data.months.map(m => ({ date: m.d, status: m.st, source: m.src, notes: m.notes, inv: 0, cur: 0, atCost: 0, old: 0 }));
+  const pts = data.months.map(m => ({ date: m.d, status: m.st, source: m.src, notes: m.notes, inv: 0, cur: 0, atCost: 0, old: 0, est: 0 }));
   data.rows.forEach(r => {
     const [mi, , inv, cur, flag] = r;
     if (!pickM[mi] || !pickR(r)) return;
@@ -1886,6 +1633,7 @@ function snapshotPoints(data) {
     p.inv += inv; p.cur += cur;
     if (flag === 1) p.atCost++;
     if (flag === 2) p.old++;
+    if (flag === 3) p.est++;                                          // history: estimated from your recorded prices
   });
   const monthly = pts.filter((p, i) => pickM[i]);
   if (SNAP_UI.view !== 'year') return monthly.map(p => Object.assign(p, { label: monthLabel(p.date.slice(0, 7)) }));
@@ -1960,12 +1708,14 @@ function renderSnapshotView(card, data, account) {
 
   const backfilled = pts.filter(p => p.source === 'backfill').length;
   const atCost = pts.reduce((s, p) => s + p.atCost, 0);
+  const estimated = pts.reduce((s, p) => s + p.est, 0);
   const note = card.querySelector('#snapshot-note');
   if (note) note.textContent =
     `${pts.length} ${yearly ? 'year(s) — each shows its last snapshot' : 'month(s)'} · each month as of the day it was taken (history: month-end), ` +
     `locked once the next month starts — later sells or edits never change a locked month` +
     (backfilled ? ` · ${backfilled} rebuilt from historical prices` : '') +
-    (atCost ? ` · ${atCost} asset-month(s) valued at cost (no price on record)` : '');
+    (atCost ? ` · ${atCost} asset-month(s) valued at cost (no price on record)` : '') +
+    (estimated ? ` · ${estimated} asset-month(s) estimated from your recorded prices (land: straight line; physical gold / silver: Gold / Silver BeES moves)` : '');
 
   const rows = pts.slice().reverse();
   const tbl = card.querySelector('#snapshot-table');
@@ -1982,7 +1732,7 @@ function renderSnapshotView(card, data, account) {
         <td>${fmtCurrency(p.inv)}</td><td>${fmtCurrency(p.cur)}</td>
         <td class="${cls}">${g >= 0 ? '+' : '−'}${fmtCurrency(Math.abs(g))}</td><td class="${cls}">${pct.toFixed(1)}%</td>
         ${yearly ? `<td class="${ch === null ? '' : ch >= 0 ? 'positive' : 'negative'}">${ch === null ? '—' : (ch >= 0 ? '+' : '−') + fmtCurrency(Math.abs(ch))}</td>` : ''}
-        <td style="white-space:nowrap">${snapEsc(statusText(p))}${p.atCost ? ' · ' + p.atCost + ' at cost' : ''}${p.old ? ' · ' + p.old + ' old price' : ''}</td></tr>`;
+        <td style="white-space:nowrap">${snapEsc(statusText(p))}${p.atCost ? ' · ' + p.atCost + ' at cost' : ''}${p.old ? ' · ' + p.old + ' old price' : ''}${p.est ? ' · ' + p.est + ' estimated' : ''}</td></tr>`;
     }).join('')}</tbody></table></div>
     ${!yearly && rows.length > 12 ? '<button class="btn-outline btn-sm" id="snapshot-more" style="margin-top:8px">Show all ' + rows.length + ' months</button>' : ''}
     <div id="snapshot-lines"></div>`;
@@ -2012,7 +1762,8 @@ async function drawSnapshotLines(tbl, date, account) {
   const catName = id => (CATEGORIES.find(c => String(c.id) === String(id)) || {}).name || id;
   const tagAcct = ACCOUNTS.isAll() && ACCOUNTS.list.length > 1;
   const name = l => snapEsc(l.asset_name) + (tagAcct && ACCOUNTS.name(l.account_id) ? ' · ' + snapEsc(ACCOUNTS.name(l.account_id)) : '');
-  const src = { sheet: 'sheet price', amfi: 'AMFI NAV', yahoo: 'market close', manual: 'your price', cost: 'at cost', epf: 'EPF passbook' };
+  const src = { sheet: 'sheet price', amfi: 'AMFI NAV', yahoo: 'market close', manual: 'your price', cost: 'at cost', epf: 'EPF passbook',
+                estimate: 'estimated from your prices' };
   const priceFrom = l => snapEsc(src[l.price_source] || l.price_source) + (l.price_date ? ' · ' + snapEsc(snapDayLabel(l.price_date)) : '') +
     (l.old ? ' <span class="negative" title="Not updated since last month\'s snapshot locked">· old</span>' : '');
   box.innerHTML = `<div class="chart-card-title" style="margin-top:14px">As of ${snapEsc(snapDayLabel(date))} — ${lines.length} holdings${res.status === 'open' ? ' (open)' : ''}</div>
@@ -2132,72 +1883,6 @@ function drawCategoryChart(byCategory) {
   });
 }
 
-// ── Subcategory pie ───────────────────────────────────────────────────────────
-
-function drawSubcatChart(bySubcat) {
-  const entries = Object.entries(bySubcat)
-    .filter(([, v]) => v.netCost > 0)
-    .sort((a, b) => b[1].netCost - a[1].netCost);
-  if (!entries.length) return emptyCard('chart-subcat', 'No data for selected filters.');
-  const allColors = [...CAT_COLORS, ...BUCKET_COLORS, '#6366f1', '#10b981', '#f97316'];
-  newChart('chart-subcat', {
-    type: 'pie',
-    data: {
-      labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.netCost)), backgroundColor: allColors.slice(0, entries.length), borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
-    },
-    options: pieOptions(),
-  });
-}
-
-// ── Allocation by current value pie ──────────────────────────────────────────
-
-function drawAllocCvChart(byCategory) {
-  const entries = Object.entries(byCategory).filter(([, v]) => (v.currentValue || 0) > 0);
-  if (!entries.length) return emptyCard('chart-alloc-cv', 'No price data yet — add prices to see current value split.');
-  newChart('chart-alloc-cv', {
-    type: 'pie',
-    data: {
-      labels: entries.map(([k]) => k),
-      datasets: [{ data: entries.map(([, v]) => Math.round(v.currentValue)), backgroundColor: CAT_COLORS.slice(0, entries.length), borderColor: CT().surface, borderWidth: 2, hoverOffset: 8 }],
-    },
-    options: pieOptions(),
-  });
-}
-
-// ── Monthly bar ───────────────────────────────────────────────────────────────
-
-function drawMonthlyChart(byMonth) {
-  const months = Object.keys(byMonth).sort().slice(-24);
-  if (!months.length) return emptyCard('chart-monthly', 'No transactions in selected period.');
-  const GRID = CT().grid;
-  const TICK = CT().tick;
-  newChart('chart-monthly', {
-    type: 'bar',
-    data: {
-      labels: months.map(monthLabel),
-      datasets: [
-        { label: 'Invested', data: months.map(m => Math.round(byMonth[m]?.invested || 0)),
-          backgroundColor: 'rgba(245,158,11,0.82)', borderRadius: { topLeft: 6, topRight: 6 }, borderSkipped: 'bottom', categoryPercentage: 0.65, barPercentage: 0.85 },
-        { label: 'Redeemed', data: months.map(m => Math.round(byMonth[m]?.redeemed || 0)),
-          backgroundColor: 'rgba(239,68,68,0.72)', borderRadius: { topLeft: 6, topRight: 6 }, borderSkipped: 'bottom', categoryPercentage: 0.65, barPercentage: 0.85 },
-      ],
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        datalabels: { display: false },
-        legend: { position: 'top', labels: { color: TICK, padding: 14, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtCurrency(ctx.raw)}` } },
-      },
-      scales: {
-        x: { ticks: { color: TICK, maxRotation: 45, font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
-        y: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
-      },
-    },
-  });
-}
-
 // ── Yearly bar ────────────────────────────────────────────────────────────────
 
 function drawYearlyChart(byYear) {
@@ -2226,43 +1911,6 @@ function drawYearlyChart(byYear) {
       scales: {
         x: { ticks: { color: TICK, font: { size: 11 } }, grid: { color: GRID, drawBorder: false } },
         y: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
-      },
-    },
-  });
-}
-
-// ── Top holdings ──────────────────────────────────────────────────────────────
-
-function drawTopHoldingsChart(topHoldings) {
-  if (!topHoldings.length) return emptyCard('chart-top-holdings', 'No holdings for selected filters.');
-  // In All-Accounts view, suffix each bar with its owner so the same fund held in
-  // two accounts reads as two distinct bars.
-  const tagAcct = (typeof ACCOUNTS !== 'undefined' && ACCOUNTS.isAll() && ACCOUNTS.list.length > 1);
-  const fullName = h => tagAcct && h.account && ACCOUNTS.name(h.account) ? `${h.name} · ${ACCOUNTS.name(h.account)}` : h.name;
-  const labels = topHoldings.map(h => { const n = fullName(h); return n.length > 22 ? n.substring(0, 20) + '…' : n; });
-  const GRID = CT().grid;
-  const TICK = CT().tick;
-  const barColors = topHoldings.map((_, i) => CAT_COLORS[i % CAT_COLORS.length] + 'cc');
-  newChart('chart-top-holdings', {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{ label: 'Net Invested', data: topHoldings.map(h => Math.round(h.netCost)),
-        backgroundColor: barColors,
-        borderRadius: { topRight: 6, bottomRight: 6 }, borderSkipped: 'left',
-        barPercentage: 0.75, categoryPercentage: 0.85 }],
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      plugins: {
-        datalabels: { display: false },
-        legend: { display: false },
-        tooltip: { callbacks: { title: ctx => fullName(topHoldings[ctx[0].dataIndex]), label: ctx => ` ${fmtCurrency(ctx.raw)}` } },
-      },
-      scales: {
-        x: { ticks: { color: TICK, callback: fmtAxis, font: { size: 10 } }, grid: { color: GRID, drawBorder: false }, beginAtZero: true },
-        y: { ticks: { color: CT().name, font: { size: 11 } }, grid: { display: false } },
       },
     },
   });
@@ -2559,11 +2207,11 @@ function drawMFReport(divId, rawData) {
   html += `</tbody></table></div>`;
   wrap.innerHTML = html;
 
-  // ── Drill-down: rolling SIP journey per fund ──
+  // ── Drill-down: rolling SIP journey per fund (full history, like the table — FIFO needs every buy) ──
   const entry = rawData.find(e => e.catId === 1 && e.stream?.txnTable === 'equity_transactions');
   if (!entry) return;
   const txnsByAsset = {}, assetMap = {};
-  entry.txns.forEach(t => {
+  (entry.assetTxns || entry.txns).forEach(t => {
     const aid = String(t[entry.stream.assetIdCol]);
     (txnsByAsset[aid] = txnsByAsset[aid] || []).push(t);
   });
@@ -2758,468 +2406,4 @@ function drawCumulativeChart(allMonthlyNet, totalCurrentValue) {
       },
     },
   });
-}
-
-// ── Profit by Investment Year (vintage / cohort P&L) ──────────────────────────
-
-// Resolve an asset's current price in INR (GAS formula, manual price, or formula col).
-function resolvePriceINR(stream, asset, assetId) {
-  if (stream.currentPriceCol) return parseFloat(asset?.[stream.currentPriceCol] || 0);
-  if (stream.manualPriceType) {
-    if (asset?.price_fetch_way === 'formula') return parseFloat(asset?.current_price || 0);
-    return _manualPricesMap[`${stream.manualPriceType}|${assetId}`] || 0;
-  }
-  return 0;
-}
-
-// FIFO lots tagged with buy-year. Attributes realised P&L (on sells) and unrealised
-// P&L (on remaining lots) to the year the money was invested.
-function computeVintageProfit(filteredData) {
-  const byYear = {};
-  const add = (yr, k, v) => {
-    if (!yr) return;
-    (byYear[yr] = byYear[yr] || { invested: 0, currentValue: 0, realized: 0, unrealized: 0 })[k] += v;
-  };
-
-  filteredData.forEach(entry => {
-    const { stream, assets, txns } = entry;
-    if (stream.staticBalance) return;
-
-    const assetMap = {};
-    assets.forEach(a => { assetMap[String(a.id)] = a; });
-
-    const byAsset = {};
-    txns.forEach(t => {
-      const aid = String(t[stream.assetIdCol]);
-      (byAsset[aid] = byAsset[aid] || []).push(t);
-    });
-
-    Object.entries(byAsset).forEach(([aid, list]) => {
-      const asset    = assetMap[aid];
-      const priceINR = resolvePriceINR(stream, asset, aid);
-      const sorted   = [...list].sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
-      const lots     = [];   // { units, costPerUnit (INR), year }
-
-      sorted.forEach(t => {
-        const isBuy = stream.usEquity ? String(t.txn_type).toUpperCase() === 'BUY' : t.txn_type === 'Buy';
-        const units = stream.usEquity ? parseFloat(t.units || 0) : getQtyVal(t);
-        if (!units || units <= 0) return;
-        const yr = localYMD(t.txn_date).slice(0, 4);
-
-        if (isBuy) {
-          const costINR = stream.usEquity ? parseFloat(t[stream.costBasisCol] || 0) : getAmtINR(stream, t);
-          lots.push({ units, costPerUnit: costINR / units, year: yr });
-        } else {
-          // Sell: FIFO consume. Realised P&L in INR only for rupee streams
-          // (US equity sells settle in USD inside the broker — excluded here).
-          const sellPerUnit = stream.usEquity ? null : getAmtINR(stream, t) / units;
-          let toSell = units;
-          while (toSell > 1e-9 && lots.length) {
-            const lot = lots[0];
-            const c   = Math.min(lot.units, toSell);
-            if (sellPerUnit != null) add(lot.year, 'realized', c * (sellPerUnit - lot.costPerUnit));
-            lot.units -= c;
-            toSell    -= c;
-            if (lot.units < 1e-9) lots.shift();
-          }
-        }
-      });
-
-      // Remaining lots → invested + unrealised, by vintage year
-      lots.forEach(lot => {
-        const cost = lot.units * lot.costPerUnit;
-        add(lot.year, 'invested', cost);
-        if (priceINR > 0) {
-          const cv = lot.units * priceINR;
-          add(lot.year, 'currentValue', cv);
-          add(lot.year, 'unrealized', cv - cost);
-        }
-      });
-    });
-  });
-
-  return byYear;
-}
-
-function drawVintageChart(canvasId, filteredData) {
-  const byYear = computeVintageProfit(filteredData);
-  const years = Object.keys(byYear).filter(Boolean).sort();
-  if (!years.length) return emptyCard(canvasId, 'No investment history yet.');
-
-  const realized   = years.map(y => Math.round(byYear[y].realized));
-  const unrealized = years.map(y => Math.round(byYear[y].unrealized));
-  const GRID = CT().grid, TICK = CT().tick;
-
-  newChart(canvasId, {
-    type: 'bar',
-    data: {
-      labels: years,
-      datasets: [
-        { label: 'Unrealized', data: unrealized, stack: 'pnl', borderRadius: 4,
-          backgroundColor: unrealized.map(v => v >= 0 ? 'rgba(34,197,94,0.78)' : 'rgba(239,68,68,0.72)') },
-        { label: 'Realized',   data: realized,   stack: 'pnl', borderRadius: 4,
-          backgroundColor: realized.map(v => v >= 0 ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.42)') },
-      ],
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        datalabels: { display: false },
-        legend: { position: 'top', labels: { color: TICK, usePointStyle: true, padding: 12, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: ctx => ` ${ctx.dataset.label}: ${ctx.raw >= 0 ? '+' : ''}${fmtCurrency(ctx.raw)}`,
-            afterBody: items => {
-              const d = byYear[items[0].label];
-              const total = d.realized + d.unrealized;
-              return [
-                `Invested (still held): ${fmtCurrency(d.invested)}`,
-                `Total P&L: ${total >= 0 ? '+' : ''}${fmtCurrency(total)}`,
-              ];
-            },
-          },
-        },
-      },
-      scales: {
-        x: { stacked: true, ticks: { color: TICK, font: { size: 11 } }, grid: { color: GRID, drawBorder: false } },
-        y: { stacked: true, ticks: { color: TICK, callback: v => (v < 0 ? '-' : '') + fmtAxis(Math.abs(v)), font: { size: 10 } }, grid: { color: GRID, drawBorder: false } },
-      },
-    },
-  });
-}
-
-// ── Health Check (rule-based advisory flags, Overview tab) ────────────────────
-
-const XIRR_BENCHMARK = 0.12;   // assumed passive-index benchmark (Nifty ~TRI)
-
-function buildHealthCheck(agg, filtered, rawData) {
-  const flags = [];
-  const cv = c => (c && c.currentValue > 0) ? c.currentValue : (c && c.netCost) || 0;
-  const totalVal = agg.totalCurrentValue > 0 ? agg.totalCurrentValue : agg.netInvested;
-
-  // XIRR vs benchmark
-  if (agg.overallXIRR !== null) {
-    const x = agg.overallXIRR;
-    flags.push({
-      level: x >= XIRR_BENCHMARK ? 'good' : (x >= XIRR_BENCHMARK - 0.03 ? 'warn' : 'bad'),
-      text: `Overall XIRR ${fmtXIRR(x)} vs ~${(XIRR_BENCHMARK * 100).toFixed(0)}% index benchmark — ${x >= XIRR_BENCHMARK ? 'ahead of a passive index' : 'trailing a passive index'}.`,
-    });
-  }
-
-  // Core vs Satellite
-  const SATELLITE = new Set(['Cryptocurrency', 'US Equity']);
-  let satVal = 0;
-  Object.entries(agg.byCategory).forEach(([name, c]) => { if (SATELLITE.has(name)) satVal += cv(c); });
-  satVal += cv(agg.bySubcat['Small Cap'] || {});
-  const satPct = totalVal > 0 ? satVal / totalVal * 100 : 0;
-  flags.push({
-    level: satPct > 30 ? 'warn' : 'good',
-    text: `Satellite/high-risk assets (crypto, small-cap, US) are ${satPct.toFixed(0)}% of the portfolio${satPct > 30 ? ' — above a ~30% comfort band' : ' — within a healthy band'}.`,
-  });
-
-  // (Cap-split vs 47/35/17 target intentionally omitted — user uses a custom split.)
-
-  // Equity drift (Wealth Builder bucket, id 1)
-  const equityPct = totalVal > 0 ? cv(agg.byBucket[1] || {}) / totalVal * 100 : 0;
-  if (equityPct > 70) flags.push({ level: 'warn', text: `Equity (Wealth Builder) is ${equityPct.toFixed(0)}% — beyond a 70% drift limit; consider rebalancing.` });
-
-  // Concentration (top 5 holdings)
-  const top5 = (agg.topHoldings || []).slice(0, 5).reduce((s, h) => s + (h.currentValue > 0 ? h.currentValue : h.netCost), 0);
-  const top5Pct = totalVal > 0 ? top5 / totalVal * 100 : 0;
-  flags.push({
-    level: top5Pct > 60 ? 'warn' : 'good',
-    text: `Top 5 holdings = ${top5Pct.toFixed(0)}% of portfolio${top5Pct > 60 ? ' — concentration risk' : ' — reasonably diversified'}.`,
-  });
-
-  // Idle US cash
-  const usCash = cv(agg.bySubcat['Cash'] || {});
-  if (usCash > 1000) flags.push({ level: 'warn', text: `${fmtCurrency(usCash)} sitting as uninvested US cash — not yet deployed.` });
-
-  // Best / worst vintage
-  const vy = computeVintageProfit(filtered);
-  const vyears = Object.keys(vy).filter(Boolean).map(y => ({ y, p: vy[y].realized + vy[y].unrealized }));
-  if (vyears.length) {
-    vyears.sort((a, b) => b.p - a.p);
-    const best = vyears[0], worst = vyears[vyears.length - 1];
-    flags.push({ level: 'good', text: `Best vintage: ${best.y} investments → ${best.p >= 0 ? '+' : ''}${fmtCurrency(best.p)} P&L.` });
-    if (worst.y !== best.y) flags.push({ level: worst.p < 0 ? 'bad' : 'info', text: `Weakest vintage: ${worst.y} → ${worst.p >= 0 ? '+' : ''}${fmtCurrency(worst.p)} P&L.` });
-  }
-
-  // Underperforming active MF funds (XIRR < 8%)
-  const laggards = buildMFReport(filtered).filter(f => f.isActive && f.xirr !== null && f.xirr < 0.08);
-  if (laggards.length) {
-    const names = laggards.slice(0, 3).map(f => f.name.split(' ').slice(0, 3).join(' ')).join(', ');
-    flags.push({ level: 'warn', text: `${laggards.length} active fund${laggards.length > 1 ? 's' : ''} with XIRR under 8% (${names}${laggards.length > 3 ? '…' : ''}) — review vs benchmark.` });
-  }
-
-  const order = { bad: 0, warn: 1, info: 2, good: 3 };
-  flags.sort((a, b) => order[a.level] - order[b.level]);
-
-  const card = document.createElement('div');
-  card.className = 'chart-card chart-card-full';
-  card.innerHTML = `<div class="chart-card-title">Health Check</div>
-    <div class="healthcheck-list">
-      ${flags.map(f => `<div class="hc-item hc-${f.level}"><span class="hc-dot"></span><span>${f.text}</span></div>`).join('')}
-    </div>
-    <p class="report-disclaimer">Heuristic checks against generic targets — not personalised advice. Benchmark is an assumed ${(XIRR_BENCHMARK * 100).toFixed(0)}% (no live index feed).</p>`;
-  return card;
-}
-
-// ── Core vs Satellite allocation table ────────────────────────────────────────
-
-function drawCoreSatellite(divId, agg) {
-  const wrap = document.getElementById(divId);
-  if (!wrap) return;
-  const cv = c => (c && c.currentValue > 0) ? c.currentValue : (c && c.netCost) || 0;
-  const SATELLITE = new Set(['Cryptocurrency', 'US Equity']);
-
-  let core = 0, sat = 0;
-  Object.entries(agg.byCategory).forEach(([name, c]) => {
-    const v = cv(c);
-    if (SATELLITE.has(name)) sat += v; else core += v;
-  });
-  const smallCap = cv(agg.bySubcat['Small Cap'] || {});   // reclassify small-cap as satellite
-  core -= smallCap; sat += smallCap;
-
-  const total = core + sat;
-  if (total <= 0) { wrap.innerHTML = '<p class="chart-empty">No data.</p>'; return; }
-
-  const rows = [
-    { label: 'Core Wealth Accumulators', note: 'Large/Mid/Flexi/Index MF · Debt · Gold · Real Estate', val: Math.max(0, core) },
-    { label: 'Satellite / Speculative',  note: 'Crypto · Small-cap · US equity',                         val: sat },
-  ];
-  let html = `<div class="report-table-wrap"><table class="report-table"><thead><tr>
-    <th style="text-align:left">Bucket</th><th>Value</th><th>%</th><th></th></tr></thead><tbody>`;
-  rows.forEach(r => {
-    const pct = r.val / total * 100;
-    html += `<tr>
-      <td>${r.label}<div class="cs-note">${r.note}</div></td>
-      <td>${fmtCurrency(r.val)}</td>
-      <td>${pct.toFixed(1)}%</td>
-      <td style="width:130px"><div class="comp-bar"><div class="comp-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div></td>
-    </tr>`;
-  });
-  html += `</tbody></table></div>`;
-  wrap.innerHTML = html;
-}
-
-// ── Rolling XIRR trend ────────────────────────────────────────────────────────
-// Monthly portfolio value is reconstructed by carrying forward the INR price
-// recorded on each transaction (amount ÷ units); the current month uses the live
-// price. Rupee streams only (US-equity USD & static balances excluded). Approximate.
-
-function _pctOrNull(r) { return r !== null ? r * 100 : null; }
-
-function _rollingXirr(cashflows, monthEnd, windowMonths, valueAt) {
-  const start = new Date(monthEnd.getFullYear(), monthEnd.getMonth() - windowMonths + 1, 0);
-  const startVal = valueAt(start, false);
-  const cfs = [];
-  if (startVal > 0) cfs.push({ amount: -startVal, date: start });
-  cashflows.forEach(c => { if (c.date > start && c.date <= monthEnd) cfs.push({ amount: c.amount, date: c.date }); });
-  const endVal = valueAt(monthEnd, false);
-  if (endVal <= 0 || !cfs.length) return null;
-  cfs.push({ amount: endVal, date: monthEnd });
-  return _pctOrNull(computeXIRR(cfs));
-}
-
-function computeXirrTrend(filteredData) {
-  const assets = [];       // { events:[{date,units,price}], curPriceINR }
-  const cashflows = [];
-  let minDate = null;
-
-  filteredData.forEach(entry => {
-    const { stream, assets: rows, txns } = entry;
-    if (stream.usEquity || stream.staticBalance) return;
-    const assetMap = {};
-    rows.forEach(a => { assetMap[String(a.id)] = a; });
-    const byAsset = {};
-    txns.forEach(t => { const aid = String(t[stream.assetIdCol]); (byAsset[aid] = byAsset[aid] || []).push(t); });
-
-    Object.entries(byAsset).forEach(([aid, list]) => {
-      const sorted = list.filter(t => t.txn_date).sort((a, b) => txnDay(a.txn_date) - txnDay(b.txn_date));
-      const events = [];
-      sorted.forEach(t => {
-        const units = getQtyVal(t); if (!units) return;
-        const d = txnDay(t.txn_date); if (isNaN(d)) return;
-        const amt = getAmtINR(stream, t);
-        if (!minDate || d < minDate) minDate = d;
-        events.push({ date: d, units: t.txn_type === 'Buy' ? units : -units, price: units > 0 ? amt / units : 0 });
-        cashflows.push({ date: d, amount: t.txn_type === 'Buy' ? -amt : amt });
-      });
-      if (events.length) assets.push({ events, curPriceINR: parseFloat(assetMap[aid]?.[stream.currentPriceCol] || 0) });
-    });
-  });
-
-  if (!minDate || !assets.length) return { months: [], sinceInception: [], roll1: [], roll3: [] };
-
-  const today = new Date();
-  const months = [];
-  let y = minDate.getFullYear(), m = minDate.getMonth();
-  while (y < today.getFullYear() || (y === today.getFullYear() && m <= today.getMonth())) {
-    months.push(new Date(y, m + 1, 0));
-    if (++m > 11) { m = 0; y++; }
-  }
-
-  const valueAt = (monthEnd, isCurrent) => {
-    let val = 0;
-    assets.forEach(a => {
-      let units = 0, lastPrice = 0;
-      a.events.forEach(ev => { if (ev.date <= monthEnd) { units += ev.units; lastPrice = ev.price; } });
-      if (units > 1e-9) val += units * ((isCurrent && a.curPriceINR > 0) ? a.curPriceINR : lastPrice);
-    });
-    return val;
-  };
-
-  const sinceInception = [], roll1 = [], roll3 = [];
-  months.forEach((me, idx) => {
-    const isCurrent = idx === months.length - 1;
-    const cfsSI = cashflows.filter(c => c.date <= me).map(c => ({ amount: c.amount, date: c.date }));
-    cfsSI.push({ amount: valueAt(me, isCurrent), date: me });
-    sinceInception.push(_pctOrNull(computeXIRR(cfsSI)));
-    roll1.push(idx >= 11 ? _rollingXirr(cashflows, me, 12, valueAt) : null);
-    roll3.push(idx >= 35 ? _rollingXirr(cashflows, me, 36, valueAt) : null);
-  });
-  return { months, sinceInception, roll1, roll3 };
-}
-
-function drawXirrTrend(canvasId, filteredData) {
-  const t = computeXirrTrend(filteredData);
-  if (t.months.length < 2) return emptyCard(canvasId, 'Not enough history for an XIRR trend.');
-  const labels = t.months.map(d => d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }));
-  const mk = (label, data, color, dash) => ({
-    label, data, borderColor: color, backgroundColor: 'transparent',
-    borderWidth: 2, borderDash: dash || [], tension: 0.3, pointRadius: 0, pointHoverRadius: 5, spanGaps: true,
-  });
-  const datasets = [mk('Since inception', t.sinceInception, '#f59e0b')];
-  if (t.roll1.some(v => v != null)) datasets.push(mk('1Y rolling', t.roll1, '#22c55e', [5, 4]));
-  if (t.roll3.some(v => v != null)) datasets.push(mk('3Y rolling', t.roll3, '#818cf8', [2, 3]));
-
-  newChart(canvasId, {
-    type: 'line',
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      plugins: {
-        datalabels: { display: false },
-        legend: { position: 'top', labels: { color: CT().legend, usePointStyle: true, padding: 12, font: { size: 11 } } },
-        tooltip: { callbacks: { label: ctx => ctx.raw != null ? ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}%` : null } },
-      },
-      scales: {
-        x: { ticks: { color: CT().tick, maxTicksLimit: 14, font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false } },
-        y: { ticks: { color: CT().tick, callback: v => v.toFixed(0) + '%', font: { size: 10 } }, grid: { color: CT().grid, drawBorder: false } },
-      },
-    },
-  });
-}
-
-// ══ Plan tab ══════════════════════════════════════════════════════════════════
-
-function renderPlanTab(container, agg, filtered, rawData) {
-  container.appendChild(buildContribGrowthCard(agg));
-  const proj = buildCorpusProjectionCard(agg);
-  container.appendChild(proj.card);
-  requestAnimationFrame(() => {
-    drawContribGrowthChart(agg);
-    proj.init();
-  });
-}
-
-// ── Contribution vs Growth ────────────────────────────────────────────────────
-function _cgRows(agg) {
-  return Object.entries(agg.byCategory || {})
-    .map(([name, c]) => ({ name, contrib: c.netCost || 0, cur: c.currentValue || 0, growth: (c.currentValue || 0) - (c.netCost || 0) }))
-    .filter(r => r.cur > 0)
-    .sort((a, b) => b.cur - a.cur);
-}
-function buildContribGrowthCard(agg) {
-  const rows = _cgRows(agg);
-  const contrib = rows.reduce((s, r) => s + r.contrib, 0);
-  const cur     = rows.reduce((s, r) => s + r.cur, 0);
-  const growth  = cur - contrib;
-  const gPct = cur > 0 ? growth / cur * 100 : 0;
-  const gc = growth >= 0 ? 'positive' : 'negative';
-  const card = document.createElement('div');
-  card.className = 'chart-card chart-card-full';
-  card.innerHTML =
-    '<div class="chart-card-title">Contribution vs Growth</div>' +
-    '<div class="cg-summary">' +
-      '<div class="cg-stat"><span class="cg-lbl">You invested</span><span class="cg-val">' + fmtCurrency(contrib) + '</span></div>' +
-      '<div class="cg-stat"><span class="cg-lbl">Market growth</span><span class="cg-val ' + gc + '">' + (growth >= 0 ? '+' : '') + fmtCurrency(growth) + '</span></div>' +
-      '<div class="cg-stat"><span class="cg-lbl">Current value</span><span class="cg-val">' + fmtCurrency(cur) + '</span></div>' +
-      '<div class="cg-stat"><span class="cg-lbl">Growth = share of corpus</span><span class="cg-val ' + gc + '">' + gPct.toFixed(1) + '%</span></div>' +
-    '</div>' +
-    '<div class="chart-canvas-wrap"><canvas id="plan-cg-chart"></canvas></div>';
-  return card;
-}
-function drawContribGrowthChart(agg) {
-  const rows = _cgRows(agg);
-  if (!rows.length) return emptyCard('plan-cg-chart', 'No holdings.');
-  newChart('plan-cg-chart', {
-    type: 'bar',
-    data: { labels: rows.map(r => r.name), datasets: [
-      { label: 'Contributed', data: rows.map(r => Math.round(r.contrib)), backgroundColor: '#6366f1cc', stack: 's' },
-      { label: 'Growth',      data: rows.map(r => Math.round(r.growth)),  backgroundColor: '#22c55ecc', stack: 's' },
-    ] },
-    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: CT().label, font: { size: 11 } } }, datalabels: { display: false },
-        tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + fmtCurrency(ctx.raw) } } },
-      scales: { x: { stacked: true, ticks: { color: CT().tick, callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: CT().grid } },
-                y: { stacked: true, ticks: { color: CT().label, font: { size: 11 } }, grid: { display: false } } } },
-  });
-}
-
-// ── Corpus projection ─────────────────────────────────────────────────────────
-function projectCorpus(current, monthly, annualPct, years) {
-  const rm = Math.pow(1 + annualPct / 100, 1 / 12) - 1;
-  const months = Math.round(years * 12);
-  const gf = Math.pow(1 + rm, months);
-  const fvCur = current * gf;
-  const fvSip = rm !== 0 ? monthly * ((gf - 1) / rm) : monthly * months;
-  return fvCur + fvSip;
-}
-function buildCorpusProjectionCard(agg) {
-  const card = document.createElement('div');
-  card.className = 'chart-card chart-card-full';
-  const cur0 = Math.round(agg.totalCurrentValue || 0);
-  card.innerHTML =
-    '<div class="chart-card-title">Corpus Projection</div>' +
-    '<div class="proj-inputs">' +
-      '<label>Current corpus <span class="proj-unit">₹</span><input type="number" id="proj-cur" value="' + cur0 + '" step="1000"></label>' +
-      '<label>Monthly SIP <span class="proj-unit">₹</span><input type="number" id="proj-sip" value="50000" step="1000"></label>' +
-      '<label>Return <input type="number" id="proj-ret" value="12" step="0.5"><span class="proj-unit">%/yr</span></label>' +
-      '<label>Target <span class="proj-unit">₹</span><input type="number" id="proj-tgt" value="10000000" step="100000"></label>' +
-    '</div>' +
-    '<div class="proj-milestones" id="proj-miles"></div>' +
-    '<div class="chart-canvas-wrap"><canvas id="plan-proj-chart"></canvas></div>';
-  let chart = null;
-  function recompute() {
-    if (!card.isConnected) return;                                    // the tab was swapped before this ran
-    const cur = parseFloat(document.getElementById('proj-cur').value) || 0;
-    const sip = parseFloat(document.getElementById('proj-sip').value) || 0;
-    const ret = parseFloat(document.getElementById('proj-ret').value) || 0;
-    const tgt = parseFloat(document.getElementById('proj-tgt').value) || 0;
-    let ytt = null;
-    if (tgt > cur) { for (let m = 1; m <= 600; m++) { if (projectCorpus(cur, sip, ret, m / 12) >= tgt) { ytt = m / 12; break; } } }
-    const maxYr = Math.max(20, ytt ? Math.ceil(ytt) + 2 : 20);
-    let mh = [5, 10, 15, 20].map(y => '<div class="proj-mile"><span class="proj-mile-y">' + y + ' yr</span><span class="proj-mile-v">' + fmtCurrency(projectCorpus(cur, sip, ret, y)) + '</span></div>').join('');
-    mh += '<div class="proj-mile proj-mile-tgt"><span class="proj-mile-y">Reach ' + fmtCurrency(tgt) + '</span><span class="proj-mile-v">' + (tgt <= cur ? 'reached' : (ytt ? ytt.toFixed(1) + ' yrs' : '30+ yrs')) + '</span></div>';
-    document.getElementById('proj-miles').innerHTML = mh;
-    const labels = [], corpus = [], contrib = [];
-    for (let y = 0; y <= maxYr; y++) { labels.push('Yr ' + y); corpus.push(Math.round(projectCorpus(cur, sip, ret, y))); contrib.push(Math.round(cur + sip * 12 * y)); }
-    if (chart) { chart.data.labels = labels; chart.data.datasets[0].data = corpus; chart.data.datasets[1].data = contrib; chart.update(); return; }
-    chart = newChart('plan-proj-chart', {
-      type: 'line',
-      data: { labels, datasets: [
-        { label: 'Projected corpus',   data: corpus,  borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.12)', fill: true,  tension: 0.25, pointRadius: 0 },
-        { label: 'Contributions only', data: contrib, borderColor: '#818cf8', borderDash: [5, 4], fill: false, tension: 0, pointRadius: 0 },
-      ] },
-      options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: CT().label, font: { size: 11 } } }, datalabels: { display: false },
-          tooltip: { callbacks: { title: c => c[0].label, label: ctx => ' ' + ctx.dataset.label + ': ' + fmtCurrency(ctx.raw) } } },
-        scales: { x: { ticks: { color: CT().tick, maxTicksLimit: 12, font: { size: 10 } }, grid: { color: CT().grid } },
-                  y: { ticks: { color: CT().tick, callback: v => fmtAxis(v), font: { size: 10 } }, grid: { color: CT().grid } } } },
-    });
-  }
-  card.querySelectorAll('.proj-inputs input').forEach(el => el.addEventListener('input', recompute));
-  return { card, init: recompute };
 }

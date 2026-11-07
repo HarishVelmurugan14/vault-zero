@@ -594,7 +594,7 @@ async function loadRecentLogs(nDays, area) {
     // Asset names + account mapping (cached per table across the app).
     const assetMap = {};
     try {
-      (await fetchAssetsCached(stream)).forEach(a => { assetMap[assetKey(stream, a)] = a; STATE.assetMap[assetKey(stream, a)] = a; });
+      (await fetchAllAssetsCached(stream)).forEach(a => { assetMap[assetKey(stream, a)] = a; STATE.assetMap[assetKey(stream, a)] = a; });
     } catch (_) {}
 
     let offset = 0, done = false, guard = 0;
@@ -766,7 +766,7 @@ async function loadTxns(txnList, loadMoreBtn, assetSel, summaryEl) {
   STATE.stream = stream;
 
   try {
-    const assets = await fetchAssetsCached(stream);
+    const assets = await fetchAllAssetsCached(stream);              // inactive too — their past txns stay listed
     assets.forEach(a => { STATE.assetMap[assetKey(stream, a)] = a; });
   } catch (_) {}
 

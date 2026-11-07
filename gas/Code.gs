@@ -71,6 +71,8 @@ function doPost(e) {
 
     // Monthly snapshot, taken from the app (gas/snapshot.gs) — the only way snapshots are written.
     if (action === 'takeSnapshot') return respond(vzsTake_(payload.prices || []));
+    if (action === 'saveManagerNote') return respond(vzsSaveNote_(payload.month, payload.account, payload.note));
+    if (action === 'savePatternHistory') return respond(vzsSavePatterns_(payload.month, payload.account, payload.rows));
 
     if (!sheet) return respond({ error: 'sheet required' }, 400);
     // Only VaultZero tables (gas/schema.gs) are writable — StockIQ / staging tabs are not.

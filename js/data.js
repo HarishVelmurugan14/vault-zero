@@ -34,6 +34,80 @@ const CATEGORIES = [
   { id: 9, bucket_id: 3, name: 'Cryptocurrency',            stream: 'crypto',          hasSubcategories: true  },
 ];
 
+// ── Fund scope, mandate & benchmarks (Insights) ───────────────────────────────
+
+// The "fund" Insights reports on: market-traded growth assets only. Debt / arbitrage / liquid
+// funds, EPF, bank, real estate and uninvested US cash (snapshot asset_table 'us_cash') are
+// outside every number.
+const FUND_SCOPE = [1, 2, 3, 8, 9];   // Indian EQ MF, Indian Equity Stocks, US Equity, Precious Metals, Crypto
+const FUND_EXCLUDED_TABLES = ['us_cash'];
+
+// Sleeves group the in-scope categories.
+const SLEEVES = [
+  { key: 'india',  label: 'Indian equity',   cats: [1, 2] },
+  { key: 'metals', label: 'Precious metals', cats: [8] },
+  { key: 'us',     label: 'US equity',       cats: [3] },
+  { key: 'crypto', label: 'Crypto',          cats: [9] },
+];
+
+// Target weights as entered; computeMandateWeights() renormalises each level to 100.
+// Holdings within a sleeve are matched by name; a sleeve without a split has no holding targets.
+const MANDATE = {
+  sleeves: { india: 74, metals: 12, us: 7, crypto: 2 },
+  holdings: {
+    india: [
+      { label: 'Edelweiss Mid Cap',      match: /edelweiss mid ?cap/i,             weight: 32 },
+      { label: 'PPFAS Flexi Cap',        match: /parag parikh flexi|ppfas flexi/i, weight: 32 },
+      { label: 'Navi Nifty 50',          match: /navi nifty 50/i,                  weight: 22 },
+      { label: 'Tata Small Cap',         match: /tata small ?cap/i,                weight: 7 },
+      { label: 'Nippon India Small Cap', match: /nippon india small ?cap/i,        weight: 7 },
+    ],
+    us: [
+      { label: 'VOO',  match: /s&p 500|\bvoo\b/i,         weight: 60 },
+      { label: 'QQQM', match: /nasdaq[ -]?100|\bqqqm\b/i, weight: 40 },
+    ],
+  },
+};
+
+// Total-return benchmark series (stored in the benchmark_prices sheet under these keys by
+// gas/snapshot.gs). Each is an index-fund / ETF / FoF NAV or a dividend-adjusted close, in INR.
+const BENCHMARKS = {
+  nifty50:        { label: 'Nifty 50' },
+  nifty100:       { label: 'Nifty 100' },
+  nifty500:       { label: 'Nifty 500' },
+  largemidcap250: { label: 'Nifty LargeMidcap 250' },
+  midcap150:      { label: 'Nifty Midcap 150' },
+  smallcap250:    { label: 'Nifty Smallcap 250' },
+  gold:           { label: 'Gold' },
+  silver:         { label: 'Silver' },
+  voo:            { label: 'S&P 500 (VOO, INR)' },
+  qqqm:           { label: 'Nasdaq 100 (QQQM, INR)' },
+  btc:            { label: 'Bitcoin (INR)' },
+};
+
+// Holding → benchmark, by category and name; the first matching rule wins. Mutual funds match
+// on their type words only, so a new kind of fund shows up as "no benchmark" instead of being
+// compared with the wrong index. Index funds on a narrow / thematic index (Next 50, factor and
+// sector indices) get bench: null on purpose — a broad parent index would show their index's own
+// gap as skill. Order matters: "Large & Mid" before "Mid", "Nifty 500" never matches Nifty 50.
+// Multi-cap uses Nifty 500 as the nearest stored series (its own index is Nifty 500 Multicap 50:25:25).
+const BENCHMARK_MAP = [
+  { cats: [1], match: /next 50|momentum|value 20|equal weight|alpha 50|low vol|manufacturing|bharat 22/i, bench: null },
+  { cats: [1], match: /large ?(&|and)? ?mid ?cap/i,                      bench: 'largemidcap250' },
+  { cats: [1], match: /nifty ?500|multi ?cap/i,                          bench: 'nifty500' },
+  { cats: [1], match: /small ?cap/i,                                     bench: 'smallcap250' },
+  { cats: [1], match: /mid ?cap|emerging equity/i,                       bench: 'midcap150' },
+  { cats: [1], match: /large ?cap|bluechip/i,                            bench: 'nifty100' },
+  { cats: [1], match: /\bnifty ?50\b(?!\d)/i,                            bench: 'nifty50' },
+  { cats: [1], match: /flexi ?cap|elss|tax saver|focused|value|contra/i, bench: 'nifty500' },
+  { cats: [2], match: /./,                                               bench: 'nifty50' },
+  { cats: [3], match: /s&p 500|\bvoo\b/i,                                bench: 'voo' },
+  { cats: [3], match: /nasdaq[ -]?100|\bqqqm?\b/i,                       bench: 'qqqm' },
+  { cats: [8], match: /silver/i,                                         bench: 'silver' },
+  { cats: [8], match: /gold/i,                                           bench: 'gold' },
+  { cats: [9], match: /./,                                               bench: 'btc' },
+];
+
 // Stream configurations — defines tables, asset form fields, transaction form fields
 const STREAMS = {
 
@@ -365,6 +439,41 @@ function staticBalanceOf(stream, asset, txns, allTxns) {
     else if (t.txn_type === 'Interest') i += amt;
   });
   return { invested: Math.max(0, c - w), value: c + i - w };
+}
+
+// ── Scope / mandate / benchmark helpers ───────────────────────────────────────
+
+function isInFundScope(categoryId, assetTable) {
+  return FUND_SCOPE.includes(Number(categoryId)) && !FUND_EXCLUDED_TABLES.includes(String(assetTable || ''));
+}
+
+function sleeveOf(categoryId) {
+  return SLEEVES.find(s => s.cats.includes(Number(categoryId))) || null;
+}
+
+// Benchmark key for a holding (null = no rule matches, or one says it has none).
+function benchmarkFor(categoryId, name) {
+  const rule = BENCHMARK_MAP.find(r => r.cats.includes(Number(categoryId)) && r.match.test(String(name || '')));
+  return rule ? rule.bench : null;
+}
+
+// MANDATE renormalised: sleeve % of the fund (sums to 100) and, per holding target, % of its
+// sleeve and % of the fund.
+function computeMandateWeights(mandate = MANDATE) {
+  const sum = vals => vals.reduce((s, v) => s + v, 0);
+  const sleeveTotal = sum(Object.values(mandate.sleeves));
+  const sleeves = {};
+  Object.keys(mandate.sleeves).forEach(k => { sleeves[k] = sleeveTotal > 0 ? mandate.sleeves[k] / sleeveTotal * 100 : 0; });
+  const holdings = [];
+  Object.keys(mandate.holdings || {}).forEach(k => {
+    const list = mandate.holdings[k];
+    const total = sum(list.map(h => h.weight));
+    list.forEach(h => {
+      const ofSleeve = total > 0 ? h.weight / total * 100 : 0;
+      holdings.push({ sleeve: k, label: h.label, match: h.match, ofSleeve, ofFund: ofSleeve * (sleeves[k] || 0) / 100 });
+    });
+  });
+  return { sleeves, holdings };
 }
 
 // Resolve stream for a category + subcategory

@@ -13,8 +13,9 @@
  *                 hidden_items.ref). ON DELETE RESTRICT; hidden_items rows CASCADE.
  *   CHECK         enum lists, booleans, real dates, subcategory belongs to the right category
  *   NOT NULL      required columns
- *   SERVER-ONLY   snapshots / snapshot_lines: written only by the monthly snapshot job
- *                 (gas/snapshot.gs) — the web app refuses every insert / update / delete.
+ *   SERVER-ONLY   snapshots / snapshot_lines / benchmark_prices / manager_notes / pattern_history:
+ *                 written only by the snapshot code (gas/snapshot.gs) — the web app refuses every
+ *                 insert / update / delete (notes and patterns arrive through their own actions).
  *
  * checkConstraints() — read-only audit of the whole database against this schema.
  * Writes are only accepted for tables listed here (StockIQ's tabs are not, by design).
@@ -81,7 +82,21 @@ const VZ_SCHEMA = {
                               'invested_value', 'current_value', 'price_source'],
                     fk: { snapshot_id: 'snapshots' }, unique: [['snapshot_id', 'asset_table', 'asset_id']],
                     patterns: { snapshot_date: '^\\d{4}-\\d{2}-\\d{2}$', price_date: '^\\d{4}-\\d{2}-\\d{2}$' },
-                    enums: { price_source: ['sheet', 'amfi', 'yahoo', 'manual', 'cost', 'epf'] }, serverOnly: true },
+                    enums: { price_source: ['sheet', 'amfi', 'yahoo', 'manual', 'cost', 'epf', 'estimate'] }, serverOnly: true },
+  // Benchmark total-return series for Insights, one value per (as-of date, series key), written at
+  // each snapshot and by backfillBenchmarks() (gas/snapshot.gs). Dates are TEXT 'yyyy-mm-dd';
+  // source = where the value came from (e.g. 'amfi:120716', 'yahoo:VOO×INR=X'); price_date /
+  // fx_date = the dates of the source prices it used.
+  benchmark_prices: { notNull: ['date', 'code', 'nav', 'source', 'price_date'], unique: [['date', 'code']],
+                      patterns: { date: '^\\d{4}-\\d{2}-\\d{2}$', price_date: '^\\d{4}-\\d{2}-\\d{2}$',
+                                  fx_date: '^\\d{4}-\\d{2}-\\d{2}$' }, serverOnly: true },
+  // The Factsheet's monthly note, one per (month, account) — account 'all' or an account id.
+  manager_notes: { notNull: ['month', 'account', 'note'], unique: [['month', 'account']],
+                   patterns: { month: '^\\d{4}-\\d{2}$' }, serverOnly: true },
+  // Each month's "What's happening" feed: one row per pattern (holding '' = fund-level).
+  pattern_history: { notNull: ['month', 'account', 'pattern_id', 'headline'],
+                     unique: [{ cols: ['month', 'account', 'pattern_id', 'holding'], nullsEqual: true }],
+                     patterns: { month: '^\\d{4}-\\d{2}$' }, serverOnly: true },
 };
 
 function vzAsset_(categoryId, nameCol, keyCols, enums, extraUnique) {

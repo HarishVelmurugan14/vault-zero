@@ -20,17 +20,17 @@
 
 ### Insights
 - Portfolio hero card + 4-metric strip (Net Invested, Current Value, XIRR, Unrealized P&L)
-- XIRR via Newton-Raphson on transaction cashflows, per-category and overall
-- Allocation charts: Bucket pie, Category pie, Subcategory pie, Current Value allocation
-- Stream-wise P&L table — sortable by any column
-- Monthly and yearly invest/redeem bar charts
-- Cumulative portfolio growth line
-- Top 10 holdings bar chart
-- Liquidity ladder (Instant → Days → Weeks → Months+)
-- Currency exposure pie (INR / USD / Crypto)
-- Equity cap split (Large / Mid / Small) vs target bars
-- Tax liability estimator (LTCG / STCG per stream, flat 30% crypto)
-- Section grouping: Allocation, Performance, Risk & Liquidity, Tax Intelligence
+- Tabs (Nov 2026, AMC-factsheet rebuild — facts only, no advice wording):
+  - Factsheet — the fund (Indian equity, US, metals, crypto) as one mutual fund: time-weighted returns vs Nifty 50, growth of ₹100, calendar / rolling returns, risk, money put in vs market, monthly manager's note, top patterns; Take snapshot
+  - What's happening — pattern cards (16 detectors), history kept per month
+  - Trends — every holding vs its own benchmark, stagnation rules
+  - Attribution — contribution to return by holding and sleeve, vs own benchmark, share of move vs capital
+  - Positions — P&L by holding, closed positions, stock picks vs index twin, concentration, weights vs mandate, weight drift, activity, US stock vs USD/INR
+  - Funds — per-fund FIFO P&L with SIP streaks, realized P&L by category
+  - Tax — capital-gains estimate per person, FIFO lots, rules from 23 Jul 2024 (12.5% / 20% / ₹1.25L …), ELSS lock-in, US sales at Rule 115 month-end rate
+  - Net worth — everything owned: portfolio growth, bucket / category / currency pies, yearly summary, stream-wise P&L with XIRR, liquidity ladder
+  - Guide — lessons + glossary; the same notes sit behind the ⓘ on every card
+- Data gates: a number shows only with enough consecutive monthly snapshots ("needs N more months")
 
 ### Pricing
 - `price_fetch_way` column on physical asset and real estate rows (`manual` / `formula`)

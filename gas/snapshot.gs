@@ -5,9 +5,10 @@
  *   1. Paste snapshot.gs + the updated schema.gs and Code.gs.
  *   2. Run setupSnapshots() from the editor and accept the permissions (external requests for prices).
  *   3. Run backfillSnapshots() — repeat until it reports "complete" (it pauses before the 6-min limit).
- *   4. Deploy → Manage deployments → New version (the app's snapshot endpoints live in Code.gs).
+ *   4. Run backfillBenchmarks() once (re-runnable: it only fills what is missing).
+ *   5. Deploy → Manage deployments → New version (the app's snapshot endpoints live in Code.gs).
  *
- * EVERY MONTH — no automation: in the app, Insights → Overview → "Take snapshot", ANY day of the
+ * EVERY MONTH — no automation: in the app, Insights → Factsheet → "Take snapshot", ANY day of the
  * month. It asks for the manual prices (land, physical gold), saves them, and records THIS month
  * as of that day. Taking it again later in the month replaces it with that day's data. Once the
  * next month starts the month is locked; a month you never took stays a gap.
@@ -18,6 +19,15 @@
  *                          the one it first completes in, each as of its LAST day. Re-running it
  *                          rebuilds those history months (e.g. after importing EPF) — never a month
  *                          you took in the app, never a later month (a skipped month stays a gap).
+ *   backfillBenchmarks()   benchmark_prices: each benchmark series (VZS_BENCHMARKS) at every month-end
+ *                          from the first transaction month, at every snapshot's as-of day and on every
+ *                          fund transaction day. Each Take snapshot also records that day's values and
+ *                          any transaction day of the last two months still missing (a failure only warns).
+ *   manager_notes          the Factsheet's monthly note, written by the app right after each Take
+ *                          snapshot (doPost saveManagerNote → vzsSaveNote_); a locked month's note
+ *                          is never rewritten.
+ *   pattern_history        that month's "What's happening" feed (one row per pattern), written the
+ *                          same way (doPost savePatternHistory → vzsSavePatterns_).
  *
  * What a month means — a frozen fact as of the END of its as-of day (the day you took it):
  *   holdings = transactions dated on or before that day (a later sell never changes it)
@@ -27,8 +37,14 @@
  *              #N/A price is valued at cost and noted. HISTORY months (backfill) use the official
  *              price on or before their last day: mutual funds → AMFI NAV (mfapi.in); NSE stocks /
  *              ETFs, US ETFs, crypto, USD→INR → Yahoo Finance daily closes in each market's own
- *              timezone (split adjustment undone so they match your units). Physical gold / real
- *              estate → your manual_prices log (latest entry on or before that day), always.
+ *              timezone (split adjustment undone so they match your units). Physical gold /
+ *              silver and real estate (no market price) → ESTIMATED from your recorded prices —
+ *              your manual_prices log plus what you paid on each buy: land in a straight line
+ *              between them, a metal along GOLDBEES / SILVERBEES bent to land on each one (and on
+ *              that ETF after the last); price_source 'estimate', price_date = the as-of day.
+ *              These use prices recorded AFTER the month too, so a re-run of backfillSnapshots()
+ *              after a new price or buy can change the history months it touches. An asset you
+ *              have never priced stays on the old rule (no price → at cost).
  *   EPF      = its passbook entries (epf_transactions) dated on or before that day: invested =
  *              contributions − withdrawals (≥ 0), value = contributions + interest − withdrawals
  *              (interest is credited once a year). An account with no entries yet counts at its
@@ -37,8 +53,8 @@
  * Every line records the date of the price it used; a manual price from before the previous month
  * is noted as "old". Asset names are copied into every line and lines carry no foreign key to the
  * asset tabs, so later sells, edits or deletions never change a month. The tabs are SERVER-ONLY
- * (schema.gs). A price that does not exist (e.g. land before its first manual price) is valued at
- * cost (price_source 'cost'). A price that FAILED to download writes nothing. Writes are
+ * (schema.gs). A price that does not exist (e.g. land you have never priced) is valued at cost
+ * (price_source 'cost'). A price that FAILED to download writes nothing. Writes are
  * commit-ordered: new lines first, then the month's header row (the commit marker), then the
  * replaced month's old lines are removed.
  */
@@ -50,7 +66,7 @@ const VZS_LINES = 'snapshot_lines';
 const VZS_SNAPSHOT_HEADERS = ['id', 'month', 'snapshot_date', 'source', 'lines', 'invested_total', 'current_total', 'notes', 'created_at'];
 const VZS_LINE_HEADERS = ['id', 'snapshot_id', 'snapshot_date', 'account_id', 'bucket_id', 'category_id', 'subcategory_id',
   'asset_table', 'asset_id', 'asset_name', 'units', 'invested_value', 'price', 'current_value', 'price_source', 'price_date', 'created_at'];
-const VZS_TEXT_COLS = ['month', 'snapshot_date', 'price_date'];   // stored as text so Sheets never turns them into dates
+const VZS_TEXT_COLS = ['month', 'snapshot_date', 'price_date', 'date', 'fx_date'];   // stored as text so Sheets never turns them into dates
 const VZS_TIME_BUDGET_MS = 4.5 * 60 * 1000;   // stay well inside Apps Script's 6-minute limit
 const VZS_RETRY_WAITS_MS = [2000, 5000, 15000];
 const VZS_FETCH_BATCH = 10;                     // parallel downloads per UrlFetchApp.fetchAll
@@ -58,6 +74,38 @@ const VZS_LOOKBACK_DAYS = 400;                  // Yahoo history before the earl
 const VZS_NAVALL_URL = 'https://portal.amfiindia.com/spages/NAVAll.txt';
 const VZS_HISTORY_UNTIL = 'vzs_history_until'; // Script Property: last month (yyyy-mm) backfillSnapshots() covers
 const VZS_EPF_TXNS_HEADERS = ['id', 'account_id', 'txn_type', 'txn_date', 'amount', 'notes', 'created_at'];
+// History months between your recorded prices of a physical metal follow this NSE ETF (domestic
+// price incl. import duty), bent to pass through every price you recorded (see vzsEstimate_).
+const VZS_METAL_PROXY = { Gold: 'GOLDBEES.NS', Silver: 'SILVERBEES.NS' };
+const VZS_BENCH = 'benchmark_prices';
+const VZS_BENCH_HEADERS = ['id', 'date', 'code', 'nav', 'source', 'price_date', 'fx_date', 'created_at'];
+const VZS_BENCH_TAKE_BUDGET_MS = 20000;         // what Take snapshot may spend on benchmarks (failures only warn)
+const VZS_FUND_CATS = [1, 2, 3, 8, 9];         // FUND_SCOPE (js/data.js): benchmarks are kept on these transaction days
+const VZS_NOTES = 'manager_notes';
+const VZS_NOTES_HEADERS = ['id', 'month', 'account', 'note', 'created_at', 'updated_at'];
+const VZS_PATTERNS = 'pattern_history';
+const VZS_PATTERN_HEADERS = ['id', 'month', 'account', 'pattern_id', 'holding', 'headline', 'value', 'created_at'];
+
+// Benchmark series for Insights (key = benchmark_prices.code = BENCHMARKS in js/data.js). Every
+// series is TOTAL RETURN in INR: an index-fund / ETF / FoF NAV from AMFI (mfapi.in; unit splits
+// undone), or a Yahoo close adjusted for dividends and splits × USD→INR (fx). Values are chained
+// onto what is already stored — at the exact source prices that row used — so Yahoo's rescaling
+// or a later change of source continues the series without a jump (an AMFI series stays equal
+// to its NAVs). level: a rate kept as-is (never chained). A series with no code is skipped.
+const VZS_BENCHMARKS = [
+  { key: 'nifty50',        src: 'amfi',  code: '120716' },      // UTI Nifty 50 Index Fund – Direct Growth
+  { key: 'nifty100',       src: 'amfi',  code: '147666' },      // Axis Nifty 100 Index Fund – Direct Growth
+  { key: 'nifty500',       src: 'amfi',  code: '147625' },      // Motilal Oswal Nifty 500 Index Fund – Direct Growth
+  { key: 'largemidcap250', src: 'amfi',  code: '149343' },      // Edelweiss Nifty Large Mid Cap 250 Index Fund – Direct Growth
+  { key: 'midcap150',      src: 'amfi',  code: '147622' },      // Motilal Oswal Nifty Midcap 150 Index Fund – Direct Growth
+  { key: 'smallcap250',    src: 'amfi',  code: '147623' },      // Motilal Oswal Nifty Smallcap 250 Index Fund – Direct Growth
+  { key: 'gold',           src: 'amfi',  code: '118663' },      // Nippon India Gold Savings Fund (FoF) – Direct Growth
+  { key: 'silver',         src: 'amfi',  code: '149758' },      // Nippon India Silver ETF
+  { key: 'voo',            src: 'yahoo', code: 'VOO', fx: true },
+  { key: 'qqqm',           src: 'yahoo', code: 'QQQM', fx: true },
+  { key: 'btc',            src: 'yahoo', code: 'BTC-USD', fx: true },
+  { key: 'usd_inr',        src: 'yahoo', code: 'INR=X', level: true },
+];
 
 // One entry per asset stream — mirrors the valuation in js/holdings.js.
 const VZS_STREAMS = [
@@ -122,7 +170,8 @@ function setupSnapshots() {
   const tz = ss.getSpreadsheetTimeZone();
   const log = [];
   withWriteLock_(() => {
-    [[VZS_SNAPSHOTS, VZS_SNAPSHOT_HEADERS], [VZS_LINES, VZS_LINE_HEADERS], ['epf_transactions', VZS_EPF_TXNS_HEADERS]].forEach(([name, headers]) => {
+    [[VZS_SNAPSHOTS, VZS_SNAPSHOT_HEADERS], [VZS_LINES, VZS_LINE_HEADERS], ['epf_transactions', VZS_EPF_TXNS_HEADERS],
+     [VZS_BENCH, VZS_BENCH_HEADERS], [VZS_NOTES, VZS_NOTES_HEADERS], [VZS_PATTERNS, VZS_PATTERN_HEADERS]].forEach(([name, headers]) => {
       let sh = ss.getSheetByName(name);
       if (!sh) { sh = ss.insertSheet(name); log.push('created tab ' + name); }
       if (sh.getLastRow() === 0) { sh.appendRow(headers); sh.setFrozenRows(1); log.push(name + ': header row added'); }
@@ -176,7 +225,7 @@ function setupSnapshots() {
   ScriptApp.getProjectTriggers()                                       // snapshots are taken by hand now
     .filter(t => t.getHandlerFunction() === 'takeMonthlySnapshot')
     .forEach(t => { ScriptApp.deleteTrigger(t); log.push('removed the old daily snapshot trigger'); });
-  log.push('monthly: take the snapshot in the app (Insights → Overview → Take snapshot), any day of the month');
+  log.push('monthly: take the snapshot in the app (Insights → Factsheet → Take snapshot), any day of the month');
   vzsNotify_('Snapshots set up', log);
 }
 // History (re-runnable): every month from the first transaction up to the month before the one
@@ -232,6 +281,12 @@ function vzsTake_(prices) {
   const log = [];
   const res = vzsBuild_(ss, data, [{ month, date: today }], 'manual', vzsExisting_(ss), log, today);
   if (res.problem) return { error: res.problem, log };
+  try {                                                                 // benchmarks never block the snapshot
+    const recent = vzsFundTxnDates_(data, tz, Utilities.formatDate(new Date(vzsNow_().getTime() - 62 * 86400000), tz, 'yyyy-MM-dd'));
+    // Last month's end too: the Tax tab converts a US sale at USD/INR of the month-end before it.
+    const b = vzsRecordBenchmarks_(ss, [vzsMonthEnd_(vzsPrevMonth_(month)), today].concat(recent), log, Date.now() - VZS_TIME_BUDGET_MS + VZS_BENCH_TAKE_BUDGET_MS);
+    if (b.failed.length) log.push('warning: benchmark values not recorded for ' + b.failed.join(', ') + ' — run backfillBenchmarks() later');
+  } catch (e) { log.push('warning: benchmark values not recorded (' + e.message + ') — run backfillBenchmarks() later'); }
   const head = vzsRows_(ss, VZS_SNAPSHOTS).find(h => vzsMonthOf_(h.month, tz) === month) || {};
   return { month, date: vzsIso_(head.snapshot_date, tz), updated: res.wrote > 0, pricesSaved: add.length,
            lines: Number(head.lines) || 0, invested: Number(head.invested_total) || 0, value: Number(head.current_total) || 0,
@@ -313,7 +368,7 @@ function vzsBuildLines_(data, dateStr, tz, prices, liveDay) {
   const cut = vzsCutoff_(dateStr, tz);                                  // 00:00 after the as-of day
   const oldBefore = vzsOldBefore_(dateStr);                             // a manual price older than this is "old"
   const catBucket = vzsCatBuckets_(data);
-  const out = [], old = [], noPrice = [], noRate = [], typed = [];
+  const out = [], old = [], noPrice = [], noRate = [], typed = [], est = [];
   VZS_STREAMS.forEach(st => {
     if (st.ledger) { vzsLedgerLines_(st, data, dateStr, cut, tz, catBucket, liveDay, typed).forEach(l => out.push(l)); return; }
     const pos = vzsPositions_(st, data[st.txns] || [], cut);
@@ -329,6 +384,7 @@ function vzsBuildLines_(data, dateStr, tz, prices, liveDay) {
         price_source: px.price > 0 ? px.source : 'cost', price_date: px.price > 0 ? px.date : '' });
       out.push(line);
       if (st.manual && px.price > 0 && px.date < oldBefore) old.push(line.asset_name + ' (' + px.date + ')');
+      if (px.source === 'estimate') est.push(line.asset_name);
       if (st.hist && !(px.price > 0)) noPrice.push(line.asset_name + ' (' + (liveDay ? 'sheet ' + st.live + ' is 0 / #N/A — check its GOOGLEFINANCE cell'
         : st.hist === 'amfi' ? 'AMFI ' + (vzKey_(a.amfi_code) || 'code missing') : st.symbol(a)) + ')');
     });
@@ -345,6 +401,7 @@ function vzsBuildLines_(data, dateStr, tz, prices, liveDay) {
   if (noPrice.length) notes.push('no market price, valued at cost: ' + noPrice.join(', '));
   if (noRate.length) notes.push('no USD→INR rate on or before this date: uninvested US cash shown as ₹0');
   if (old.length) notes.push('old manual price: ' + old.join(', '));
+  if (est.length) notes.push('estimated from your recorded prices (land: straight line; metals: ETF moves): ' + est.join(', '));
   if (typed.length) notes.push('EPF at its typed balance (no passbook entries yet): ' + typed.join(', '));
   return { lines: out, notes };
 }
@@ -484,16 +541,14 @@ function vzsFetch_(url, started) {
   }
   return last;
 }
-// Price "at" a snapshot date = the latest official price dated on or before it (see the header).
+// Price "at" a snapshot date = the latest official price dated on or before it; manually priced
+// assets are estimated between your recorded prices (vzsEstimate_, see the header).
 // prefetch(dates) downloads what those as-of dates need — only assets actually held on one of
 // them, from shortly before the earliest — in parallel batches; at() only reads the cache.
 function vzsPriceSource_(data, tz, started) {
   const cache = {};                                    // key → { state: 'ok'|'nodata'|'failed', v: [{d, v}] sorted }
   const byDate = (a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0);
-  const parseNavs = j => (j && j.data ? j.data.map(x => {
-    const p = String(x.date).split('-');                                  // dd-mm-yyyy
-    return { d: p[2] + '-' + p[1] + '-' + p[0], v: Number(x.nav) };
-  }).filter(x => x.v > 0).sort(byDate) : null);
+  const parseNavs = vzsParseNavs_;
   const parseBars = j => {
     const r = j && j.chart && j.chart.result && j.chart.result[0];
     if (!r || !r.timestamp) return null;
@@ -548,6 +603,15 @@ function vzsPriceSource_(data, tz, started) {
         }
       });
       if (usd) jobs['yahoo:INR=X'] = { url: yahooUrl('INR=X', p1, p2), parse: parseBars, label: 'USD→INR', what: '"INR=X"' };
+      VZS_STREAMS.filter(st => st.manual === 'physical_precious_metal').forEach(st => {
+        const held = vzsHeldIds_(st, data, months, tz);
+        (data[st.assets] || []).filter(a => held.has(vzKey_(a.id))).forEach(a => {
+          const sym = VZS_METAL_PROXY[String(a.metal_type || '')];
+          if (!sym) return;
+          jobs['proxy:' + sym] = { url: yahooUrl(sym, p1, p2).replace('events=split', 'events=div%7Csplit'), parse: vzsParseAdjCloses_,
+            label: String(a[st.name] || '').slice(0, 30), what: '"' + sym + '" (between your recorded prices)', proxy: true };
+        });
+      });
 
       const keys = Object.keys(jobs);
       for (let i = 0; i < keys.length && !failed.length; i += VZS_FETCH_BATCH) {
@@ -562,7 +626,8 @@ function vzsPriceSource_(data, tz, started) {
           } else cache[k] = { state: r.status === 404 ? 'nodata' : 'failed' };
           if (cache[k].state === 'nodata' && k === 'yahoo:INR=X') cache[k] = { state: 'failed' };   // US cash can't be valued without it
           if (cache[k].state === 'failed') failed.push(k.replace(':', ' '));
-          if (cache[k].state === 'nodata') warnings.push(jobs[k].label + ': no price history for ' + jobs[k].what + ' → valued at cost');
+          if (cache[k].state === 'nodata') warnings.push(jobs[k].label + ': no price history for ' + jobs[k].what +
+            (jobs[k].proxy ? ' → your latest price up to each date' : ' → valued at cost'));
         });
       }
       return { failed, warnings };
@@ -570,6 +635,8 @@ function vzsPriceSource_(data, tz, started) {
     // → { price, source, date } for one asset on snapshot date `iso` (price 0 = none on record)
     at(st, a, iso) {
       if (st.manual) {
+        const est = vzsEstimate_(st, data, a, iso, tz, cache['proxy:' + VZS_METAL_PROXY[String(a.metal_type || '')]]);
+        if (est) return est;
         const m = vzsManualPrice_(data, st.manual, a.id, iso, tz);         // your latest price up to that date
         return { price: m.p, source: 'manual', date: m.d };
       }
@@ -588,6 +655,71 @@ function vzsPriceSource_(data, tz, started) {
     },
   };
 }
+// History only: a price for a manually priced asset on a day between the prices on record —
+// your manual prices and what you paid on each buy (land: cost per unit incl. registration and
+// expenses). Land runs in a straight line between those points and stays at the last one after
+// it; a physical metal follows its ETF proxy (proxy = { state, v } from prefetch), corrected
+// smoothly so it lands exactly on each recorded price, and after the last one follows the proxy
+// from there. → { price, source: 'estimate' | 'manual', date } or null = keep the plain rule
+// (latest manual price, else cost).
+function vzsEstimate_(st, data, a, iso, tz, proxy) {
+  const pts = vzsPricePoints_(st, data, a, tz);
+  if (!pts.some(x => x.manual)) return null;                           // nothing you priced yet → as before
+  let i = -1;
+  for (let j = 0; j < pts.length && pts[j].d <= iso; j++) i = j;
+  if (i < 0) return null;
+  const before = pts[i], after = pts[i + 1] || null;
+  if (before.d === iso) return { price: before.p, source: before.manual ? 'manual' : 'estimate', date: iso };
+  const day = d => Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10)));
+  if (st.manual === 'real_estate') {
+    if (!after) return before.manual ? { price: before.p, source: 'manual', date: before.d }   // past the last point: it holds
+                                     : { price: before.p, source: 'estimate', date: iso };
+    const f = (day(iso) - day(before.d)) / (day(after.d) - day(before.d));
+    return { price: before.p + (after.p - before.p) * f, source: 'estimate', date: iso };
+  }
+  const px = d => (proxy && proxy.state === 'ok' ? vzsOnOrBefore_(proxy.v, d).v : 0);
+  const now = px(iso), then = px(before.d);
+  if (!(now > 0 && then > 0)) return null;
+  let price = before.p * now / then;
+  if (after && px(after.d) > 0) {                                       // bend the proxy path onto the next recorded price
+    const miss = after.p / (before.p * px(after.d) / then);
+    price *= Math.pow(miss, (day(iso) - day(before.d)) / (day(after.d) - day(before.d)));
+  }
+  return { price, source: 'estimate', date: iso };
+}
+
+// Recorded prices of one manually priced asset, oldest first: [{ d, p, manual }]. A manual price
+// wins over a buy on the same day; several buys on one day → their average price per unit.
+function vzsPricePoints_(st, data, a, tz) {
+  const key = '__pts:' + st.assets + '|' + vzKey_(a.id);
+  if (data[key]) return data[key];
+  const byDay = {};
+  (data[st.txns] || []).forEach(t => {
+    if (vzKey_(t[st.fk]) !== vzKey_(a.id) || t.txn_type !== 'Buy') return;
+    const d = vzsAsDate_(t.txn_date), qty = parseFloat(t.quantity || t.units || 0);
+    const cost = parseFloat(t.quantity || 0) * parseFloat(t.price_per_unit || 0)
+               + parseFloat(t.registration_cost || 0) + parseFloat(t.other_expenses || 0);
+    if (!d || !(qty > 0) || !(cost > 0)) return;
+    const iso = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+    const b = byDay[iso] = byDay[iso] || { qty: 0, cost: 0 };
+    b.qty += qty; b.cost += cost;
+  });
+  const pts = {};
+  Object.keys(byDay).forEach(d => { pts[d] = { d, p: byDay[d].cost / byDay[d].qty, manual: false }; });
+  const ids = {};
+  (data.manual_prices || []).forEach(r => {
+    if (String(r.asset_type) !== st.manual || vzKey_(r.asset_id) !== vzKey_(a.id)) return;
+    const d = vzsAsDate_(r.price_date), p = Number(r.price_per_unit) || 0, id = Number(r.id) || 0;
+    if (!d || !(p > 0)) return;
+    const iso = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+    if (pts[iso] && pts[iso].manual && ids[iso] > id) return;          // same day twice → the later entry is the correction
+    pts[iso] = { d: iso, p, manual: true };
+    ids[iso] = id;
+  });
+  data[key] = Object.keys(pts).sort().map(d => pts[d]);
+  return data[key];
+}
+
 // Prices for a snapshot taken in the app (today): the sheet's own GOOGLEFINANCE columns (already
 // INR — US / crypto included). USD→INR for uninvested US cash is implied by the sheet too
 // (current_price ÷ current_price_usd of a US asset); only if the sheet has none, Yahoo's rate.
@@ -645,6 +777,14 @@ function vzsFetchAll_(urls, started) {
     if (!one.ok && one.status !== 404) gaveUp = true;
     return one;
   });
+}
+// mfapi.in JSON → [{ d: 'yyyy-mm-dd', v: NAV }] oldest first (null = not a NAV payload).
+function vzsParseNavs_(j) {
+  if (!j || !j.data) return null;
+  return j.data.map(x => {
+    const p = String(x.date).split('-');                                  // dd-mm-yyyy
+    return { d: p[2] + '-' + p[1] + '-' + p[0], v: Number(x.nav) };
+  }).filter(x => x.v > 0).sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
 }
 // Latest {d, v} in a date-sorted list with d <= iso (binary search). { d: '', v: 0 } if none.
 function vzsOnOrBefore_(list, iso) {
@@ -709,6 +849,322 @@ function vzsResolveAmfi_(ss, data, log, dates, tz) {
   }));
   return {};
 }
+// ── Benchmarks ───────────────────────────────────────────────────────────────
+
+// History (re-runnable, fills only what is missing): one value per series for every month-end
+// from the first transaction month to the last complete month, and for every snapshot's as-of day.
+function backfillBenchmarks() {
+  const ss = getSpreadsheet();
+  const tz = ss.getSpreadsheetTimeZone();
+  const log = [];
+  const first = vzsFirstTxnDate_(vzsLoad_(ss));
+  if (!first) { vzsNotify_('Benchmarks — no transactions yet', log); return; }
+  const res = vzsRecordBenchmarks_(ss, vzsBenchDates_(ss, first, tz), log, Date.now());
+  vzsNotify_(res.failed.length ? 'Benchmarks — ' + res.failed.length + ' series failed (run again later): ' + res.failed.join(', ')
+           : 'Benchmarks complete — ' + res.wrote + ' value(s) written', log);
+}
+
+// Month-ends from the first transaction to the last complete month, every snapshot's as-of day,
+// and every fund-scope transaction day before today (Insights compares buys and sells with the
+// index on the same day).
+function vzsBenchDates_(ss, first, tz) {
+  const dates = new Set();
+  const lastFull = vzsPrevMonth_(vzsThisMonth_(new Date(vzsNow_().getTime() - 86400000), tz));   // its last day has settled
+  for (let m = Utilities.formatDate(first, tz, 'yyyy-MM'); m <= lastFull; m = vzsNextMonth_(m)) dates.add(vzsMonthEnd_(m));
+  vzsRows_(ss, VZS_SNAPSHOTS).forEach(h => { const d = vzsIso_(h.snapshot_date, tz); if (d) dates.add(d); });
+  vzsFundTxnDates_(vzsLoad_(ss), tz, '').forEach(d => dates.add(d));
+  return Array.from(dates).sort();
+}
+
+// The first day whose prices may still move: today, or before 06:00 yesterday — a bar dated
+// yesterday is still live until the US close (~02:30 IST) and the UTC crypto close (05:30 IST).
+// Prices dated before it are settled. (Offsets assume the sheet's timezone is IST.)
+function vzsSettledDay_(tz) {
+  return Utilities.formatDate(new Date(vzsNow_().getTime() - 6 * 3600000), tz, 'yyyy-MM-dd');
+}
+
+// Days ('yyyy-mm-dd', after `since`, before vzsSettledDay_) with a transaction in the fund's categories
+// (VZS_FUND_CATS — the same scope as FUND_SCOPE in js/data.js).
+function vzsFundTxnDates_(data, tz, since) {
+  const settled = vzsSettledDay_(tz);
+  const out = new Set();
+  VZS_STREAMS.filter(st => st.txns && VZS_FUND_CATS.indexOf(st.cat) >= 0).forEach(st => (data[st.txns] || []).forEach(t => {
+    const d = vzsIso_(t.txn_date, tz);
+    if (d && d > since && d < settled) out.add(d);
+  }));
+  return Array.from(out);
+}
+
+// Writes the missing (date, series) values for `dates` ('yyyy-mm-dd'). A value is the series'
+// latest SETTLED price on or before the date — nothing dated vzsSettledDay_ or later counts
+// (tonight's NAV, a US session still open, a live crypto / FX bar); price_date / fx_date record
+// the prices used.
+// A date before the series existed gets no row. Each series is downloaded once; a failed one is
+// skipped (named in `failed`), the rest are still written. `started` sets the time budget (Take
+// snapshot passes a short one). → { wrote, failed: [keys] }
+function vzsRecordBenchmarks_(ss, dates, log, started) {
+  const tz = ss.getSpreadsheetTimeZone();
+  const series = VZS_BENCHMARKS.filter(b => b.code);
+  if (!series.length || !dates.length) return { wrote: 0, failed: [] };
+  const stored = vzsBenchStored_(ss, tz);
+  const need = {};
+  series.forEach(b => {
+    const have = stored[b.key];
+    const miss = dates.filter(d => !(have && have.dates.has(d)));
+    if (miss.length) need[b.key] = miss;
+  });
+  const todo = series.filter(b => need[b.key]);
+  if (!todo.length) { log.push('benchmarks: nothing new to record'); return { wrote: 0, failed: [] }; }
+
+  // Download from before the earliest needed date or chain anchor (the series' last stored value).
+  let earliest = dates.reduce((a, b) => (a < b ? a : b));
+  todo.forEach(b => { const last = stored[b.key] && stored[b.key].last; if (last && last.d < earliest) earliest = last.d; });
+  const p1 = Math.floor((Utilities.parseDate(earliest, tz, 'yyyy-MM-dd').getTime() - 10 * 86400000) / 1000);
+  const p2 = Math.floor(Date.now() / 1000 + 86400);
+  const jobs = {};
+  const yahoo = sym => 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) +
+    '?interval=1d&events=div%7Csplit&period1=' + p1 + '&period2=' + p2;
+  todo.forEach(b => {
+    if (b.src === 'amfi') jobs['amfi:' + b.code] = { url: 'https://api.mfapi.in/mf/' + encodeURIComponent(b.code), parse: vzsParseNavs_ };
+    else jobs['yahoo:' + b.code] = { url: yahoo(b.code), parse: vzsParseAdjCloses_ };
+    if (b.fx) jobs['yahoo:INR=X'] = { url: yahoo('INR=X'), parse: vzsParseAdjCloses_ };
+  });
+  const got = {};
+  const keys = Object.keys(jobs);
+  const settled = vzsSettledDay_(tz);
+  for (let i = 0; i < keys.length; i += VZS_FETCH_BATCH) {
+    if (Date.now() - started > VZS_TIME_BUDGET_MS) break;              // the rest count as failed
+    const batch = keys.slice(i, i + VZS_FETCH_BATCH);
+    const res = vzsFetchAll_(batch.map(k => jobs[k].url), started);
+    batch.forEach((k, j) => {
+      if (!res[j].ok) return;
+      try {
+        let v = jobs[k].parse(JSON.parse(res[j].text));
+        v = v && v.filter(x => x.d < settled);                          // settled prices only
+        if (v && v.length) got[k] = k.indexOf('amfi:') === 0 ? vzsUndoSplits_(v) : v;
+      } catch (e) { /* counted as failed below */ }
+    });
+  }
+
+  const failed = [], rows = [];
+  todo.forEach(b => {
+    const own = got[b.src + ':' + b.code], fx = b.fx ? got['yahoo:INR=X'] : null;
+    if (!own || (b.fx && !fx)) { failed.push(b.key); return; }
+    // → { v, pd, fd } for as-of day `iso` (pd / fd: the price / fx dates used); v 0 = none
+    const fresh = (iso, fxIso) => {
+      const p = vzsOnOrBefore_(own, iso);
+      if (!(p.v > 0)) return { v: 0 };
+      if (!b.fx) return { v: p.v, pd: p.d, fd: '' };
+      const r = vzsOnOrBefore_(fx, fxIso || iso);
+      return r.v > 0 ? { v: p.v * r.v, pd: p.d, fd: r.d } : { v: 0 };
+    };
+    let k = 1;                                                          // chain onto the stored series
+    const last = stored[b.key] && stored[b.key].last;
+    if (last && !b.level) {
+      const f = fresh(last.pd || last.d, last.fd || last.pd || last.d).v;   // the very prices that row used
+      if (!(f > 0)) { failed.push(b.key); log.push('warning: ' + b.key + ' has no value on ' + last.d + ' to chain onto'); return; }
+      k = last.nav / f;
+      if (Math.abs(k - 1) < 1e-8) k = 1;                                // same prices → stay equal to the NAVs
+    }
+    const source = b.src + ':' + b.code + (b.fx ? '×INR=X' : '');
+    need[b.key].forEach(d => {
+      const f = fresh(d);
+      if (f.v > 0) rows.push({ date: d, code: b.key, nav: vzsRound_(f.v * k, 6), source, price_date: f.pd, fx_date: f.fd });
+    });
+  });
+  const wrote = rows.length ? vzsWriteBench_(ss, rows) : 0;
+  log.push('benchmarks: ' + wrote + ' value(s) written' + (failed.length ? '; failed: ' + failed.join(', ') : ''));
+  return { wrote, failed };
+}
+
+// Yahoo chart JSON → [{ d, v: close adjusted for dividends and splits }] oldest first, by trading
+// day in the market's own timezone (a total-return series up to Yahoo's rescaling — every value
+// from ONE download shares the same scale).
+function vzsParseAdjCloses_(j) {
+  const r = j && j.chart && j.chart.result && j.chart.result[0];
+  if (!r || !r.timestamp) return null;
+  const adj = ((((r.indicators || {}).adjclose || [])[0] || {}).adjclose) || (((r.indicators || {}).quote || [])[0] || {}).close || [];
+  const xtz = (r.meta && r.meta.exchangeTimezoneName) || 'UTC';
+  const seen = {};
+  r.timestamp.forEach((ts, i) => { if (adj[i] > 0) seen[Utilities.formatDate(new Date(ts * 1000), xtz, 'yyyy-MM-dd')] = adj[i]; });
+  return Object.keys(seen).sort().map(d => ({ d, v: seen[d] }));
+}
+
+// A NAV list with unit splits / consolidations undone (an ETF's NAV drops to 1/n overnight when
+// its units split n-for-1): a day-on-day ratio within 3% of 1/n or n (n = 2…100) scales every
+// earlier value. A real one-day market move is never that size for these series.
+function vzsUndoSplits_(list) {
+  const out = list.map(x => ({ d: x.d, v: x.v }));
+  const factors = [2, 3, 4, 5, 10, 20, 25, 50, 100];
+  for (let i = out.length - 1; i > 0; i--) {
+    const r = out[i].v / out[i - 1].v;
+    const n = factors.find(f => Math.abs(r * f - 1) < 0.03 || Math.abs(r / f - 1) < 0.03);
+    if (!n) continue;
+    const scale = Math.abs(r * n - 1) < 0.03 ? 1 / n : n;
+    for (let j = 0; j < i; j++) out[j].v *= scale;
+  }
+  return out;
+}
+
+// What benchmark_prices holds: key → { dates: Set, last: { d, nav, pd, fd } } (last = latest date).
+function vzsBenchStored_(ss, tz) {
+  const out = {};
+  vzsRows_(ss, VZS_BENCH).forEach(r => {
+    const key = String(r.code), d = vzsIso_(r.date, tz), nav = Number(r.nav);
+    if (!d || !(nav > 0)) return;
+    const s = out[key] = out[key] || { dates: new Set(), last: null };
+    s.dates.add(d);
+    if (!s.last || d > s.last.d) s.last = { d, nav, pd: vzsIso_(r.price_date, tz), fd: vzsIso_(r.fx_date, tz) };
+  });
+  return out;
+}
+
+// Appends benchmark rows under the write lock, validated against schema.gs. A (date, code) that
+// another run stored meanwhile is dropped, not duplicated. → rows written
+function vzsWriteBench_(ss, rows) {
+  return withWriteLock_(() => {
+    const tz = ss.getSpreadsheetTimeZone();
+    const sh = ss.getSheetByName(VZS_BENCH);
+    if (!sh) throw new Error(VZS_BENCH + ' tab missing — run setupSnapshots() first');
+    const head = vzsHeaders_(sh);
+    const missing = VZS_BENCH_HEADERS.filter(h => head.indexOf(h) < 0);
+    if (missing.length) throw new Error(VZS_BENCH + ' lacks column(s) ' + missing.join(', ') + ' — run setupSnapshots() again');
+    const stored = vzsBenchStored_(ss, tz);
+    const fresh = rows.filter(r => !(stored[r.code] && stored[r.code].dates.has(r.date)));
+    if (!fresh.length) return 0;
+    const ctx = vzCtx_(ss);
+    const ids = vzIdBlock_(VZS_BENCH, vzsMaxId_(sh));
+    const now = new Date().toISOString();
+    const values = fresh.map(r => {
+      const row = Object.assign({ id: ids.next(), created_at: now }, r);
+      vzAssertRow_(ctx, VZS_BENCH, row, null);
+      ctx.add(VZS_BENCH, row);
+      return head.map(h => (row[h] !== undefined ? row[h] : ''));
+    });
+    const start = sh.getLastRow() + 1;
+    vzEnsureRows_(sh, start + values.length - 1);
+    ['date', 'price_date', 'fx_date'].forEach(c => sh.getRange(start, head.indexOf(c) + 1, values.length, 1).setNumberFormat('@'));
+    sh.getRange(start, 1, values.length, head.length).setValues(values);
+    SpreadsheetApp.flush();
+    ids.commit();
+    return values.length;
+  });
+}
+
+// ── Manager notes & pattern history (Insights → Factsheet / What's happening) ──
+
+// Upserts the note for (month, account). The app writes it right after Take snapshot; the month
+// must have a snapshot. While the month is open a later take rewrites it; once the month is
+// locked its note is kept as written (a missing one can still be added once). → { saved }
+function vzsSaveNote_(month, account, note) {
+  const m = String(month || ''), acct = vzKey_(account || 'all'), text = String(note || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(m)) throw new Error('month must be yyyy-mm');
+  if (!text || text.length > 4000) throw new Error('note must be 1–4000 characters');
+  if (/^[=+\-@]/.test(text)) throw new Error('note must not start with = + - @');   // never a formula
+  const ss = getSpreadsheet();
+  const tz = ss.getSpreadsheetTimeZone();
+  return withWriteLock_(() => {
+    if (!vzsRows_(ss, VZS_SNAPSHOTS).some(h => vzsMonthOf_(h.month, tz) === m)) throw new Error('no snapshot for ' + m);
+    if (acct !== 'all' && !vzsRows_(ss, 'accounts').some(a => vzKey_(a.id) === acct)) throw new Error('unknown account ' + acct);
+    const sh = ss.getSheetByName(VZS_NOTES);
+    if (!sh) throw new Error(VZS_NOTES + ' tab missing — run setupSnapshots() first');
+    const head = vzsHeaders_(sh);
+    const missing = VZS_NOTES_HEADERS.filter(h => head.indexOf(h) < 0);
+    if (missing.length) throw new Error(VZS_NOTES + ' lacks column(s) ' + missing.join(', ') + ' — run setupSnapshots() again');
+    const rows = vzsRows_(ss, VZS_NOTES);
+    const i = rows.findIndex(r => vzsMonthOf_(r.month, tz) === m && vzKey_(r.account) === acct);
+    const now = new Date().toISOString();
+    const ctx = vzCtx_(ss);
+    if (i >= 0) {
+      if (m !== vzsThisMonth_(vzsNow_(), tz)) return { saved: false, locked: true };
+      const row = Object.assign({}, rows[i], { note: text, updated_at: now });
+      vzAssertRow_(ctx, VZS_NOTES, row, rows[i].id);
+      const r = vzsRowNumber_(sh, rows[i].id);
+      sh.getRange(r, head.indexOf('note') + 1).setValue(text);
+      sh.getRange(r, head.indexOf('updated_at') + 1).setValue(now);
+      SpreadsheetApp.flush();
+      return { saved: true };
+    }
+    const ids = vzIdBlock_(VZS_NOTES, vzsMaxId_(sh));
+    const row = { id: ids.next(), month: m, account: acct, note: text, created_at: now, updated_at: now };
+    vzAssertRow_(ctx, VZS_NOTES, row, null);
+    const start = sh.getLastRow() + 1;
+    vzEnsureRows_(sh, start);
+    ['month', 'account'].forEach(c => sh.getRange(start, head.indexOf(c) + 1).setNumberFormat('@'));
+    sh.getRange(start, 1, 1, head.length).setValues([head.map(h => (row[h] !== undefined ? row[h] : ''))]);
+    SpreadsheetApp.flush();
+    ids.commit();
+    return { saved: true };
+  });
+}
+
+// Replaces the feed stored for (month, account) with `rows` ([{ pattern_id, holding, headline,
+// value }]). Same rules as the note: the month needs a snapshot; while it is open a later take
+// replaces its rows; once locked, a month that already has rows keeps them. → { saved, rows }
+function vzsSavePatterns_(month, account, rows) {
+  const m = String(month || ''), acct = vzKey_(account || 'all');
+  if (!/^\d{4}-\d{2}$/.test(m)) throw new Error('month must be yyyy-mm');
+  if (!Array.isArray(rows) || rows.length > 200) throw new Error('rows must be a list of at most 200');
+  const clean = rows.map(r => {
+    const id = String(r.pattern_id || ''), holding = String(r.holding || '').trim(), headline = String(r.headline || '').trim();
+    const value = Number(r.value);
+    if (!/^[a-z0-9_]{1,40}$/.test(id)) throw new Error('bad pattern_id ' + id);
+    if (holding.length > 120 || !headline || headline.length > 300) throw new Error('holding / headline too long for ' + id);
+    if (/^[=+\-@]/.test(holding) || /^[=+\-@]/.test(headline)) throw new Error('text must not start with = + - @');
+    if (!isFinite(value)) throw new Error('value must be a number for ' + id);
+    return { pattern_id: id, holding, headline, value };
+  });
+  const ss = getSpreadsheet();
+  const tz = ss.getSpreadsheetTimeZone();
+  return withWriteLock_(() => {
+    if (!vzsRows_(ss, VZS_SNAPSHOTS).some(h => vzsMonthOf_(h.month, tz) === m)) throw new Error('no snapshot for ' + m);
+    if (acct !== 'all' && !vzsRows_(ss, 'accounts').some(a => vzKey_(a.id) === acct)) throw new Error('unknown account ' + acct);
+    const sh = ss.getSheetByName(VZS_PATTERNS);
+    if (!sh) throw new Error(VZS_PATTERNS + ' tab missing — run setupSnapshots() first');
+    const head = vzsHeaders_(sh);
+    const missing = VZS_PATTERN_HEADERS.filter(h => head.indexOf(h) < 0);
+    if (missing.length) throw new Error(VZS_PATTERNS + ' lacks column(s) ' + missing.join(', ') + ' — run setupSnapshots() again');
+    const mine = r => vzsMonthOf_(r.month, tz) === m && vzKey_(r.account) === acct;
+    const old = vzsRows_(ss, VZS_PATTERNS).filter(mine);
+    if (old.length && m !== vzsThisMonth_(vzsNow_(), tz)) return { saved: false, locked: true };
+    const oldIds = new Set(old.map(r => vzKey_(r.id)));
+    // Validate every new row first (against the table without this month's old rows), then append
+    // them, and only then delete the old ones — a rejected save leaves the stored feed as it was.
+    const ctx = vzCtx_(ss);
+    const table = ctx.table(VZS_PATTERNS);
+    table.rows = table.rows.filter(r => !oldIds.has(vzKey_(r.id)));
+    const idsNext = vzIdBlock_(VZS_PATTERNS, vzsMaxId_(sh));
+    const now = new Date().toISOString();
+    const values = clean.map(r => {
+      const row = Object.assign({ id: idsNext.next(), month: m, account: acct, created_at: now }, r);
+      vzAssertRow_(ctx, VZS_PATTERNS, row, null);
+      ctx.add(VZS_PATTERNS, row);
+      return head.map(h => (row[h] !== undefined ? row[h] : ''));
+    });
+    if (values.length) {
+      const start = sh.getLastRow() + 1;
+      vzEnsureRows_(sh, start + values.length - 1);
+      ['month', 'account', 'holding', 'headline'].forEach(c => sh.getRange(start, head.indexOf(c) + 1, values.length, 1).setNumberFormat('@'));
+      sh.getRange(start, 1, values.length, head.length).setValues(values);
+    }
+    if (oldIds.size) {
+      const ids = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
+      for (let i = ids.length - 1; i >= 0; i--) if (oldIds.has(vzKey_(ids[i][0]))) sh.deleteRow(i + 2);   // bottom up
+    }
+    SpreadsheetApp.flush();
+    idsNext.commit();
+    return { saved: true, rows: values.length };
+  });
+}
+
+// Sheet row number of the row with this id (ids are in column A).
+function vzsRowNumber_(sh, id) {
+  const ids = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
+  const i = ids.findIndex(r => vzKey_(r[0]) === vzKey_(id));
+  if (i < 0) throw new Error('row ' + id + ' not found');
+  return i + 2;
+}
+
 // ── Storage ──────────────────────────────────────────────────────────────────
 
 // Committed months (a month counts only once its header row exists) and their lines, by month.
@@ -840,13 +1296,14 @@ function vzsDeleteWhere_(sh, match) {
 // write, hide change or new month is seen immediately.
 //   months: [{ d: as-of date, st: 'open' (this month) | 'locked', src: 'backfill' | 'manual', notes }]   assets: [{ t, id, n: latest name, a: account }]
 //   rows:   [monthIdx, assetIdx, invested ₹, value ₹, flag, category, subcategory] — category /
-//           subcategory as frozen in that month's line; flag 1 = valued at cost, 2 = old manual price
+//           subcategory as frozen in that month's line; flag 1 = valued at cost, 2 = old manual price,
+//           3 = estimated between your recorded prices (history only)
 function vzsData_(account) {
   const ss = getSpreadsheet();
   const tz = ss.getSpreadsheetTimeZone();
   const heads = vzsRows_(ss, VZS_SNAPSHOTS), hides = vzsRows_(ss, 'hidden_items');
   const openMonth = vzsThisMonth_(vzsNow_(), tz);
-  const version = 'vzs4:' + account + ':' + openMonth + ':' + vzsHash_(heads.map(h => [vzKey_(h.id), vzsIso_(h.snapshot_date, tz), h.lines].join('/')).join(',')) +
+  const version = 'vzs5:' + account + ':' + openMonth + ':' + vzsHash_(heads.map(h => [vzKey_(h.id), vzsIso_(h.snapshot_date, tz), h.lines].join('/')).join(',')) +
                   ':' + vzsHash_(hides.map(h => [vzKey_(h.id), vzKey_(h.account_id), h.kind, h.ref].join('/')).join(','));
   const hit = vzsCacheGet_(version);
   if (hit) return hit;
@@ -866,7 +1323,8 @@ function vzsData_(account) {
     if (ai === undefined) { ai = aIdx[key] = assets.length; assets.push({ t: String(l.asset_table), id: vzKey_(l.asset_id) }); last.push(-1); }
     if (mi >= last[ai]) { assets[ai].n = String(l.asset_name); assets[ai].a = vzKey_(l.account_id); last[ai] = mi; }   // latest name
     rows.push([mi, ai, Math.round(Number(l.invested_value) || 0), Math.round(Number(l.current_value) || 0),
-      l.price_source === 'cost' ? 1 : vzsIsOld_(l, months[mi].d, tz) ? 2 : 0, vzKey_(l.category_id), vzKey_(l.subcategory_id)]);
+      l.price_source === 'cost' ? 1 : l.price_source === 'estimate' ? 3 : vzsIsOld_(l, months[mi].d, tz) ? 2 : 0,
+      vzKey_(l.category_id), vzKey_(l.subcategory_id)]);
   });
   const res = { months: months.map(m => ({ d: m.d, st: m.st, src: m.src, notes: m.notes })), assets, rows };
   vzsCachePut_(version, res);

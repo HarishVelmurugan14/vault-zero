@@ -17,7 +17,15 @@ js/
   app.js            routing, navigation, state
   form.js           dynamic transaction + asset forms, manual price panel
   holdings.js       holdings tree (bucket → category → subcategory → asset)
-  insights.js       charts, XIRR, liquidity ladder, tax estimates
+  insights.js       Insights shell (filters, hero, tabs), snapshots card, Funds + Net worth charts, XIRR
+  fund-engine.js    pure maths for the fund factsheet: TWR, benchmarks, attribution, positions, patterns, trends, tax
+  factsheet.js      Insights → Factsheet (returns vs Nifty 50, risk, money put in vs market, manager's note)
+  happening.js      Insights → What's happening (pattern cards)
+  trends.js         Insights → Trends (each holding vs its own benchmark, stagnation rules)
+  attribution.js    Insights → Attribution (contribution to return by holding / sleeve)
+  positions.js      Insights → Positions (P&L, closed, stock picks, concentration, mandate, drift, activity, US split)
+  tax.js            Insights → Tax (capital-gains estimate per person, FIFO lots, current rules)
+  guide.js          Insights → Guide + the ⓘ note behind every card (plain-English definitions)
   manage.js         show / hide categories, subcategories and assets per account
 gas/
   Code.gs           Apps Script backend (CRUD + setupAllSheets)
